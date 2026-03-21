@@ -59,7 +59,7 @@ const register = async (req, res, next) => {
     // Save refresh token to Redis
     await saveRefreshToken(user._id.toString(), refreshToken);
     
-    return successResponse(res, 201, 'Registration successful', {
+    return successResponse(res, 201, {
       user: {
         _id: user._id,
         name: user.name,
@@ -70,7 +70,7 @@ const register = async (req, res, next) => {
       },
       accessToken,
       refreshToken
-    });
+    }, 'Registration successful');
   } catch (error) {
     logger.error('Register error:', error);
     next(error);
@@ -121,7 +121,7 @@ const login = async (req, res, next) => {
     // Save refresh token to Redis
     await saveRefreshToken(user._id.toString(), refreshToken);
     
-    return successResponse(res, 200, 'Login successful', {
+    return successResponse(res, 200, {
       user: {
         _id: user._id,
         name: user.name,
@@ -132,7 +132,7 @@ const login = async (req, res, next) => {
       },
       accessToken,
       refreshToken
-    });
+    }, 'Login successful');
   } catch (error) {
     logger.error('Login error:', error);
     next(error);

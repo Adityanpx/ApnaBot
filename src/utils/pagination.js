@@ -7,6 +7,19 @@ const paginate = (page = 1, limit = 10) => {
   };
 };
 
+const getPagination = (total, page, limit) => {
+  const totalPages = Math.ceil(total / limit);
+  return {
+    total,
+    page: parseInt(page),
+    limit: parseInt(limit),
+    totalPages,
+    pages: totalPages,
+    hasNextPage: page < totalPages,
+    hasPrevPage: page > 1
+  };
+};
+
 const paginateResponse = (data, total, page, limit) => {
   const totalPages = Math.ceil(total / limit);
   return {
@@ -24,5 +37,6 @@ const paginateResponse = (data, total, page, limit) => {
 
 module.exports = {
   paginate,
+  getPagination,
   paginateResponse
 };

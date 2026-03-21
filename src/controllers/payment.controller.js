@@ -49,11 +49,11 @@ const createRazorpayLink = async (req, res, next) => {
 
     logger.info('Payment link created for booking:', bookingId);
 
-    return successResponse(res, 200, 'Payment link created successfully', {
+    return successResponse(res, 200, {
       paymentLink: paymentLink.short_url,
       paymentId: paymentLink.id,
       bookingId
-    });
+    }, 'Payment link created successfully');
   } catch (error) {
     logger.error('Error creating Razorpay payment link:', error);
     next(error);
@@ -96,13 +96,13 @@ const createUPILink = async (req, res, next) => {
 
     logger.info('UPI link generated for booking:', bookingId);
 
-    return successResponse(res, 200, 'UPI link generated successfully', {
+    return successResponse(res, 200, {
       upiLink: upiDetails.upiLink,
       vpa: upiDetails.vpa,
       amount: upiDetails.amount,
       payeeName: upiDetails.payeeName,
       bookingId
-    });
+    }, 'UPI link generated successfully');
   } catch (error) {
     logger.error('Error generating UPI link:', error);
     next(error);
@@ -199,7 +199,7 @@ const getPaymentHistory = async (req, res, next) => {
       Booking.countDocuments(filter)
     ]);
 
-    return successResponse(res, 200, 'Payment history retrieved successfully', {
+    return successResponse(res, 200, {
       bookings,
       pagination: {
         page: parseInt(page),
@@ -207,7 +207,7 @@ const getPaymentHistory = async (req, res, next) => {
         total,
         pages: Math.ceil(total / parseInt(limit))
       }
-    });
+    }, 'Payment history retrieved successfully');
   } catch (error) {
     logger.error('Error getting payment history:', error);
     next(error);
@@ -267,7 +267,7 @@ const getPaymentStatus = async (req, res, next) => {
       paymentDetails: booking.paymentDetails
     };
 
-    return successResponse(res, 200, 'Payment status retrieved successfully', paymentStatus);
+    return successResponse(res, 200, paymentStatus, 'Payment status retrieved successfully');
   } catch (error) {
     logger.error('Error getting payment status:', error);
     next(error);
