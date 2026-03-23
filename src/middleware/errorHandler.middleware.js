@@ -5,22 +5,22 @@ const errorHandler = (err, req, res, next) => {
   logger.error('Error:', err);
 
   if (err.name === 'ValidationError') {
-    return errorResponse(res, err.message, 400, Object.values(err.errors).map(e => e.message));
+    return errorResponse(res, 400, err.message, Object.values(err.errors).map(e => e.message));
   }
 
   if (err.code === 11000) {
-    return errorResponse(res, 'Duplicate key error', 409, Object.keys(err.keyValue));
+    return errorResponse(res, 409, 'Duplicate key error', Object.keys(err.keyValue));
   }
 
   if (err.name === 'JsonWebTokenError') {
-    return errorResponse(res, 'Invalid token', 401);
+    return errorResponse(res, 401, 'Invalid token');
   }
 
   if (err.name === 'TokenExpiredError') {
-    return errorResponse(res, 'Token expired', 401);
+    return errorResponse(res, 401, 'Token expired');
   }
 
-  return errorResponse(res, err.message || 'Internal Server Error', err.statusCode || 500);
+  return errorResponse(res, err.statusCode || 500, err.message || 'Internal Server Error');
 };
 
 module.exports = errorHandler;

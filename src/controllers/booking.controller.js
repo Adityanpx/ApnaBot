@@ -1,59 +1,59 @@
 const Booking = require('../models/Booking');
 const Customer = require('../models/Customer');
 const { successResponse, errorResponse } = require('../utils/response');
+const { getPagination } = require('../utils/pagination');
 const logger = require('../utils/logger');
-const { paginateResponse } = require('../utils/pagination');
 const socketService = require('../services/socket.service');
 
-// GET /api/bookings - List bookings for shop with filters
+/**
+ * GET /api/bookings
+ * List bookings for shop with filters
+ */
 const getBookings = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, status, date, customerNumber } = req.query;
     const shopId = req.user.shopId;
 
-    // Build filter
     const filter = { shopId };
 
-    // Add status filter if provided
     if (status) {
       filter.status = status;
     }
 
-    // Add date filter if provided
     if (date) {
       const startOfDay = new Date(date);
       startOfDay.setHours(0, 0, 0, 0);
       const endOfDay = new Date(date);
       endOfDay.setHours(23, 59, 59, 999);
-      filter.createdAt = {
-        $gte: startOfDay,
-        $lte: endOfDay
-      };
+      filter.createdAt = { $gte: startOfDay, $lte: endOfDay };
     }
 
-    // Add customerNumber filter if provided
     if (customerNumber) {
       filter.customerNumber = { $regex: customerNumber, $options: 'i' };
     }
 
-    // Run count and paginated query
-    const total = await Booking.countDocuments(filter);
-    const bookings = await Booking.find(filter)
-      .populate('customerId', 'name whatsappNumber')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+    const [total, bookings] = await Promise.all([
+      Booking.countDocuments(filter),
+      Booking.find(filter)
+        .populate('customerId', 'name whatsappNumber')
+        .sort({ createdAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+    ]);
 
-    const pagination = paginateResponse(total, page, limit);
+    const pagination = getPagination(total, page, limit);
 
-    return successResponse(res, { bookings, pagination });
+    return successResponse(res, 200, { bookings, pagination });
   } catch (error) {
     logger.error('Error fetching bookings:', error);
-    return errorResponse(res, 'Failed to fetch bookings');
+    next(error);
   }
 };
 
-// GET /api/bookings/:id - Get single booking detail
+/**
+ * GET /api/bookings/:id
+ * Get single booking detail
+ */
 const getBookingById = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -62,40 +62,40 @@ const getBookingById = async (req, res, next) => {
     const booking = await Booking.findOne({ _id: id, shopId }).populate('customerId');
 
     if (!booking) {
-      return errorResponse(res, 'Booking not found', 404);
+      return errorResponse(res, 404, 'Booking not found');
     }
 
-    return successResponse(res, booking);
+    return successResponse(res, 200, booking);
   } catch (error) {
     logger.error('Error fetching booking:', error);
-    return errorResponse(res, 'Failed to fetch booking');
+    next(error);
   }
 };
 
-// PUT /api/bookings/:id/status - Update booking status
+/**
+ * PUT /api/bookings/:id/status
+ * Update booking status
+ */
 const updateBookingStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
     const shopId = req.user.shopId;
 
-    // Validate status value
     const validStatuses = ['pending', 'confirmed', 'completed', 'cancelled'];
     if (!status || !validStatuses.includes(status)) {
-      return errorResponse(res, 'Invalid status. Must be one of: pending, confirmed, completed, cancelled');
+      return errorResponse(res, 400, 'Invalid status. Must be one of: pending, confirmed, completed, cancelled');
     }
 
     const booking = await Booking.findOne({ _id: id, shopId });
 
     if (!booking) {
-      return errorResponse(res, 'Booking not found', 404);
+      return errorResponse(res, 404, 'Booking not found');
     }
 
-    // Update status
     booking.status = status;
     await booking.save();
 
-    // Emit socket event
     try {
       socketService.emitToShop(shopId.toString(), 'booking_updated', {
         bookingId: id,
@@ -105,45 +105,49 @@ const updateBookingStatus = async (req, res, next) => {
       logger.error('Error emitting socket event:', socketError);
     }
 
-    return successResponse(res, booking, 200);
+    return successResponse(res, 200, booking, 'Booking status updated');
   } catch (error) {
     logger.error('Error updating booking status:', error);
-    return errorResponse(res, 'Failed to update booking status');
+    next(error);
   }
 };
 
-// PUT /api/bookings/:id/notes - Add or update internal notes on booking
+/**
+ * PUT /api/bookings/:id/notes
+ * Add or update internal notes on booking
+ */
 const addBookingNotes = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { notes } = req.body;
     const shopId = req.user.shopId;
 
-    // Validate notes
     if (!notes || typeof notes !== 'string') {
-      return errorResponse(res, 'Notes is required');
+      return errorResponse(res, 400, 'Notes is required');
     }
 
     const booking = await Booking.findOne({ _id: id, shopId });
 
     if (!booking) {
-      return errorResponse(res, 'Booking not found', 404);
+      return errorResponse(res, 404, 'Booking not found');
     }
 
-    // Update booking notes field
     booking.fields = booking.fields || {};
     booking.fields.internalNotes = notes;
     booking.markModified('fields');
     await booking.save();
 
-    return successResponse(res, booking, 200);
+    return successResponse(res, 200, booking, 'Notes added successfully');
   } catch (error) {
     logger.error('Error adding booking notes:', error);
-    return errorResponse(res, 'Failed to add booking notes');
+    next(error);
   }
 };
 
-// DELETE /api/bookings/:id - Delete booking
+/**
+ * DELETE /api/bookings/:id
+ * Delete booking
+ */
 const deleteBooking = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -152,15 +156,15 @@ const deleteBooking = async (req, res, next) => {
     const booking = await Booking.findOne({ _id: id, shopId });
 
     if (!booking) {
-      return errorResponse(res, 'Booking not found', 404);
+      return errorResponse(res, 404, 'Booking not found');
     }
 
     await Booking.deleteOne({ _id: id });
 
-    return successResponse(res, 'Booking deleted', 200);
+    return successResponse(res, 200, null, 'Booking deleted successfully');
   } catch (error) {
     logger.error('Error deleting booking:', error);
-    return errorResponse(res, 'Failed to delete booking');
+    next(error);
   }
 };
 

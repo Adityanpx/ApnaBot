@@ -33,7 +33,7 @@ const createRazorpayPaymentLink = async (bookingId, amount, customerName, custom
         sms: true,
         email: true
       },
-      callback_url: `${config.APP_URL}/payment/callback?bookingId=${bookingId}`,
+      callback_url: `${config.FRONTEND_URL}/payment/callback?bookingId=${bookingId}`,
       callback_method: 'get'
     });
 

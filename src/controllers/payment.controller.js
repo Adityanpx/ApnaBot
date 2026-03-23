@@ -136,20 +136,30 @@ const sendToCustomer = async (req, res, next) => {
       return errorResponse(res, 404, 'Customer not found');
     }
 
-    // Send payment link via WhatsApp
+    // Load shop to get WhatsApp credentials — REQUIRED for queue
+    const Shop = require('../models/Shop');
+    const shop = await Shop.findById(shopId);
+    if (!shop || !shop.isWhatsappConnected || !shop.phoneNumberId) {
+      return errorResponse(res, 400, 'WhatsApp is not connected to this shop');
+    }
+
     const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
-    
+
     const message = `Your payment link: ${paymentLink}\n\nPlease complete your payment to confirm your booking.`;
-    
+
+    // Queue with all required fields including shop WhatsApp credentials
     await addToWhatsappQueue({
+      shopId: shopId.toString(),
+      phoneNumberId: shop.phoneNumberId,
+      encryptedAccessToken: shop.accessToken,
       to: customer.whatsappNumber,
-      message: message,
-      shopId: shopId
+      message,
+      type: 'text'
     });
 
-    logger.info('Payment link sent to customer:', customer.whatsappNumber);
+    logger.info('Payment link queued to customer:', customer.whatsappNumber);
 
-    return successResponse(res, 200, 'Payment link sent to customer successfully');
+    return successResponse(res, 200, null, 'Payment link sent to customer successfully');
   } catch (error) {
     logger.error('Error sending payment link to customer:', error);
     next(error);

@@ -73,7 +73,7 @@ const createSubscriptionOrder = async (req, res, next) => {
     const order = await razorpay.orders.create({
       amount: plan.price * 100, // paise
       currency: 'INR',
-      receipt: `sub_${shopId}_${Date.now()}`,
+      receipt: `sub_${Date.now()}`, // Max 40 chars: "sub_" + 13 digits = 17 chars
       notes: {
         shopId: shopId.toString(),
         planId: planId.toString(),

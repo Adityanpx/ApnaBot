@@ -7,7 +7,7 @@ const successResponse = (res, statusCode = 200, data = null, message = 'Success'
   });
 };
 
-const errorResponse = (res, message = 'Internal Server Error', statusCode = 500, errors = null) => {
+const errorResponse = (res, statusCode = 500, message = 'Internal Server Error', errors = null) => {
   return res.status(statusCode).json({
     success: false,
     message,

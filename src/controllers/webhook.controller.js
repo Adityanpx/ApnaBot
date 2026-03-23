@@ -156,6 +156,16 @@ const receiveWebhook = async (req, res) => {
     // Step 10 - Increment usage (fire and forget)
     usageService.incrementUsage(tenant.shopId, 'inbound');
 
+    // ADD THIS — Emit usage_update to Flutter dashboard
+    usageService.checkUsageLimit(tenant.shopId, tenant.plan?.msgLimit || 500)
+      .then(usageCheck => {
+        socketService.emitToShop(tenant.shopId.toString(), 'usage_update', {
+          msgCount: usageCheck.current,
+          limit: usageCheck.limit
+        });
+      })
+      .catch(err => logger.error('Error emitting usage_update:', err));
+
     // Step 11 - Skip non-text messages
     if (messageType !== 'text') {
       logger.info('Non-text message received, skipping chatbot');
@@ -211,6 +221,7 @@ const receiveWebhook = async (req, res) => {
         // Emit socket event
         try {
           socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+            customer,
             message: outboundMsg,
             customerNumber
           });
@@ -225,27 +236,61 @@ const receiveWebhook = async (req, res) => {
     // Step 13 - Run rule matching
     const matchedRule = await chatbotService.findMatchingRule(tenant.shopId, messageText);
 
-    // Step 14 - Prepare reply
+    // Step 14 — Prepare reply based on rule type
     let replyText = null;
     let triggeredRuleId = null;
 
     if (matchedRule) {
       triggeredRuleId = matchedRule._id;
+
       if (matchedRule.replyType === 'text') {
+        // Simple text reply
         replyText = matchedRule.reply;
+
       } else if (matchedRule.replyType === 'booking_trigger') {
-        // Handle booking trigger - Phase 6
+        // Start booking flow — ask first question
         const firstQuestion = await bookingService.startBookingSession(
           tenant.shopId,
           customerNumber,
           matchedRule._id
         );
         replyText = firstQuestion;
-      } else {
-        // payment_trigger - Phase 7 will handle
-        replyText = matchedRule.reply;
+
+      } else if (matchedRule.replyType === 'payment_trigger') {
+        // Generate UPI deep link and send it
+        try {
+          const Shop = require('../models/Shop');
+          const shop = await Shop.findById(tenant.shopId).select('upiId name');
+
+          if (shop && shop.upiId) {
+            // Build UPI deep link
+            const upiParams = new URLSearchParams({
+              pa: shop.upiId,
+              pn: shop.name || 'Shop',
+              tn: 'Payment'
+            });
+            const upiLink = `upi://pay?${upiParams.toString()}`;
+
+            replyText = matchedRule.reply
+              ? `${matchedRule.reply}\n\nPay here: ${upiLink}`
+              : `Please complete your payment:\n\n${upiLink}`;
+
+            // Increment payment link usage
+            usageService.incrementUsage(tenant.shopId, 'paymentLink').catch(err =>
+              logger.error('Error incrementing paymentLink usage:', err)
+            );
+          } else {
+            // Shop has no UPI ID configured — fall back to reply text
+            replyText = matchedRule.reply || 'Please contact us to arrange payment.';
+            logger.warn(`Shop ${tenant.shopId} has payment_trigger rule but no upiId configured`);
+          }
+        } catch (paymentErr) {
+          logger.error('Error generating payment trigger UPI link:', paymentErr);
+          replyText = matchedRule.reply || 'Please contact us to arrange payment.';
+        }
       }
     } else {
+      // No rule matched — send fallback reply
       replyText = tenant.fallbackReply || 'Thank you for your message. We will get back to you soon.';
     }
 
@@ -272,6 +317,17 @@ const receiveWebhook = async (req, res) => {
       type: 'text',
       messageId: outboundMsg._id
     });
+
+    // ADD THIS — Emit new_message to Flutter app with full customer object
+    try {
+      socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+        customer,
+        message: outboundMsg,
+        customerNumber
+      });
+    } catch (socketError) {
+      logger.error('Error emitting new_message socket event:', socketError);
+    }
 
     // Step 17 - Increment outbound usage (fire and forget)
     usageService.incrementUsage(tenant.shopId, 'outbound');

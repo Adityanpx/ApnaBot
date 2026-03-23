@@ -2,7 +2,7 @@ const Rule = require('../models/Rule');
 const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Shop = require('../models/Shop');
 const Subscription = require('../models/Subscription');
-const { chatbotService, invalidateRulesCache } = require('../services/chatbot.service');
+const { invalidateRulesCache } = require('../services/chatbot.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const logger = require('../utils/logger');
@@ -266,13 +266,10 @@ const bulkImportRules = async (req, res, next) => {
           shopId,
           keyword: rule.keyword,
           matchType: rule.matchType || 'contains',
-          response: rule.response,
-          reply: rule.response,
-          replyType: 'text',
+          reply: rule.reply || '',
+          replyType: rule.replyType || 'text',
           isActive: true,
-          triggerCount: 0,
-          priority: rule.priority || 0,
-          businessType: shop.businessType
+          triggerCount: 0
         });
         createdCount++;
       }
