@@ -5,6 +5,8 @@ const User = require('../models/User');
 const Plan = require('../models/Plan');
 const Subscription = require('../models/Subscription');
 const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
+const Customer = require('../models/Customer');
+const Booking = require('../models/Booking');
 const subscriptionService = require('../services/subscription.service');
 const adminService = require('../services/admin.service');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -50,7 +52,7 @@ const getShops = async (req, res, next) => {
 
 /**
  * GET /api/admin/shops/:id
- * Get full shop detail — includes subscription + usage
+ * Get full shop detail — includes subscription + usage + users + stats
  */
 const getShopById = async (req, res, next) => {
   try {
@@ -67,13 +69,29 @@ const getShopById = async (req, res, next) => {
       status: { $in: ['active', 'trial'] }
     }).populate('planId');
 
-    const staffCount = await User.countDocuments({ shopId: id, role: 'staff' });
+    // Get all users (owner + staff)
+    const [owner, staff] = await Promise.all([
+      User.findById(shop.ownerUserId).select('name email role lastLoginAt isActive'),
+      User.find({ shopId: id, role: 'staff' }).select('name email role lastLoginAt isActive')
+    ]);
+
+    const users = owner ? [owner, ...staff] : staff;
+    const userCount = users.length;
+
+    // Get customer and booking counts
+    const [customerCount, bookingCount] = await Promise.all([
+      Customer.countDocuments({ shopId: id }),
+      Booking.countDocuments({ shopId: id })
+    ]);
 
     return successResponse(res, 200, {
       shop,
       subscription: subscription || null,
       plan: subscription?.planId || null,
-      staffCount
+      users,
+      userCount,
+      customerCount,
+      bookingCount
     });
   } catch (error) {
     logger.error('Error in getShopById:', error);

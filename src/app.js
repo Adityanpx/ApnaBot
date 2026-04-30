@@ -40,6 +40,17 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Root route - API info
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'ApnaBot API is running',
+    frontend: config.FRONTEND_URL,
+    admin: config.ADMIN_URL,
+    docs: '/health'
+  });
+});
+
 // Mount routes
 app.use('/api/auth', authRoutes);
 app.use('/api/shop', shopRoutes);
