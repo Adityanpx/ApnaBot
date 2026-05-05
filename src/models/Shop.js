@@ -71,7 +71,7 @@ const shopSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-shopSchema.index({ phoneNumberId: 1 }, { unique: true, sparse: true });
+shopSchema.index({ phoneNumberId: 1 }, { unique: true, partialFilterExpression: { phoneNumberId: { $type: 'string' } } });
 shopSchema.index({ ownerUserId: 1 });
 shopSchema.index({ businessType: 1 });
 
