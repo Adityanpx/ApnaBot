@@ -134,22 +134,30 @@ const sendToCustomer = async (req, res, next) => {
     const { bookingId, paymentLink } = req.body;
     const shopId = req.user.shopId;
 
-    if (!bookingId || !paymentLink) {
-      return errorResponse(res, 400, 'Booking ID and payment link are required');
+    if (!paymentLink) {
+      return errorResponse(res, 400, 'Payment link is required');
+    }
+    if (!bookingId && !req.body.customerPhone) {
+      return errorResponse(res, 400, 'Either Booking ID or customer phone number is required');
     }
 
-    // Find booking and verify ownership
-    const booking = await Booking.findOne({ _id: bookingId, shopId });
-
-    if (!booking) {
-      return errorResponse(res, 404, 'Booking not found');
+    let customerPhone = req.body.customerPhone;
+    if (bookingId && bookingId.trim() !== '') {
+      if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+        return errorResponse(res, 400, 'Invalid Booking ID format');
+      }
+      const booking = await Booking.findOne({ _id: bookingId, shopId });
+      if (!booking) {
+        return errorResponse(res, 404, 'Booking not found');
+      }
+      const customer = await Customer.findById(booking.customerId);
+      if (!customer) {
+        return errorResponse(res, 404, 'Customer not found');
+      }
+      customerPhone = customer.whatsappNumber;
     }
-
-    // Get customer phone
-    const customer = await Customer.findById(booking.customerId);
-
-    if (!customer) {
-      return errorResponse(res, 404, 'Customer not found');
+    if (!customerPhone) {
+      return errorResponse(res, 400, 'Could not determine customer phone number');
     }
 
     // Load shop to get WhatsApp credentials — REQUIRED for queue
@@ -168,12 +176,12 @@ const sendToCustomer = async (req, res, next) => {
       shopId: shopId.toString(),
       phoneNumberId: shop.phoneNumberId,
       encryptedAccessToken: shop.accessToken,
-      to: customer.whatsappNumber,
+      to: customerPhone,
       message,
       type: 'text'
     });
 
-    logger.info('Payment link queued to customer:', customer.whatsappNumber);
+    logger.info('Payment link queued to customer:', customerPhone);
 
     return successResponse(res, 200, null, 'Payment link sent to customer successfully');
   } catch (error) {

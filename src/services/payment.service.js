@@ -67,7 +67,7 @@ const generateUPILink = async (bookingId, amount, vpa, payeeName) => {
       pa: vpa,
       pn: payeeName,
       am: amount.toString(),
-      tn: `Payment for booking ${bookingId}`
+      tn: bookingId ? `Payment for booking ${bookingId}` : 'Payment'
     });
 
     // Generate UPI payment link
