@@ -46,25 +46,22 @@ const getRules = async (req, res, next) => {
  */
 const createRule = async (req, res, next) => {
   try {
-    const { keyword, matchType = 'contains', reply, replyType = 'text' } = req.body;
+    const { keyword, matchType = 'contains', replyType = 'text' } = req.body;
+    let { reply } = req.body;
     const shopId = req.user.shopId;
 
     // Validate required fields
     if (!keyword) {
       return errorResponse(res, 400, 'Keyword is required');
     }
-    if (!reply && replyType === 'text') {
+    if (replyType === 'text' && !reply) {
       return errorResponse(res, 400, 'Reply is required');
     }
-
-    // Default reply for trigger types when none provided
-    let finalReply = reply;
-    if (!finalReply) {
-      if (replyType === 'booking_trigger') {
-        finalReply = 'Great! Let me collect your details.';
-      } else if (replyType === 'payment_trigger') {
-        finalReply = 'Please complete your payment.';
-      }
+    if (replyType === 'payment_trigger' && !reply) {
+      reply = 'Please complete your payment.';
+    }
+    if (replyType === 'booking_trigger' && !reply) {
+      reply = 'Great! Let me collect your details.';
     }
 
     // Normalize keyword
@@ -90,7 +87,7 @@ const createRule = async (req, res, next) => {
       shopId,
       keyword: normalizedKeyword,
       matchType,
-      reply: finalReply,
+      reply,
       replyType,
       isActive: true,
       triggerCount: 0

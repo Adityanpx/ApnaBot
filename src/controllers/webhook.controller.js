@@ -257,37 +257,7 @@ const receiveWebhook = async (req, res) => {
         replyText = firstQuestion;
 
       } else if (matchedRule.replyType === 'payment_trigger') {
-        // Generate UPI deep link and send it
-        try {
-          const Shop = require('../models/Shop');
-          const shop = await Shop.findById(tenant.shopId).select('upiId name');
-
-          if (shop && shop.upiId) {
-            // Build UPI deep link
-            const upiParams = new URLSearchParams({
-              pa: shop.upiId,
-              pn: shop.name || 'Shop',
-              tn: 'Payment'
-            });
-            const upiLink = `upi://pay?${upiParams.toString()}`;
-
-            replyText = matchedRule.reply
-              ? `${matchedRule.reply}\n\nPay here: ${upiLink}`
-              : `Please complete your payment:\n\n${upiLink}`;
-
-            // Increment payment link usage
-            usageService.incrementUsage(tenant.shopId, 'paymentLink').catch(err =>
-              logger.error('Error incrementing paymentLink usage:', err)
-            );
-          } else {
-            // Shop has no UPI ID configured — fall back to reply text
-            replyText = matchedRule.reply || 'Please contact us to arrange payment.';
-            logger.warn(`Shop ${tenant.shopId} has payment_trigger rule but no upiId configured`);
-          }
-        } catch (paymentErr) {
-          logger.error('Error generating payment trigger UPI link:', paymentErr);
-          replyText = matchedRule.reply || 'Please contact us to arrange payment.';
-        }
+        replyText = matchedRule.reply || 'Please complete your payment.';
       }
     } else {
       // No rule matched — send fallback reply

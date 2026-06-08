@@ -14,30 +14,34 @@ const createRazorpayLink = async (req, res, next) => {
     const { bookingId, amount, description } = req.body;
     const shopId = req.user.shopId;
 
-    if (!bookingId || !amount) {
-      return errorResponse(res, 400, 'Booking ID and amount are required');
+    if (!amount) {
+      return errorResponse(res, 400, 'Amount is required');
     }
 
     // Find booking and verify ownership
-    const booking = await Booking.findOne({ _id: bookingId, shopId });
+    let booking = null;
+    let customer = null;
+    if (bookingId) {
+      booking = await Booking.findOne({ _id: bookingId, shopId });
 
-    if (!booking) {
-      return errorResponse(res, 404, 'Booking not found');
-    }
+      if (!booking) {
+        return errorResponse(res, 404, 'Booking not found');
+      }
 
-    // Get customer details
-    const customer = await Customer.findById(booking.customerId);
+      // Get customer details
+      customer = await Customer.findById(booking.customerId);
 
-    if (!customer) {
-      return errorResponse(res, 404, 'Customer not found');
+      if (!customer) {
+        return errorResponse(res, 404, 'Customer not found');
+      }
     }
 
     // Create payment link
     const paymentLink = await paymentService.createRazorpayPaymentLink(
-      bookingId,
+      bookingId || null,
       amount * 100, // Convert to paise
-      customer.name,
-      customer.whatsappNumber,
+      customer?.name || 'Customer',
+      customer?.whatsappNumber || '',
       description || 'Payment for booking'
     );
 
@@ -69,15 +73,18 @@ const createUPILink = async (req, res, next) => {
     const { bookingId, amount, vpa, payeeName } = req.body;
     const shopId = req.user.shopId;
 
-    if (!bookingId || !amount || !vpa || !payeeName) {
-      return errorResponse(res, 400, 'Booking ID, amount, VPA, and payee name are required');
+    if (!amount || !vpa || !payeeName) {
+      return errorResponse(res, 400, 'Amount, VPA, and payee name are required');
     }
 
     // Find booking and verify ownership
-    const booking = await Booking.findOne({ _id: bookingId, shopId });
+    let booking = null;
+    if (bookingId) {
+      booking = await Booking.findOne({ _id: bookingId, shopId });
 
-    if (!booking) {
-      return errorResponse(res, 404, 'Booking not found');
+      if (!booking) {
+        return errorResponse(res, 404, 'Booking not found');
+      }
     }
 
     // Generate UPI link
