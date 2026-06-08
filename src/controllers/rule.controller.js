@@ -53,8 +53,18 @@ const createRule = async (req, res, next) => {
     if (!keyword) {
       return errorResponse(res, 400, 'Keyword is required');
     }
-    if (!reply) {
+    if (!reply && replyType === 'text') {
       return errorResponse(res, 400, 'Reply is required');
+    }
+
+    // Default reply for trigger types when none provided
+    let finalReply = reply;
+    if (!finalReply) {
+      if (replyType === 'booking_trigger') {
+        finalReply = 'Great! Let me collect your details.';
+      } else if (replyType === 'payment_trigger') {
+        finalReply = 'Please complete your payment.';
+      }
     }
 
     // Normalize keyword
@@ -80,7 +90,7 @@ const createRule = async (req, res, next) => {
       shopId,
       keyword: normalizedKeyword,
       matchType,
-      reply,
+      reply: finalReply,
       replyType,
       isActive: true,
       triggerCount: 0
