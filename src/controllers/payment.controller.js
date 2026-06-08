@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Booking = require('../models/Booking');
 const Customer = require('../models/Customer');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -21,7 +22,11 @@ const createRazorpayLink = async (req, res, next) => {
     // Find booking and verify ownership
     let booking = null;
     let customer = null;
-    if (bookingId) {
+    if (bookingId && bookingId.trim() !== '') {
+      if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+        return errorResponse(res, 400, 'Invalid Booking ID format');
+      }
+
       booking = await Booking.findOne({ _id: bookingId, shopId });
 
       if (!booking) {
@@ -79,7 +84,11 @@ const createUPILink = async (req, res, next) => {
 
     // Find booking and verify ownership
     let booking = null;
-    if (bookingId) {
+    if (bookingId && bookingId.trim() !== '') {
+      if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+        return errorResponse(res, 400, 'Invalid Booking ID format');
+      }
+
       booking = await Booking.findOne({ _id: bookingId, shopId });
 
       if (!booking) {
