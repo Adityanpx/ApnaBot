@@ -6,6 +6,9 @@ const webhookController = require('../controllers/webhook.controller');
 router.get('/', webhookController.verifyWebhook);
 
 // Receive WhatsApp messages (POST /api/webhook)
-router.post('/', webhookController.receiveWebhook);
+router.post('/', (req, res, next) => {
+  console.log('WEBHOOK POST hit');
+  next();
+}, webhookController.receiveWebhook);
 
 module.exports = router;

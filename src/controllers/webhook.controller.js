@@ -33,6 +33,7 @@ const verifyWebhook = async (req, res) => {
  * Main webhook handler for WhatsApp events
  */
 const receiveWebhook = async (req, res) => {
+  console.log('WEBHOOK POST received:', JSON.stringify(req.body, null, 2));
   // Step 1 - Return 200 immediately
   res.status(200).json({ status: 'ok' });
 
