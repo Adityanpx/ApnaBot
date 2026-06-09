@@ -2,7 +2,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const config = require('./config/env');
-const { globalLimiter, webhookLimiter } = require('./middleware/rateLimiter.middleware');
+const { globalLimiter } = require('./middleware/rateLimiter.middleware');
 const errorHandler = require('./middleware/errorHandler.middleware');
 
 // Import routes
@@ -20,6 +20,9 @@ const adminRoutes = require('./routes/admin.routes');
 
 const app = express();
 
+// Trust the first proxy hop (required on Render to avoid ERR_ERL_UNEXPECTED_X_FORWARDED_FOR)
+app.set('trust proxy', 1);
+
 // Middlewares
 app.use(helmet());
 app.use(cors({
@@ -28,8 +31,11 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Apply global rate limiter to all routes
-app.use(globalLimiter);
+// Apply global rate limiter to all routes except /api/webhook
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/webhook')) return next();
+  return globalLimiter(req, res, next);
+});
 
 // Health check route
 app.get('/health', (req, res) => {
@@ -58,7 +64,7 @@ app.use('/api/rules', ruleRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/bookings', bookingRoutes);
-app.use('/api/webhook', webhookLimiter, webhookRoutes);
+app.use('/api/webhook', webhookRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/staff', staffRoutes);
