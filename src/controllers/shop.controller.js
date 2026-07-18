@@ -169,7 +169,7 @@ const connectWhatsapp = async (req, res, next) => {
 
     // Check if phoneNumberId is already used by another shop
     const existingShop = await shopService.getShopByPhoneNumberId(phoneNumberId);
-    if (existingShop && existingShop._id.toString() !== req.user.shopId) {
+    if (existingShop && existingShop._id.toString() !== req.user.shopId.toString()) {
       return errorResponse(res, 409, 'This WhatsApp number is already connected to another shop.');
     }
 
