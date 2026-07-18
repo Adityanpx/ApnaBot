@@ -8,6 +8,7 @@ const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Customer = require('../models/Customer');
 const Booking = require('../models/Booking');
 const subscriptionService = require('../services/subscription.service');
+const tenantService = require('../services/tenant.service');
 const adminService = require('../services/admin.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
@@ -146,6 +147,13 @@ const changeShopPlan = async (req, res, next) => {
 
     const populated = await Subscription.findById(subscription._id).populate('planId');
 
+    // Clear cached subscription status so the new plan takes effect immediately
+    await subscriptionService.invalidateSubscriptionCache(id);
+    // Also clear the webhook's tenant cache, which stores its own subscription snapshot
+    if (shop.phoneNumberId) {
+      await tenantService.invalidateTenantCache(shop.phoneNumberId);
+    }
+
     logger.info(`Shop ${id} plan changed to ${plan.name} by superadmin`);
     return successResponse(res, 200, { subscription: populated }, 'Plan changed successfully');
   } catch (error) {
@@ -176,10 +184,14 @@ const extendSubscription = async (req, res, next) => {
     await subscription.save();
 
     // Reactivate shop if it was deactivated
-    await Shop.findByIdAndUpdate(id, { isActive: true });
+    const updatedShop = await Shop.findByIdAndUpdate(id, { isActive: true });
 
     // Clear Redis cache
     await subscriptionService.invalidateSubscriptionCache(id);
+    // Also clear the webhook's tenant cache, which stores its own subscription snapshot
+    if (updatedShop?.phoneNumberId) {
+      await tenantService.invalidateTenantCache(updatedShop.phoneNumberId);
+    }
 
     logger.info(`Shop ${id} subscription extended by ${days} days by superadmin`);
     return successResponse(res, 200, subscription, `Subscription extended by ${days} days`);
