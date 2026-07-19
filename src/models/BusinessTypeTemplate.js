@@ -5,7 +5,7 @@ const businessTypeTemplateSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
-    enum: ['tailor', 'salon', 'garage', 'cab', 'coaching', 'gym', 'medical', 'general', 'photographer', 'caterer', 'tutor', 'jeweller', 'boutique', 'grocery', 'bakery', 'electronics_repair', 'real_estate', 'driving_school']
+    enum: ['tailor', 'salon', 'garage', 'cab', 'coaching', 'gym', 'medical', 'general', 'photographer', 'caterer', 'tutor', 'jeweller', 'boutique', 'grocery', 'bakery', 'electronics_repair', 'real_estate', 'driving_school', 'travels']
   },
   defaultRules: [
     {
