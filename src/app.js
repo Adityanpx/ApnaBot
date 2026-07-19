@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -17,6 +18,7 @@ const paymentRoutes = require('./routes/payment.routes');
 const subscriptionRoutes = require('./routes/subscription.routes');
 const staffRoutes = require('./routes/staff.routes');
 const adminRoutes = require('./routes/admin.routes');
+const publicRoutes = require('./routes/public.routes');
 
 const app = express();
 
@@ -24,12 +26,26 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Middlewares
-app.use(helmet());
+// CSP is relaxed (beyond helmet defaults) to allow the Facebook JS SDK to load
+// and run on the static WhatsApp Embedded Signup page served from /public.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'script-src': ["'self'", "'unsafe-inline'", 'https://connect.facebook.net'],
+      'connect-src': ["'self'", 'https://graph.facebook.com', 'https://*.facebook.com'],
+      'frame-src': ["'self'", 'https://*.facebook.com', 'https://web.facebook.com']
+    }
+  }
+}));
 app.use(cors({
   origin: [config.FRONTEND_URL, config.ADMIN_URL]
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static assets (e.g. the WhatsApp Embedded Signup page loaded in the app's WebView)
+app.use(express.static(path.join(__dirname, '../public')));
 
 // Apply global rate limiter to all routes except /api/webhook
 app.use((req, res, next) => {
@@ -69,6 +85,7 @@ app.use('/api/payment', paymentRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/public', publicRoutes);
 
 // Error handler middleware
 app.use(errorHandler);

@@ -23,6 +23,9 @@ router.post('/', protect, shopController.createShop);
 router.put('/', protect, requireShop, shopController.updateShop);
 
 // POST /connect-whatsapp - Connect WhatsApp Business
+// Body: { code, wabaId, phoneNumberId } - `code` is the OAuth authorization
+// code returned by Meta's Embedded Signup flow. The server exchanges it for
+// an access token; raw tokens are never accepted from the client.
 router.post(
   '/connect-whatsapp',
   protect,

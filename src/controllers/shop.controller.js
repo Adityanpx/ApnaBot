@@ -1,9 +1,14 @@
+const axios = require('axios');
 const shopService = require('../services/shop.service');
 const tenantService = require('../services/tenant.service');
+const subscriptionService = require('../services/subscription.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { generateTokens, saveTokenToRedis } = require('../services/auth.service');
 const logger = require('../utils/logger');
 const cloudinary = require('../services/cloudinary.service');
+const config = require('../config/env');
+
+const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 
 // Valid business types
 const VALID_BUSINESS_TYPES = [
@@ -142,29 +147,19 @@ const updateShop = async (req, res, next) => {
  */
 const connectWhatsapp = async (req, res, next) => {
   try {
-    const { phoneNumberId, wabaId, whatsappNumber, accessToken, displayName } = req.body;
+    const { code, wabaId, phoneNumberId } = req.body;
 
     // Validate required fields
-    if (!phoneNumberId) {
-      return errorResponse(res, 400, 'Phone number ID is required');
+    if (!code) {
+      return errorResponse(res, 400, 'Authorization code is required');
     }
 
     if (!wabaId) {
       return errorResponse(res, 400, 'WhatsApp Business Account ID is required');
     }
 
-    if (!whatsappNumber) {
-      return errorResponse(res, 400, 'WhatsApp number is required');
-    }
-
-    if (!accessToken) {
-      return errorResponse(res, 400, 'Access token is required');
-    }
-
-    // Validate WhatsApp number format (10-15 digits, no + sign)
-    const whatsappRegex = /^[0-9]{10,15}$/;
-    if (!whatsappRegex.test(whatsappNumber)) {
-      return errorResponse(res, 400, 'WhatsApp number must be in E.164 format without + sign. Example: 919822xxxxxx');
+    if (!phoneNumberId) {
+      return errorResponse(res, 400, 'Phone number ID is required');
     }
 
     // Check if phoneNumberId is already used by another shop
@@ -173,7 +168,49 @@ const connectWhatsapp = async (req, res, next) => {
       return errorResponse(res, 409, 'This WhatsApp number is already connected to another shop.');
     }
 
-    // Connect WhatsApp
+    // Exchange the OAuth code for an access token server-side (never trust a
+    // client-supplied token)
+    let accessToken;
+    try {
+      const tokenResponse = await axios.get(`${META_GRAPH_BASE}/oauth/access_token`, {
+        params: {
+          client_id: config.META_APP_ID,
+          client_secret: config.META_APP_SECRET,
+          code
+        }
+      });
+      accessToken = tokenResponse.data.access_token;
+    } catch (error) {
+      logger.error('Error exchanging WhatsApp signup code:', error.response?.data || error.message);
+      return errorResponse(res, 400, 'Failed to exchange authorization code with Meta');
+    }
+
+    if (!accessToken) {
+      return errorResponse(res, 400, 'Meta did not return an access token');
+    }
+
+    // Fetch the phone number's display number and verified business name
+    let whatsappNumber;
+    let displayName;
+    try {
+      const phoneResponse = await axios.get(`${META_GRAPH_BASE}/${phoneNumberId}`, {
+        params: { fields: 'display_phone_number,verified_name' },
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      whatsappNumber = (phoneResponse.data.display_phone_number || '').replace(/[^0-9]/g, '');
+      displayName = phoneResponse.data.verified_name;
+    } catch (error) {
+      logger.error('Error fetching WhatsApp phone number details:', error.response?.data || error.message);
+      return errorResponse(res, 400, 'Failed to fetch WhatsApp phone number details from Meta');
+    }
+
+    // Validate WhatsApp number format (10-15 digits, no + sign)
+    const whatsappRegex = /^[0-9]{10,15}$/;
+    if (!whatsappRegex.test(whatsappNumber)) {
+      return errorResponse(res, 400, 'Could not determine a valid WhatsApp number for this phone number ID');
+    }
+
+    // Connect WhatsApp (service encrypts the access token before saving)
     const shop = await shopService.connectWhatsapp(req.user.shopId, {
       phoneNumberId,
       wabaId,
@@ -182,17 +219,15 @@ const connectWhatsapp = async (req, res, next) => {
       displayName
     });
 
-    // Invalidate tenant cache after connecting
+    // Invalidate caches after connecting so the new connection takes effect immediately
+    await subscriptionService.invalidateSubscriptionCache(req.user.shopId.toString());
     await tenantService.invalidateTenantCache(phoneNumberId);
 
     // Remove accessToken from response
     const shopData = shop.toObject();
     delete shopData.accessToken;
 
-    return successResponse(res, 200, {
-      shop: shopData,
-      message: 'WhatsApp connected successfully'
-    });
+    return successResponse(res, 200, { shop: shopData }, 'WhatsApp connected successfully');
   } catch (error) {
     logger.error('Error in connectWhatsapp:', error);
     next(error);

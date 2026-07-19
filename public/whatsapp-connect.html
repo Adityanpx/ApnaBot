@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Connect WhatsApp</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #ffffff;
+  }
+  .wrap {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    box-sizing: border-box;
+    text-align: center;
+  }
+  .btn {
+    background: #25D366;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 14px 28px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn:disabled {
+    opacity: 0.6;
+  }
+  .status {
+    margin-top: 16px;
+    color: #555;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div id="fb-root"></div>
+<div class="wrap">
+  <button id="connectBtn" class="btn" disabled>Connect WhatsApp</button>
+  <div id="status" class="status">Loading...</div>
+</div>
+
+<script>
+(function () {
+  var connectBtn = document.getElementById('connectBtn');
+  var statusEl = document.getElementById('status');
+  var META_CONFIG_ID = null;
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  function sendToApp(payload) {
+    if (window.ApnaBotBridge && typeof window.ApnaBotBridge.postMessage === 'function') {
+      window.ApnaBotBridge.postMessage(JSON.stringify(payload));
+    }
+  }
+
+  function sendError(message) {
+    setStatus(message);
+    sendToApp({ error: message });
+  }
+
+  // Session info from Meta's Embedded Signup flow (wabaId / phoneNumberId),
+  // captured before the FB.login callback fires with the auth code.
+  var signupSessionData = null;
+
+  window.addEventListener('message', function (event) {
+    if (!event.origin || event.origin.indexOf('facebook.com') === -1) {
+      return;
+    }
+
+    var data;
+    try {
+      data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+    } catch (e) {
+      return;
+    }
+
+    if (!data || data.type !== 'WA_EMBEDDED_SIGNUP') {
+      return;
+    }
+
+    if (data.event === 'FINISH') {
+      signupSessionData = {
+        wabaId: data.data && data.data.waba_id,
+        phoneNumberId: data.data && data.data.phone_number_id
+      };
+    } else if (data.event === 'CANCEL') {
+      sendError('WhatsApp signup was cancelled.');
+    } else if (data.event === 'ERROR') {
+      sendError((data.data && data.data.error_message) || 'WhatsApp signup failed.');
+    }
+  });
+
+  function launchSignup() {
+    if (!window.FB) {
+      sendError('Facebook SDK failed to load.');
+      return;
+    }
+
+    connectBtn.disabled = true;
+    setStatus('Opening WhatsApp signup...');
+
+    window.FB.login(function (response) {
+      if (response.authResponse && response.authResponse.code) {
+        var code = response.authResponse.code;
+
+        if (!signupSessionData || !signupSessionData.wabaId || !signupSessionData.phoneNumberId) {
+          sendError('Signup completed but WhatsApp account details were not received.');
+          connectBtn.disabled = false;
+          return;
+        }
+
+        setStatus('Connecting...');
+        sendToApp({
+          code: code,
+          wabaId: signupSessionData.wabaId,
+          phoneNumberId: signupSessionData.phoneNumberId
+        });
+      } else {
+        sendError('WhatsApp signup was not completed.');
+        connectBtn.disabled = false;
+      }
+    }, {
+      config_id: META_CONFIG_ID,
+      response_type: 'code',
+      override_default_response_type: true,
+      scope: 'whatsapp_business_management,whatsapp_business_messaging',
+      extras: {
+        sessionInfoVersion: '3'
+      }
+    });
+  }
+
+  connectBtn.addEventListener('click', launchSignup);
+
+  fetch('/api/public/whatsapp-embedded-signup-config')
+    .then(function (res) { return res.json(); })
+    .then(function (json) {
+      if (!json.success || !json.data || !json.data.appId || !json.data.configId) {
+        throw new Error('Missing config');
+      }
+
+      META_CONFIG_ID = json.data.configId;
+
+      window.fbAsyncInit = function () {
+        window.FB.init({
+          appId: json.data.appId,
+          xfbml: true,
+          version: 'v21.0'
+        });
+        connectBtn.disabled = false;
+        setStatus('Tap the button below to connect your WhatsApp Business number.');
+      };
+
+      (function (d, s, id) {
+        var js, fjs = d.getElementsByTagName(s)[0];
+        if (d.getElementById(id)) return;
+        js = d.createElement(s);
+        js.id = id;
+        js.src = 'https://connect.facebook.net/en_US/sdk.js';
+        fjs.parentNode.insertBefore(js, fjs);
+      }(document, 'script', 'facebook-jssdk'));
+    })
+    .catch(function () {
+      sendError('Unable to load WhatsApp signup configuration.');
+    });
+}());
+</script>
+</body>
+</html>
