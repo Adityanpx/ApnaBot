@@ -117,6 +117,144 @@ const templates = [
       { fieldKey: 'item', label: 'What would you like to order?', required: true, order: 2 },
       { fieldKey: 'quantity', label: 'How many pieces?', required: true, order: 3 }
     ]
+  },
+  {
+    businessType: 'boutique',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'Here\'s our latest collection! Check out our photos/catalog below. Reply with an item name or code and we\'ll confirm size & price for you.', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'We are open Monday to Saturday, 10am to 8pm.', replyType: 'text' },
+      { keyword: '3', matchType: 'exact', reply: 'You can find us at [store address]. Reply for the map location!', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'Tell us what you\'re looking for and we\'ll help you find it!', replyType: 'text' }
+    ]
+  },
+  {
+    businessType: 'photographer',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'Our packages start from ₹15,000 for events and ₹5,000 for portrait sessions. Reply for a detailed quote!', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'Let\'s check availability for your date!', replyType: 'booking_trigger' },
+      { keyword: '3', matchType: 'exact', reply: 'Check out our portfolio: [Instagram/website link]', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'We\'re based in [city] and travel for events. Let us know your location!', replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'eventType', label: 'What type of shoot? wedding/portrait/event', required: true, order: 2 },
+      { fieldKey: 'eventDate', label: 'What is the event date?', required: true, order: 3 },
+      { fieldKey: 'location', label: 'What is the location?', required: true, order: 4 }
+    ]
+  },
+  {
+    businessType: 'caterer',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'Our packages range from ₹250-₹800 per plate depending on menu. Reply for our full menu list!', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'Let\'s get your event booked!', replyType: 'booking_trigger' },
+      { keyword: '3', matchType: 'exact', reply: 'Our office hours are 10am to 7pm, all days.', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'We serve [area/city]. Contact us to confirm availability for your location.', replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'eventType', label: 'What type of event is this?', required: true, order: 2 },
+      { fieldKey: 'guestCount', label: 'How many guests?', required: true, order: 3 },
+      { fieldKey: 'eventDate', label: 'What is the event date?', required: true, order: 4 }
+    ]
+  },
+  {
+    businessType: 'tutor',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'We teach [subjects] for classes [X-Y]. Fees start from ₹1500/month. Reply for detailed fee structure!', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'Let\'s schedule your free trial class!', replyType: 'booking_trigger' },
+      { keyword: '3', matchType: 'exact', reply: 'Batches available: Morning, Evening, and Weekend. Reply to know timings for your grade.', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'We\'re located at [address] / We also offer home tuitions in [area].', replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'studentGrade', label: 'Which class/grade is this for?', required: true, order: 2 },
+      { fieldKey: 'subject', label: 'Which subject?', required: true, order: 3 },
+      { fieldKey: 'preferredTime', label: 'What time works best for you?', required: false, order: 4 }
+    ]
+  },
+  {
+    businessType: 'jeweller',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'We have gold, silver, and diamond collections. Reply to see our latest designs!', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'We are open Monday to Saturday, 10:30am to 8:30pm.', replyType: 'text' },
+      { keyword: '3', matchType: 'exact', reply: 'Visit us at [store address].', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'Let\'s discuss your custom design requirements!', replyType: 'booking_trigger' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'designType', label: 'What would you like custom made? (ring, necklace, etc.)', required: true, order: 2 },
+      { fieldKey: 'budget', label: 'What is your budget?', required: false, order: 3 }
+    ]
+  },
+  {
+    businessType: 'grocery',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'Check out today\'s fresh offers and discounts! Reply \'list\' for the full offer list.', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'We deliver in [area] within 1 hour. Open 7am to 10pm daily.', replyType: 'text' },
+      { keyword: '3', matchType: 'exact', reply: 'Visit us at [store address].', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'Let\'s place your order!', replyType: 'booking_trigger' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'items', label: 'What would you like to order?', required: true, order: 2 },
+      { fieldKey: 'deliveryAddress', label: 'What is your delivery address?', required: true, order: 3 }
+    ]
+  },
+  {
+    businessType: 'bakery',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'Our menu includes cakes, pastries, and fresh bakes. Reply for prices!', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'Let\'s get your custom cake order started!', replyType: 'booking_trigger' },
+      { keyword: '3', matchType: 'exact', reply: 'We are open 8am to 9pm, all days.', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'Visit us at [store address] for fresh pickups!', replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'cakeFlavor', label: 'What flavor and weight?', required: true, order: 2 },
+      { fieldKey: 'pickupDate', label: 'When would you like to pick it up?', required: true, order: 3 }
+    ]
+  },
+  {
+    businessType: 'electronics_repair',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'We repair phones, laptops, and ACs. Reply with your device and issue for a price estimate!', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'Let\'s book your repair!', replyType: 'booking_trigger' },
+      { keyword: '3', matchType: 'exact', reply: 'We are open Monday to Saturday, 10am to 7pm.', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'Visit us at [shop address], or ask about pickup service!', replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'deviceType', label: 'What device do you have?', required: true, order: 2 },
+      { fieldKey: 'issue', label: 'What\'s the problem?', required: true, order: 3 }
+    ]
+  },
+  {
+    businessType: 'real_estate',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'We have properties available for rent and sale. Reply with your budget and preferred area!', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'Let\'s schedule a site visit!', replyType: 'booking_trigger' },
+      { keyword: '3', matchType: 'exact', reply: 'Reach us directly at [contact number] for urgent queries.', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'We cover [areas/localities served].', replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'propertyType', label: 'Buy or rent?', required: true, order: 2 },
+      { fieldKey: 'preferredDate', label: 'What date works for the site visit?', required: true, order: 3 }
+    ]
+  },
+  {
+    businessType: 'driving_school',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: 'Two-wheeler course: ₹2000, Four-wheeler course: ₹5000. Reply for full details!', replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: 'Let\'s book your first driving slot!', replyType: 'booking_trigger' },
+      { keyword: '3', matchType: 'exact', reply: 'Classes run 6am to 8pm, 7 days a week — pick your convenient slot.', replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: 'Pickup available in [area], or visit us at [address].', replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'customerName', label: 'What is your name?', required: true, order: 1 },
+      { fieldKey: 'licenseType', label: 'Two-wheeler or four-wheeler?', required: true, order: 2 },
+      { fieldKey: 'preferredSlot', label: 'What time slot works best for you?', required: false, order: 3 }
+    ]
   }
 ];
 

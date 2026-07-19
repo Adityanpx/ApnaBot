@@ -24,7 +24,12 @@ const VALID_BUSINESS_TYPES = [
   'caterer',
   'tutor',
   'jeweller',
-  'boutique'
+  'boutique',
+  'grocery',
+  'bakery',
+  'electronics_repair',
+  'real_estate',
+  'driving_school'
 ];
 
 /**

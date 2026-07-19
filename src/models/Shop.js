@@ -14,7 +14,7 @@ const shopSchema = new mongoose.Schema({
   businessType: {
     type: String,
     required: true,
-    enum: ['tailor', 'salon', 'garage', 'cab', 'coaching', 'gym', 'medical', 'general', 'photographer', 'caterer', 'tutor', 'jeweller', 'boutique']
+    enum: ['tailor', 'salon', 'garage', 'cab', 'coaching', 'gym', 'medical', 'general', 'photographer', 'caterer', 'tutor', 'jeweller', 'boutique', 'grocery', 'bakery', 'electronics_repair', 'real_estate', 'driving_school']
   },
   whatsappNumber: {
     type: String,
