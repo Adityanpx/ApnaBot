@@ -19,7 +19,12 @@ const VALID_BUSINESS_TYPES = [
   'coaching',
   'gym',
   'medical',
-  'general'
+  'general',
+  'photographer',
+  'caterer',
+  'tutor',
+  'jeweller',
+  'boutique'
 ];
 
 /**
