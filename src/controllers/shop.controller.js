@@ -29,7 +29,8 @@ const VALID_BUSINESS_TYPES = [
   'bakery',
   'electronics_repair',
   'real_estate',
-  'driving_school'
+  'driving_school',
+  'travels'
 ];
 
 /**

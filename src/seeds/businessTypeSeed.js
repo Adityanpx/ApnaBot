@@ -255,6 +255,26 @@ const templates = [
       { fieldKey: 'licenseType', label: 'Two-wheeler or four-wheeler?', required: true, order: 2 },
       { fieldKey: 'preferredSlot', label: 'What time slot works best for you?', required: false, order: 3 }
     ]
+  },
+  {
+    businessType: 'travels',
+    defaultRules: [
+      { keyword: '1', matchType: 'exact', reply: "We offer One Way, Round Trip, and Local Rental packages to all major cities. Reply '2' to get a quote for your trip!", replyType: 'text' },
+      { keyword: '2', matchType: 'exact', reply: "Let's get your trip details!", replyType: 'booking_trigger' },
+      { keyword: '3', matchType: 'exact', reply: "We're available 24/7 for bookings. Advance booking recommended for outstation trips.", replyType: 'text' },
+      { keyword: '4', matchType: 'exact', reply: "We serve [cities/routes]. Contact us to confirm your route.", replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'tripType', label: 'What type of trip? Reply: One Way / Round Trip / Local Rental', required: true, order: 1 },
+      { fieldKey: 'pickupLocation', label: 'Pickup location?', required: true, order: 2 },
+      { fieldKey: 'dropLocation', label: 'Drop location?', required: true, order: 3 },
+      { fieldKey: 'travelDate', label: 'What date do you need the vehicle? (DD/MM/YYYY)', required: true, order: 4 },
+      { fieldKey: 'pickupTime', label: 'What time should we pick you up?', required: true, order: 5 },
+      { fieldKey: 'vehicleType', label: "Vehicle preference? Hatchback / Sedan / SUV / Luxury / Tempo / Mini Bus / Bus (or say 'any')", required: true, order: 6 },
+      { fieldKey: 'acRequired', label: 'Do you need AC? Reply Yes or No', required: false, order: 7 },
+      { fieldKey: 'carrierRequired', label: 'Do you need a carrier for luggage? Reply Yes or No', required: false, order: 8 },
+      { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', required: false, order: 9 }
+    ]
   }
 ];
 
