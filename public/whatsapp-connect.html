@@ -75,6 +75,9 @@
   var signupSessionData = null;
 
   window.addEventListener('message', function (event) {
+    console.log('[DEBUG raw message]', event.origin, event.data);
+    sendToApp({ debug: true, origin: event.origin, data: event.data });
+
     if (!event.origin || event.origin.indexOf('facebook.com') === -1) {
       return;
     }
@@ -112,6 +115,9 @@
     setStatus('Opening WhatsApp signup...');
 
     window.FB.login(function (response) {
+      console.log('[DEBUG FB.login response]', response);
+      sendToApp({ debug: true, fbLoginResponse: response });
+
       if (response.authResponse && response.authResponse.code) {
         var code = response.authResponse.code;
 
