@@ -67,6 +67,19 @@ const shopSchema = new mongoose.Schema({
   fallbackReply: {
     type: String,
     default: 'Thank you for your message. We will get back to you shortly.'
+  },
+  isMenuEnabled: {
+    type: Boolean,
+    default: false
+  },
+  menuItems: {
+    type: [{
+      number: { type: Number, required: true },
+      label: { type: String, required: true, trim: true },
+      ruleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Rule', required: true },
+      order: { type: Number, required: true }
+    }],
+    default: []
   }
 }, { timestamps: true });
 
