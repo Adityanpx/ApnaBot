@@ -115,7 +115,7 @@
     setStatus('Opening WhatsApp signup...');
 
     window.FB.login(function (response) {
-      console.log('[DEBUG FB.login response]', response);
+      console.log('[DEBUG FB.login response]', JSON.stringify(response));
       sendToApp({ debug: true, fbLoginResponse: response });
 
       if (response.authResponse && response.authResponse.code) {
@@ -143,6 +143,8 @@
       override_default_response_type: true,
       scope: 'whatsapp_business_management,whatsapp_business_messaging',
       extras: {
+        setup: {},
+        featureType: 'whatsapp_business_app_onboarding',
         sessionInfoVersion: '3'
       }
     });
