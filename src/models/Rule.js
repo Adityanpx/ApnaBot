@@ -22,6 +22,21 @@ const ruleSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  replyImageUrl: {
+    type: String,
+    default: null
+  },
+  buttons: {
+    type: [{
+      title: { type: String, required: true, maxlength: 20 },
+      nextKeyword: { type: String, required: true, lowercase: true, trim: true }
+    }],
+    default: [],
+    validate: {
+      validator: (arr) => arr.length <= 3,
+      message: 'A rule can have at most 3 buttons.'
+    }
+  },
   replyType: {
     type: String,
     required: true,

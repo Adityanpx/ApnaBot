@@ -45,6 +45,76 @@ const sendTextMessage = async (phoneNumberId, encryptedAccessToken, to, message)
 };
 
 /**
+ * Send an image message via WhatsApp (image on top, reply text as caption)
+ * @param {string} phoneNumberId - The WhatsApp phone number ID
+ * @param {string} encryptedAccessToken - Encrypted Meta access token
+ * @param {string} to - Recipient phone number
+ * @param {string} imageUrl - Publicly reachable image URL
+ * @param {string} caption - Caption text
+ * @returns {Promise<Object>}
+ */
+const sendImageMessage = async (phoneNumberId, encryptedAccessToken, to, imageUrl, caption) => {
+  try {
+    const accessToken = decrypt(encryptedAccessToken);
+    const response = await axios.post(
+      `${META_API_BASE}/${phoneNumberId}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'image',
+        image: { link: imageUrl, caption: caption || undefined }
+      },
+      { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+    );
+    return response.data;
+  } catch (error) {
+    logger.error('Error sending image message:', { phoneNumberId, to, error: error.response?.data || error.message });
+    throw error;
+  }
+};
+
+/**
+ * Send an interactive reply-buttons message (optional image header + body + up to 3 buttons).
+ * Each button's id IS its nextKeyword, so the webhook can feed it straight back
+ * into the rule matcher when tapped.
+ * @param {string} phoneNumberId - The WhatsApp phone number ID
+ * @param {string} encryptedAccessToken - Encrypted Meta access token
+ * @param {string} to - Recipient phone number
+ * @param {string} bodyText - Message body text
+ * @param {Array} buttons - [{ title, nextKeyword }]
+ * @param {string} [imageUrl] - Optional header image URL
+ * @returns {Promise<Object>}
+ */
+const sendInteractiveButtons = async (phoneNumberId, encryptedAccessToken, to, bodyText, buttons, imageUrl) => {
+  try {
+    const accessToken = decrypt(encryptedAccessToken);
+    const interactive = {
+      type: 'button',
+      body: { text: (bodyText || '').slice(0, 1024) },
+      action: {
+        buttons: buttons.slice(0, 3).map((b) => ({
+          type: 'reply',
+          reply: { id: b.nextKeyword, title: (b.title || '').slice(0, 20) }
+        }))
+      }
+    };
+    if (imageUrl) {
+      interactive.header = { type: 'image', image: { link: imageUrl } };
+    }
+    const response = await axios.post(
+      `${META_API_BASE}/${phoneNumberId}/messages`,
+      { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive', interactive },
+      { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+    );
+    return response.data;
+  } catch (error) {
+    logger.error('Error sending interactive buttons:', { phoneNumberId, to, error: error.response?.data || error.message });
+    throw error;
+  }
+};
+
+/**
  * Send a template message via WhatsApp
  * @param {string} phoneNumberId - The WhatsApp phone number ID
  * @param {string} encryptedAccessToken - Encrypted Meta access token
@@ -133,6 +203,8 @@ const markMessageAsRead = async (phoneNumberId, encryptedAccessToken, metaMessag
 
 module.exports = {
   sendTextMessage,
+  sendImageMessage,
+  sendInteractiveButtons,
   sendTemplateMessage,
   markMessageAsRead,
   META_API_BASE

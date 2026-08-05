@@ -3,6 +3,7 @@ const router = express.Router();
 const ruleController = require('../controllers/rule.controller');
 const { protect, requireShop } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/role.middleware');
+const { uploadSingle } = require('../middleware/upload.middleware');
 
 // All routes require: protect, requireShop
 // POST, PUT, DELETE also require: requireRole('owner')
@@ -21,6 +22,16 @@ router.post(
   requireShop,
   requireRole('owner'),
   ruleController.bulkImportRules
+);
+
+// POST /upload-image - Upload rule reply image
+router.post(
+  '/upload-image',
+  protect,
+  requireShop,
+  requireRole('owner'),
+  uploadSingle,
+  ruleController.uploadRuleImage
 );
 
 // POST / - Create rule

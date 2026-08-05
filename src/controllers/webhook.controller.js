@@ -95,7 +95,11 @@ const receiveWebhook = async (req, res) => {
     const metaMessageId = message.id;
     const customerNumber = message.from;
     const messageType = message.type;
-    const messageText = message.text?.body || '';
+    // A tapped reply-button arrives as type 'interactive'. We stored the target
+    // rule's keyword as the button id (see sendInteractiveButtons), so treat that
+    // id as the incoming "text" and let the normal rule matcher chain the flow.
+    const buttonReplyId = message.interactive?.button_reply?.id || null;
+    const messageText = message.text?.body || buttonReplyId || '';
     const phoneNumberId = value.metadata.phone_number_id;
 
     // Step 4 - Resolve tenant
@@ -167,8 +171,9 @@ const receiveWebhook = async (req, res) => {
       })
       .catch(err => logger.error('Error emitting usage_update:', err));
 
-    // Step 11 - Skip non-text messages
-    if (messageType !== 'text') {
+    // Step 11 - Skip non-text messages, EXCEPT interactive button taps (which
+    // carry a keyword in button_reply.id and must chain to the next rule).
+    if (messageType !== 'text' && !buttonReplyId) {
       logger.info('Non-text message received, skipping chatbot');
       return;
     }
@@ -245,7 +250,7 @@ const receiveWebhook = async (req, res) => {
       triggeredRuleId = matchedRule._id;
 
       if (matchedRule.replyType === 'text') {
-        // Simple text reply
+        // Simple text reply (may also carry an image and/or buttons).
         replyText = matchedRule.reply;
 
       } else if (matchedRule.replyType === 'booking_trigger') {
@@ -286,6 +291,8 @@ const receiveWebhook = async (req, res) => {
       to: customerNumber,
       message: replyText,
       type: 'text',
+      imageUrl: matchedRule?.replyImageUrl || null,
+      buttons: matchedRule?.buttons || [],
       messageId: outboundMsg._id
     });
 

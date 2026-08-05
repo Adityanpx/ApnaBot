@@ -3,6 +3,7 @@ const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Shop = require('../models/Shop');
 const Subscription = require('../models/Subscription');
 const { invalidateRulesCache } = require('../services/chatbot.service');
+const cloudinary = require('../services/cloudinary.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const logger = require('../utils/logger');
@@ -46,7 +47,8 @@ const getRules = async (req, res, next) => {
  */
 const createRule = async (req, res, next) => {
   try {
-    const { keyword, matchType = 'contains', replyType = 'text' } = req.body;
+    const { keyword, matchType = 'contains', replyType = 'text',
+            replyImageUrl = null, buttons = [] } = req.body;
     let { reply } = req.body;
     const shopId = req.user.shopId;
 
@@ -54,8 +56,25 @@ const createRule = async (req, res, next) => {
     if (!keyword) {
       return errorResponse(res, 400, 'Keyword is required');
     }
-    if (replyType === 'text' && !reply) {
+    if (Array.isArray(buttons)) {
+      if (buttons.length > 3) {
+        return errorResponse(res, 400, 'A rule can have at most 3 buttons.');
+      }
+      for (const b of buttons) {
+        if (!b.title || !b.nextKeyword) {
+          return errorResponse(res, 400, 'Each button needs a title and a nextKeyword.');
+        }
+        if (b.title.length > 20) {
+          return errorResponse(res, 400, 'Button titles must be 20 characters or less.');
+        }
+      }
+    }
+    // An image or buttons alone is valid content for a text rule (reply optional then).
+    if (replyType === 'text' && !reply && !replyImageUrl && (!buttons || buttons.length === 0)) {
       return errorResponse(res, 400, 'Reply is required');
+    }
+    if (replyType === 'text' && !reply) {
+      reply = '';
     }
     if (replyType === 'payment_trigger' && !reply) {
       reply = 'Please complete your payment.';
@@ -89,6 +108,11 @@ const createRule = async (req, res, next) => {
       matchType,
       reply,
       replyType,
+      replyImageUrl: replyImageUrl || null,
+      buttons: (buttons || []).map(b => ({
+        title: b.title.trim(),
+        nextKeyword: b.nextKeyword.toLowerCase().trim()
+      })),
       isActive: true,
       triggerCount: 0
     });
@@ -110,13 +134,30 @@ const createRule = async (req, res, next) => {
 const updateRule = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { keyword, matchType, reply, replyType, isActive } = req.body;
+    const { keyword, matchType, reply, replyType, isActive, replyImageUrl, buttons } = req.body;
     const shopId = req.user.shopId;
 
     // Find rule
     const rule = await Rule.findOne({ _id: id, shopId });
     if (!rule) {
       return errorResponse(res, 404, 'Rule not found');
+    }
+
+    if (buttons !== undefined) {
+      if (!Array.isArray(buttons)) {
+        return errorResponse(res, 400, 'Buttons must be an array.');
+      }
+      if (buttons.length > 3) {
+        return errorResponse(res, 400, 'A rule can have at most 3 buttons.');
+      }
+      for (const b of buttons) {
+        if (!b.title || !b.nextKeyword) {
+          return errorResponse(res, 400, 'Each button needs a title and a nextKeyword.');
+        }
+        if (b.title.length > 20) {
+          return errorResponse(res, 400, 'Button titles must be 20 characters or less.');
+        }
+      }
     }
 
     // Check for duplicate keyword if being updated
@@ -138,6 +179,13 @@ const updateRule = async (req, res, next) => {
     if (reply) rule.reply = reply;
     if (replyType) rule.replyType = replyType;
     if (isActive !== undefined) rule.isActive = isActive;
+    if (replyImageUrl !== undefined) rule.replyImageUrl = replyImageUrl || null;
+    if (buttons !== undefined) {
+      rule.buttons = buttons.map(b => ({
+        title: b.title.trim(),
+        nextKeyword: b.nextKeyword.toLowerCase().trim()
+      }));
+    }
 
     await rule.save();
 
@@ -292,6 +340,34 @@ const bulkImportRules = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/rules/upload-image
+ * Upload a rule reply image to Cloudinary
+ */
+const uploadRuleImage = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return errorResponse(res, 400, 'No image provided');
+    }
+
+    const shopId = req.user.shopId;
+    if (!shopId) {
+      return errorResponse(res, 404, 'No shop found');
+    }
+
+    const result = await cloudinary.uploadImage(
+      req.file.buffer,
+      'rule-images',
+      `rule-${shopId}-${Date.now()}`
+    );
+
+    return successResponse(res, 200, { imageUrl: result.secure_url });
+  } catch (error) {
+    logger.error('Error in uploadRuleImage:', error);
+    next(error);
+  }
+};
+
 module.exports = {
   getRules,
   createRule,
@@ -299,5 +375,6 @@ module.exports = {
   deleteRule,
   toggleRule,
   getTemplates,
-  bulkImportRules
+  bulkImportRules,
+  uploadRuleImage
 };

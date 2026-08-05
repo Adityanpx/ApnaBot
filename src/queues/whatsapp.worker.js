@@ -14,10 +14,17 @@ const connection = {
 };
 
 const worker = new Worker('whatsapp-outbound', async (job) => {
-  const { shopId, phoneNumberId, encryptedAccessToken, to, message, messageId } = job.data;
+  const { shopId, phoneNumberId, encryptedAccessToken, to, message, messageId,
+          type = 'text', imageUrl = null, buttons = [] } = job.data;
 
   try {
-    await whatsappService.sendTextMessage(phoneNumberId, encryptedAccessToken, to, message);
+    if (Array.isArray(buttons) && buttons.length > 0) {
+      await whatsappService.sendInteractiveButtons(phoneNumberId, encryptedAccessToken, to, message, buttons, imageUrl);
+    } else if (imageUrl) {
+      await whatsappService.sendImageMessage(phoneNumberId, encryptedAccessToken, to, imageUrl, message);
+    } else {
+      await whatsappService.sendTextMessage(phoneNumberId, encryptedAccessToken, to, message);
+    }
 
     if (messageId) {
       await Message.findByIdAndUpdate(messageId, { status: 'sent' });
