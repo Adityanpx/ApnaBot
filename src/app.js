@@ -39,7 +39,7 @@ app.use(helmet({
   }
 }));
 app.use(cors({
-  origin: [config.FRONTEND_URL, config.ADMIN_URL]
+  origin: [config.FRONTEND_URL, config.ADMIN_URL, ...config.WEB_APP_URLS].filter(Boolean)
 }));
 app.use(express.json({
   verify: (req, res, buf) => {

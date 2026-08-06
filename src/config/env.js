@@ -51,5 +51,7 @@ module.exports = {
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET,
   FRONTEND_URL: process.env.FRONTEND_URL,
-  ADMIN_URL: process.env.ADMIN_URL
+  ADMIN_URL: process.env.ADMIN_URL,
+  // Comma-separated list, e.g. "http://localhost:3000,https://app.apnabot.in"
+  WEB_APP_URLS: (process.env.WEB_APP_URLS || '').split(',').map(s => s.trim()).filter(Boolean)
 };
