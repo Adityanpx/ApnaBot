@@ -41,7 +41,11 @@ app.use(helmet({
 app.use(cors({
   origin: [config.FRONTEND_URL, config.ADMIN_URL]
 }));
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Serve static assets (e.g. the WhatsApp Embedded Signup page loaded in the app's WebView)

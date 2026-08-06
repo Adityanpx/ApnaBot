@@ -46,9 +46,14 @@ const receiveWebhook = async (req, res) => {
       return;
     }
 
+    if (!req.rawBody) {
+      logger.warn('Missing rawBody for signature verification');
+      return;
+    }
+
     const expectedSignature = 'sha256=' + crypto
       .createHmac('sha256', config.META_APP_SECRET)
-      .update(JSON.stringify(req.body))
+      .update(req.rawBody)
       .digest('hex');
 
     if (signature !== expectedSignature) {
