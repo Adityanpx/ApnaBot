@@ -15,10 +15,20 @@ const connection = {
 
 const worker = new Worker('whatsapp-outbound', async (job) => {
   const { shopId, phoneNumberId, encryptedAccessToken, to, message, messageId,
-          type = 'text', imageUrl = null, buttons = [] } = job.data;
+          type = 'text', imageUrl = null, buttons = [],
+          interactiveButtons = null, interactiveList = null, listButtonLabel = 'Choose' } = job.data;
 
   try {
-    if (Array.isArray(buttons) && buttons.length > 0) {
+    if (Array.isArray(interactiveList) && interactiveList.length > 0) {
+      // Booking-field choice question rendered as a tappable list (Part C/D/E).
+      await whatsappService.sendListMessage(phoneNumberId, encryptedAccessToken, to, message, listButtonLabel, interactiveList);
+    } else if (Array.isArray(interactiveButtons) && interactiveButtons.length > 0) {
+      // Booking-field choice question rendered as reply buttons. Reuses
+      // sendInteractiveButtons with ids set to the option's index, matching
+      // the id scheme resolved back in webhook.controller.js.
+      const mappedButtons = interactiveButtons.map((opt, index) => ({ title: opt, nextKeyword: String(index) }));
+      await whatsappService.sendInteractiveButtons(phoneNumberId, encryptedAccessToken, to, message, mappedButtons, imageUrl);
+    } else if (Array.isArray(buttons) && buttons.length > 0) {
       await whatsappService.sendInteractiveButtons(phoneNumberId, encryptedAccessToken, to, message, buttons, imageUrl);
     } else if (imageUrl) {
       await whatsappService.sendImageMessage(phoneNumberId, encryptedAccessToken, to, imageUrl, message);

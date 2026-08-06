@@ -9,7 +9,6 @@ const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const Customer = require('../models/Customer');
 const Message = require('../models/Message');
 const logger = require('../utils/logger');
-const redis = require('../config/redis');
 
 /**
  * GET /api/webhook/verify
@@ -104,7 +103,10 @@ const receiveWebhook = async (req, res) => {
     // rule's keyword as the button id (see sendInteractiveButtons), so treat that
     // id as the incoming "text" and let the normal rule matcher chain the flow.
     const buttonReplyId = message.interactive?.button_reply?.id || null;
-    const messageText = message.text?.body || buttonReplyId || '';
+    // A tapped list-message row arrives as type 'interactive' too, with its
+    // id in list_reply instead of button_reply (see sendListMessage).
+    const listReplyId = message.interactive?.list_reply?.id || null;
+    const messageText = message.text?.body || buttonReplyId || listReplyId || '';
     const phoneNumberId = value.metadata.phone_number_id;
 
     // Step 4 - Resolve tenant
@@ -178,28 +180,49 @@ const receiveWebhook = async (req, res) => {
 
     // Step 11 - Skip non-text messages, EXCEPT interactive button taps (which
     // carry a keyword in button_reply.id and must chain to the next rule).
-    if (messageType !== 'text' && !buttonReplyId) {
+    if (messageType !== 'text' && !buttonReplyId && !listReplyId) {
       logger.info('Non-text message received, skipping chatbot');
       return;
     }
 
     // Step 12 - Check active booking session
-    const sessionKey = `booking_session:${tenant.shopId}:${customerNumber}`;
-    const session = await redis.get(sessionKey);
-    if (session) {
+    const activeSession = await bookingService.getBookingSession(tenant.shopId, customerNumber);
+    if (activeSession) {
       logger.info(`Active booking session for ${customerNumber}`);
+
+      // If the customer tapped a button/list row for the current choice
+      // field, resolve its id (a stringified option index — see
+      // sendInteractiveButtons/sendListMessage mapping in the worker) back
+      // to the option's text before handing off. Plain text answers pass
+      // through untouched.
+      let resolvedReply = messageText;
+      const currentField = activeSession.fields[activeSession.step];
+      const replyId = listReplyId !== null ? listReplyId : buttonReplyId;
+      if (currentField && (currentField.fieldType === 'buttons' || currentField.fieldType === 'list') && replyId !== null) {
+        const options = currentField.options || [];
+        const idx = parseInt(replyId, 10);
+        if (!Number.isNaN(idx) && options[idx] !== undefined) {
+          resolvedReply = options[idx];
+        }
+      }
+
       // Process booking step
-      const replyText = await bookingService.processBookingStep(
+      const stepResult = await bookingService.processBookingStep(
         tenant.shopId,
         customerNumber,
-        messageText,
+        resolvedReply,
         tenant
       );
 
-      if (replyText === null) {
+      if (stepResult === null) {
         // Session expired - fall through to rule matching below
         logger.info(`Booking session expired for ${customerNumber}`);
       } else {
+        // stepResult is either the next field object (choice/text question)
+        // or a plain string (re-prompt on bad input, or final confirmation).
+        const nextField = typeof stepResult === 'object' ? stepResult : null;
+        const replyText = nextField ? nextField.label : stepResult;
+
         // Save outbound message to DB
         const outboundMsg = await Message.create({
           shopId: tenant.shopId,
@@ -209,12 +232,12 @@ const receiveWebhook = async (req, res) => {
           type: 'text',
           content: replyText,
           status: 'sent',
-          triggeredRuleId: session.ruleId,
+          triggeredRuleId: activeSession.ruleId,
           isRead: true
         });
 
         // Queue outbound message via addToWhatsappQueue
-        await addToWhatsappQueue({
+        const outboundJobData = {
           shopId: tenant.shopId,
           phoneNumberId: tenant.phoneNumberId,
           encryptedAccessToken: tenant.accessToken,
@@ -222,7 +245,14 @@ const receiveWebhook = async (req, res) => {
           message: replyText,
           type: 'text',
           messageId: outboundMsg._id
-        });
+        };
+        if (nextField && nextField.fieldType === 'buttons') {
+          outboundJobData.interactiveButtons = nextField.options || [];
+        } else if (nextField && nextField.fieldType === 'list') {
+          outboundJobData.interactiveList = nextField.options || [];
+          outboundJobData.listButtonLabel = 'Choose';
+        }
+        await addToWhatsappQueue(outboundJobData);
 
         // Increment outbound usage (fire and forget)
         usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
@@ -250,6 +280,7 @@ const receiveWebhook = async (req, res) => {
     // Step 14 — Prepare reply based on rule type
     let replyText = null;
     let triggeredRuleId = null;
+    let bookingField = null; // set when booking_trigger fires, for interactive rendering below
 
     if (matchedRule) {
       triggeredRuleId = matchedRule._id;
@@ -260,12 +291,13 @@ const receiveWebhook = async (req, res) => {
 
       } else if (matchedRule.replyType === 'booking_trigger') {
         // Start booking flow — ask first question
-        const firstQuestion = await bookingService.startBookingSession(
+        const firstField = await bookingService.startBookingSession(
           tenant.shopId,
           customerNumber,
           matchedRule._id
         );
-        replyText = firstQuestion;
+        bookingField = firstField;
+        replyText = firstField.label;
 
       } else if (matchedRule.replyType === 'payment_trigger') {
         replyText = matchedRule.reply || 'Please complete your payment.';
@@ -289,7 +321,7 @@ const receiveWebhook = async (req, res) => {
     });
 
     // Step 16 - Queue outbound message
-    await addToWhatsappQueue({
+    const outboundJobData = {
       shopId: tenant.shopId,
       phoneNumberId: tenant.phoneNumberId,
       encryptedAccessToken: tenant.accessToken,
@@ -299,7 +331,14 @@ const receiveWebhook = async (req, res) => {
       imageUrl: matchedRule?.replyImageUrl || null,
       buttons: matchedRule?.buttons || [],
       messageId: outboundMsg._id
-    });
+    };
+    if (bookingField && bookingField.fieldType === 'buttons') {
+      outboundJobData.interactiveButtons = bookingField.options || [];
+    } else if (bookingField && bookingField.fieldType === 'list') {
+      outboundJobData.interactiveList = bookingField.options || [];
+      outboundJobData.listButtonLabel = 'Choose';
+    }
+    await addToWhatsappQueue(outboundJobData);
 
     // ADD THIS — Emit new_message to Flutter app with full customer object
     try {

@@ -265,15 +265,15 @@ const templates = [
       { keyword: '4', matchType: 'exact', reply: "We serve [cities/routes]. Contact us to confirm your route.", replyType: 'text' }
     ],
     bookingFields: [
-      { fieldKey: 'tripType', label: 'What type of trip? Reply: One Way / Round Trip / Local Rental', required: true, order: 1 },
+      { fieldKey: 'tripType', label: 'What type of trip? Reply: One Way / Round Trip / Local Rental', required: true, order: 1, fieldType: 'buttons', options: ['One Way', 'Round Trip', 'Local Rental'] },
       { fieldKey: 'pickupLocation', label: 'Pickup location?', required: true, order: 2 },
       { fieldKey: 'dropLocation', label: 'Drop location?', required: true, order: 3 },
       { fieldKey: 'travelDate', label: 'What date do you need the vehicle? (DD/MM/YYYY)', required: true, order: 4 },
       { fieldKey: 'pickupTime', label: 'What time should we pick you up?', required: true, order: 5 },
-      { fieldKey: 'vehicleType', label: "Vehicle preference? Hatchback / Sedan / SUV / Luxury / Tempo / Mini Bus / Bus (or say 'any')", required: true, order: 6 },
-      { fieldKey: 'acRequired', label: 'Do you need AC? Reply Yes or No', required: false, order: 7 },
-      { fieldKey: 'carrierRequired', label: 'Do you need a carrier for luggage? Reply Yes or No', required: false, order: 8 },
-      { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', required: false, order: 9 }
+      { fieldKey: 'vehicleType', label: "Vehicle preference? Hatchback / Sedan / SUV / Luxury / Tempo / Mini Bus / Bus (or say 'any')", required: true, order: 6, fieldType: 'list', options: ['Hatchback', 'Sedan', 'SUV', 'Luxury', 'Tempo', 'Mini Bus', 'Bus'] },
+      { fieldKey: 'acRequired', label: 'Do you need AC? Reply Yes or No', required: false, order: 7, fieldType: 'buttons', options: ['Yes', 'No'] },
+      { fieldKey: 'carrierRequired', label: 'Do you need a carrier for luggage? Reply Yes or No', required: false, order: 8, fieldType: 'buttons', options: ['Yes', 'No'] },
+      { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', required: false, order: 9, fieldType: 'buttons', options: ['Yes', 'No'] }
     ]
   }
 ];

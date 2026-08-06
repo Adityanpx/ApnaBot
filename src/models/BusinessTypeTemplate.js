@@ -46,6 +46,15 @@ const businessTypeTemplateSchema = new mongoose.Schema({
       order: {
         type: Number,
         required: true
+      },
+      fieldType: {
+        type: String,
+        enum: ['text', 'buttons', 'list'],
+        default: 'text'
+      },
+      options: {
+        type: [String],
+        default: []
       }
     }
   ]

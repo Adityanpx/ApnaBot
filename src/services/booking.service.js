@@ -72,8 +72,8 @@ const deleteBookingSession = async (shopId, customerNumber) => {
  * Start a new booking session
  * @param {string} shopId 
  * @param {string} customerNumber 
- * @param {string} ruleId 
- * @returns {Promise<string>} First question text
+ * @param {string} ruleId
+ * @returns {Promise<Object>} First field object (fieldKey, label, required, order, fieldType, options)
  */
 const startBookingSession = async (shopId, customerNumber, ruleId) => {
   try {
@@ -103,8 +103,8 @@ const startBookingSession = async (shopId, customerNumber, ruleId) => {
     // Step 3: Save session to Redis
     await saveBookingSession(shopId, customerNumber, sessionData);
 
-    // Step 4: Return first question text
-    return sortedFields[0].label;
+    // Step 4: Return first question field
+    return sortedFields[0];
   } catch (error) {
     logger.error('Error starting booking session:', error);
     throw error;
@@ -117,7 +117,8 @@ const startBookingSession = async (shopId, customerNumber, ruleId) => {
  * @param {string} customerNumber 
  * @param {string} customerReply 
  * @param {Object} tenant - shop info from tenant service
- * @returns {Promise<string|null>} Next question or confirmation text, null if session expired
+ * @returns {Promise<Object|string|null>} Next question field object, or a plain string
+ *   (re-prompt on invalid choice, or final confirmation text), or null if session expired
  */
 const processBookingStep = async (shopId, customerNumber, customerReply, tenant) => {
   try {
@@ -136,7 +137,35 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
     }
 
     // Step 3: Store customer reply in collected
-    session.collected[currentField.fieldKey] = customerReply.trim();
+    const fieldType = currentField.fieldType || 'text';
+    if (fieldType === 'buttons' || fieldType === 'list') {
+      const options = currentField.options || [];
+      const trimmedReply = (customerReply || '').trim();
+
+      // (a) typed number matching an option's 1-based position
+      let resolvedOption = null;
+      const asNumber = Number(trimmedReply);
+      if (Number.isInteger(asNumber) && asNumber >= 1 && asNumber <= options.length) {
+        resolvedOption = options[asNumber - 1];
+      }
+
+      // (b) text matching an option case-insensitively — this also covers
+      // (c) interactive selections, since webhook.controller.js resolves
+      // those to the option text before calling this function.
+      if (!resolvedOption) {
+        resolvedOption = options.find(opt => opt.toLowerCase() === trimmedReply.toLowerCase()) || null;
+      }
+
+      if (!resolvedOption) {
+        // No match - re-prompt without advancing the step
+        await saveBookingSession(shopId, customerNumber, session);
+        return 'Please choose one of: ' + options.join(', ');
+      }
+
+      session.collected[currentField.fieldKey] = resolvedOption;
+    } else {
+      session.collected[currentField.fieldKey] = customerReply.trim();
+    }
 
     // Step 4: Advance step
     session.step = session.step + 1;
@@ -145,9 +174,9 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
     if (session.step < session.fields.length) {
       // Save updated session to Redis (resets TTL)
       await saveBookingSession(shopId, customerNumber, session);
-      
-      // Return next question
-      return session.fields[session.step].label;
+
+      // Return next question field
+      return session.fields[session.step];
     }
 
     // Step 6: All fields collected - create booking
