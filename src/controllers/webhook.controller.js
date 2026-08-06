@@ -330,6 +330,7 @@ const receiveWebhook = async (req, res) => {
       type: 'text',
       imageUrl: matchedRule?.replyImageUrl || null,
       buttons: matchedRule?.buttons || [],
+      listOptions: matchedRule?.listOptions || [],
       messageId: outboundMsg._id
     };
     if (bookingField && bookingField.fieldType === 'buttons') {

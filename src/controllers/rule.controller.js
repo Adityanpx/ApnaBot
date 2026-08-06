@@ -48,7 +48,7 @@ const getRules = async (req, res, next) => {
 const createRule = async (req, res, next) => {
   try {
     const { keyword, matchType = 'contains', replyType = 'text',
-            replyImageUrl = null, buttons = [] } = req.body;
+            replyImageUrl = null, buttons = [], listOptions = [] } = req.body;
     let { reply } = req.body;
     const shopId = req.user.shopId;
 
@@ -68,6 +68,25 @@ const createRule = async (req, res, next) => {
           return errorResponse(res, 400, 'Button titles must be 20 characters or less.');
         }
       }
+    }
+    if (Array.isArray(listOptions)) {
+      if (listOptions.length > 10) {
+        return errorResponse(res, 400, 'A rule can have at most 10 list options.');
+      }
+      for (const o of listOptions) {
+        if (!o.label || !o.nextKeyword) {
+          return errorResponse(res, 400, 'Each list option needs a label and a nextKeyword.');
+        }
+        if (o.label.length > 24) {
+          return errorResponse(res, 400, 'List option labels must be 24 characters or less.');
+        }
+        if (o.description && o.description.length > 72) {
+          return errorResponse(res, 400, 'List option descriptions must be 72 characters or less.');
+        }
+      }
+    }
+    if (buttons.length > 0 && listOptions.length > 0) {
+      return errorResponse(res, 400, 'A rule can have buttons or list options, not both.');
     }
     // An image or buttons alone is valid content for a text rule (reply optional then).
     if (replyType === 'text' && !reply && !replyImageUrl && (!buttons || buttons.length === 0)) {
@@ -113,6 +132,11 @@ const createRule = async (req, res, next) => {
         title: b.title.trim(),
         nextKeyword: b.nextKeyword.toLowerCase().trim()
       })),
+      listOptions: (listOptions || []).map(o => ({
+        label: o.label.trim(),
+        description: (o.description || '').trim(),
+        nextKeyword: o.nextKeyword.toLowerCase().trim()
+      })),
       isActive: true,
       triggerCount: 0
     });
@@ -134,7 +158,7 @@ const createRule = async (req, res, next) => {
 const updateRule = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { keyword, matchType, reply, replyType, isActive, replyImageUrl, buttons } = req.body;
+    const { keyword, matchType, reply, replyType, isActive, replyImageUrl, buttons, listOptions } = req.body;
     const shopId = req.user.shopId;
 
     // Find rule
@@ -158,6 +182,32 @@ const updateRule = async (req, res, next) => {
           return errorResponse(res, 400, 'Button titles must be 20 characters or less.');
         }
       }
+    }
+
+    if (listOptions !== undefined) {
+      if (!Array.isArray(listOptions)) {
+        return errorResponse(res, 400, 'List options must be an array.');
+      }
+      if (listOptions.length > 10) {
+        return errorResponse(res, 400, 'A rule can have at most 10 list options.');
+      }
+      for (const o of listOptions) {
+        if (!o.label || !o.nextKeyword) {
+          return errorResponse(res, 400, 'Each list option needs a label and a nextKeyword.');
+        }
+        if (o.label.length > 24) {
+          return errorResponse(res, 400, 'List option labels must be 24 characters or less.');
+        }
+        if (o.description && o.description.length > 72) {
+          return errorResponse(res, 400, 'List option descriptions must be 72 characters or less.');
+        }
+      }
+    }
+
+    const effectiveButtons = buttons !== undefined ? buttons : rule.buttons;
+    const effectiveListOptions = listOptions !== undefined ? listOptions : rule.listOptions;
+    if (effectiveButtons.length > 0 && effectiveListOptions.length > 0) {
+      return errorResponse(res, 400, 'A rule can have buttons or list options, not both.');
     }
 
     // Check for duplicate keyword if being updated
@@ -184,6 +234,13 @@ const updateRule = async (req, res, next) => {
       rule.buttons = buttons.map(b => ({
         title: b.title.trim(),
         nextKeyword: b.nextKeyword.toLowerCase().trim()
+      }));
+    }
+    if (listOptions !== undefined) {
+      rule.listOptions = listOptions.map(o => ({
+        label: o.label.trim(),
+        description: (o.description || '').trim(),
+        nextKeyword: o.nextKeyword.toLowerCase().trim()
       }));
     }
 

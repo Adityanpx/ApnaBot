@@ -15,7 +15,7 @@ const connection = {
 
 const worker = new Worker('whatsapp-outbound', async (job) => {
   const { shopId, phoneNumberId, encryptedAccessToken, to, message, messageId,
-          type = 'text', imageUrl = null, buttons = [],
+          type = 'text', imageUrl = null, buttons = [], listOptions = [],
           interactiveButtons = null, interactiveList = null, listButtonLabel = 'Choose' } = job.data;
 
   try {
@@ -30,6 +30,8 @@ const worker = new Worker('whatsapp-outbound', async (job) => {
       await whatsappService.sendInteractiveButtons(phoneNumberId, encryptedAccessToken, to, message, mappedButtons, imageUrl);
     } else if (Array.isArray(buttons) && buttons.length > 0) {
       await whatsappService.sendInteractiveButtons(phoneNumberId, encryptedAccessToken, to, message, buttons, imageUrl);
+    } else if (Array.isArray(listOptions) && listOptions.length > 0) {
+      await whatsappService.sendRuleListMessage(phoneNumberId, encryptedAccessToken, to, message, 'Choose', listOptions);
     } else if (imageUrl) {
       await whatsappService.sendImageMessage(phoneNumberId, encryptedAccessToken, to, imageUrl, message);
     } else {

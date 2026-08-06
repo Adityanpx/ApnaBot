@@ -157,6 +157,49 @@ const sendListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText
 };
 
 /**
+ * Send a WhatsApp list message where each row chains to a specific rule by keyword.
+ * Unlike sendListMessage (index-based, used by the booking flow's choice questions),
+ * each row's id is the rule's nextKeyword.
+ * @param {string} phoneNumberId - The WhatsApp phone number ID
+ * @param {string} encryptedAccessToken - Encrypted Meta access token
+ * @param {string} to - Recipient phone number
+ * @param {string} bodyText - Message body text
+ * @param {string} buttonLabel - Text on the list-opening button
+ * @param {Array<{label: string, description?: string, nextKeyword: string}>} options - Rule list options
+ * @returns {Promise<Object>}
+ */
+const sendRuleListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText, buttonLabel, options) => {
+  try {
+    const accessToken = decrypt(encryptedAccessToken);
+    const interactive = {
+      type: 'list',
+      body: { text: (bodyText || '').slice(0, 1024) },
+      action: {
+        button: (buttonLabel || 'Choose').slice(0, 20),
+        sections: [
+          {
+            rows: options.map((opt) => ({
+              id: opt.nextKeyword,
+              title: (opt.label || '').slice(0, 24),
+              ...(opt.description ? { description: opt.description.slice(0, 72) } : {})
+            }))
+          }
+        ]
+      }
+    };
+    const response = await axios.post(
+      `${META_API_BASE}/${phoneNumberId}/messages`,
+      { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive', interactive },
+      { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+    );
+    return response.data;
+  } catch (error) {
+    logger.error('Error sending rule list message:', { phoneNumberId, to, error: error.response?.data || error.message });
+    throw error;
+  }
+};
+
+/**
  * Send a template message via WhatsApp
  * @param {string} phoneNumberId - The WhatsApp phone number ID
  * @param {string} encryptedAccessToken - Encrypted Meta access token
@@ -248,6 +291,7 @@ module.exports = {
   sendImageMessage,
   sendInteractiveButtons,
   sendListMessage,
+  sendRuleListMessage,
   sendTemplateMessage,
   markMessageAsRead,
   META_API_BASE

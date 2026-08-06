@@ -37,6 +37,18 @@ const ruleSchema = new mongoose.Schema({
       message: 'A rule can have at most 3 buttons.'
     }
   },
+  listOptions: {
+    type: [{
+      label: { type: String, required: true, maxlength: 24 },
+      description: { type: String, maxlength: 72, default: '' },
+      nextKeyword: { type: String, required: true, lowercase: true, trim: true }
+    }],
+    default: [],
+    validate: {
+      validator: (arr) => arr.length <= 10,
+      message: 'A rule can have at most 10 list options.'
+    }
+  },
   replyType: {
     type: String,
     required: true,
