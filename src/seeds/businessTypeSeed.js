@@ -264,16 +264,21 @@ const templates = [
       { keyword: '3', matchType: 'exact', reply: "We're available 24/7 for bookings. Advance booking recommended for outstation trips.", replyType: 'text' },
       { keyword: '4', matchType: 'exact', reply: "We serve [cities/routes]. Contact us to confirm your route.", replyType: 'text' }
     ],
+    // NOTE: summaryLabel fields below only apply to a freshly-seeded template.
+    // seedBusinessTypes() skips creation when a 'travels' template already
+    // exists in the DB, so `npm run seed` will NOT backfill summaryLabel onto
+    // an already-seeded template. To apply it to an existing doc, delete the
+    // existing 'travels' template and reseed, or run a small update script.
     bookingFields: [
-      { fieldKey: 'tripType', label: 'What type of trip? Reply: One Way / Round Trip / Local Rental', required: true, order: 1, fieldType: 'buttons', options: ['One Way', 'Round Trip', 'Local Rental'] },
-      { fieldKey: 'pickupLocation', label: 'Pickup location?', required: true, order: 2 },
-      { fieldKey: 'dropLocation', label: 'Drop location?', required: true, order: 3 },
-      { fieldKey: 'travelDate', label: 'What date do you need the vehicle? (DD/MM/YYYY)', required: true, order: 4 },
-      { fieldKey: 'pickupTime', label: 'What time should we pick you up?', required: true, order: 5 },
-      { fieldKey: 'vehicleType', label: "Vehicle preference? Hatchback / Sedan / SUV / Luxury / Tempo / Mini Bus / Bus (or say 'any')", required: true, order: 6, fieldType: 'list', options: ['Hatchback', 'Sedan', 'SUV', 'Luxury', 'Tempo', 'Mini Bus', 'Bus'] },
-      { fieldKey: 'acRequired', label: 'Do you need AC? Reply Yes or No', required: false, order: 7, fieldType: 'buttons', options: ['Yes', 'No'] },
-      { fieldKey: 'carrierRequired', label: 'Do you need a carrier for luggage? Reply Yes or No', required: false, order: 8, fieldType: 'buttons', options: ['Yes', 'No'] },
-      { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', required: false, order: 9, fieldType: 'buttons', options: ['Yes', 'No'] }
+      { fieldKey: 'tripType', label: 'What type of trip? Reply: One Way / Round Trip / Local Rental', summaryLabel: 'Trip type', required: true, order: 1, fieldType: 'buttons', options: ['One Way', 'Round Trip', 'Local Rental'] },
+      { fieldKey: 'pickupLocation', label: 'Pickup location?', summaryLabel: 'Pickup', required: true, order: 2 },
+      { fieldKey: 'dropLocation', label: 'Drop location?', summaryLabel: 'Drop', required: true, order: 3 },
+      { fieldKey: 'travelDate', label: 'What date do you need the vehicle? (DD/MM/YYYY)', summaryLabel: 'Date', required: true, order: 4 },
+      { fieldKey: 'pickupTime', label: 'What time should we pick you up?', summaryLabel: 'Time', required: true, order: 5 },
+      { fieldKey: 'vehicleType', label: "Vehicle preference? Hatchback / Sedan / SUV / Luxury / Tempo / Mini Bus / Bus (or say 'any')", summaryLabel: 'Vehicle', required: true, order: 6, fieldType: 'list', options: ['Hatchback', 'Sedan', 'SUV', 'Luxury', 'Tempo', 'Mini Bus', 'Bus'] },
+      { fieldKey: 'acRequired', label: 'Do you need AC? Reply Yes or No', summaryLabel: 'AC', required: false, order: 7, fieldType: 'buttons', options: ['Yes', 'No'] },
+      { fieldKey: 'carrierRequired', label: 'Do you need a carrier for luggage? Reply Yes or No', summaryLabel: 'Luggage carrier', required: false, order: 8, fieldType: 'buttons', options: ['Yes', 'No'] },
+      { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', summaryLabel: 'Toll & parking included', required: false, order: 9, fieldType: 'buttons', options: ['Yes', 'No'] }
     ]
   }
 ];

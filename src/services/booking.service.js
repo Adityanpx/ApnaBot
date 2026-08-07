@@ -181,30 +181,44 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
 
     // Step 6: All fields collected - create booking
     const customer = await Customer.findOne({ shopId, whatsappNumber: customerNumber });
-    
+
+    const bookingCode = 'CAB' + Math.floor(1000 + Math.random() * 9000);
+
     const booking = await Booking.create({
       shopId,
       customerId: customer ? customer._id : null,
       customerNumber,
       status: 'pending',
       fields: session.collected,
-      paymentStatus: 'not_required'
+      paymentStatus: 'not_required',
+      bookingCode
     });
 
     // Delete session from Redis
     await deleteBookingSession(shopId, customerNumber);
 
     // Increment booking usage (fire and forget)
-    usageService.incrementUsage(shopId, 'booking').catch(err => 
+    usageService.incrementUsage(shopId, 'booking').catch(err =>
       logger.error('Error incrementing booking usage:', err)
     );
 
-    // Build confirmation message
-    const fieldSummary = session.fields
-      .map(f => f.label.replace('?', '') + ': ' + session.collected[f.fieldKey])
+    // Build confirmation message (WhatsApp bold = *value*)
+    const fieldLines = session.fields
+      .map(f => {
+        const value = session.collected[f.fieldKey];
+        if (value === undefined || value === null || value === '') {
+          return null;
+        }
+        const label = f.summaryLabel || f.label.replace('?', '');
+        return label + ': *' + value + '*';
+      })
+      .filter(line => line !== null)
       .join('\n');
 
-    const confirmationText = 'Booking confirmed!\n\n' + fieldSummary + '\n\nWe will contact you shortly.';
+    const confirmationText = '✅ *Booking request received!*\n' +
+      'Booking ID: *' + bookingCode + '*\n\n' +
+      fieldLines +
+      '\n\nOur team will contact you shortly to confirm. 🚕';
 
     // Emit Socket.io event (wrap in try/catch)
     try {

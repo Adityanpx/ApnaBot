@@ -39,6 +39,10 @@ const businessTypeTemplateSchema = new mongoose.Schema({
         type: String,
         required: true
       },
+      summaryLabel: {
+        type: String,
+        default: null
+      },
       required: {
         type: Boolean,
         default: true

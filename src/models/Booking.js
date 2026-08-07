@@ -21,6 +21,10 @@ const bookingSchema = new mongoose.Schema({
     enum: ['pending', 'confirmed', 'completed', 'cancelled'],
     default: 'pending'
   },
+  bookingCode: {
+    type: String,
+    default: null
+  },
   fields: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
