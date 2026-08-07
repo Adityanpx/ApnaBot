@@ -8,7 +8,13 @@ const socketService = require('../services/socket.service');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const Customer = require('../models/Customer');
 const Message = require('../models/Message');
+const Shop = require('../models/Shop');
+const Rule = require('../models/Rule');
 const logger = require('../utils/logger');
+
+// Exact-match greeting keywords that trigger the welcome message / menu.
+// Kept as exact matches (not substring) so real rule keywords still win.
+const GREETING_KEYWORDS = new Set(['hi', 'hello', 'hey', 'hii', 'hlo', 'namaste', 'start', 'menu']);
 
 /**
  * GET /api/webhook/verify
@@ -271,6 +277,87 @@ const receiveWebhook = async (req, res) => {
         }
 
         return; // Do not run rule matching
+      }
+    }
+
+    // Step 12.5 - Greeting -> welcome message / menu (exact match only, so
+    // real rule keywords still take priority over this).
+    const normalizedText = (messageText || '').trim().toLowerCase();
+    if (GREETING_KEYWORDS.has(normalizedText)) {
+      const shopDoc = await Shop.findById(tenant.shopId)
+        .select('welcomeMessage isMenuEnabled menuItems')
+        .lean();
+
+      const hasMenu = !!(shopDoc?.isMenuEnabled && shopDoc.menuItems?.length > 0);
+
+      if (shopDoc && (shopDoc.welcomeMessage || hasMenu)) {
+        let greetingReplyText = shopDoc.welcomeMessage || '';
+        let menuListOptions = [];
+
+        if (hasMenu) {
+          const sortedItems = [...shopDoc.menuItems]
+            .sort((a, b) => a.order - b.order)
+            .slice(0, 10);
+          const ruleIds = sortedItems.map(item => item.ruleId);
+          const rules = await Rule.find({ _id: { $in: ruleIds } }).select('keyword');
+          const keywordByRuleId = new Map(rules.map(rule => [rule._id.toString(), rule.keyword]));
+
+          menuListOptions = sortedItems
+            .filter(item => keywordByRuleId.has(item.ruleId.toString()))
+            .map(item => ({
+              label: item.label,
+              nextKeyword: keywordByRuleId.get(item.ruleId.toString())
+            }));
+
+          if (!greetingReplyText) {
+            greetingReplyText = 'How can we help you today?';
+          }
+        }
+
+        // Save outbound message
+        const greetingOutboundMsg = await Message.create({
+          shopId: tenant.shopId,
+          customerId: customer._id,
+          customerNumber,
+          direction: 'outbound',
+          type: 'text',
+          content: greetingReplyText,
+          status: 'sent',
+          isRead: true
+        });
+
+        // Queue outbound message the same way Step 16 does
+        const greetingJobData = {
+          shopId: tenant.shopId,
+          phoneNumberId: tenant.phoneNumberId,
+          encryptedAccessToken: tenant.accessToken,
+          to: customerNumber,
+          message: greetingReplyText,
+          type: 'text',
+          listOptions: menuListOptions,
+          listButtonLabel: 'Menu',
+          messageId: greetingOutboundMsg._id
+        };
+        await addToWhatsappQueue(greetingJobData);
+
+        // Increment outbound usage (fire and forget)
+        usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+          logger.error('Error incrementing outbound usage:', err)
+        );
+
+        // Emit socket event
+        try {
+          socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+            customer,
+            message: greetingOutboundMsg,
+            customerNumber
+          });
+        } catch (socketError) {
+          logger.error('Error emitting new_message socket event for greeting:', socketError);
+        }
+
+        logger.info(`Sent welcome message for shop ${tenant.shopId}, customer ${customerNumber}`);
+        return; // Do not run rule matching or fallback
       }
     }
 
