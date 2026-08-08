@@ -337,10 +337,15 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
       ? '\nFare: *₹' + session.collected.vehicleFare + '*'
       : '';
 
+    const tollNoteLine = (session.collected.vehicleFare !== undefined && session.collected.vehicleFare !== null)
+      ? '\n\n_Note: Toll & parking charges are not included in this fare and will be collected separately._'
+      : '';
+
     const confirmationText = '✅ *Booking request received!*\n' +
       'Booking ID: *' + bookingCode + '*\n\n' +
       fieldLines +
       fareLine +
+      tollNoteLine +
       '\n\nOur team will contact you shortly to confirm. 🚕';
 
     // Emit Socket.io event (wrap in try/catch)
