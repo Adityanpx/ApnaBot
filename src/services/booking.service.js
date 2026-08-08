@@ -342,6 +342,7 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
         session.collected.vehicleName = freshVehicle.customName || freshVehicle.catalogId.name;
         session.collected.vehicleFare = Math.round((tappedOption.distanceKm * freshVehicle.perKmRate) / 10) * 10;
         session.collected.fareSource = 'distance_estimate';
+        session.collected.distanceKm = Math.round(tappedOption.distanceKm * 10) / 10;
         session.collected[currentField.fieldKey] = session.collected.vehicleName;
       } else {
         const freshRouteFare = await RouteFare.findById(tappedOption.routeFareId)
@@ -472,7 +473,8 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
     const fareLine = !hasFare
       ? ''
       : session.collected.fareSource === 'distance_estimate'
-        ? '\nFare: *₹' + session.collected.vehicleFare + ' (estimated, based on distance)*'
+        ? '\nFare: *₹' + session.collected.vehicleFare + ' (estimated, based on distance)*' +
+          '\nDistance: *' + session.collected.distanceKm + ' km*'
         : '\nFare: *₹' + session.collected.vehicleFare + '*';
 
     const tollNoteLine = hasFare
