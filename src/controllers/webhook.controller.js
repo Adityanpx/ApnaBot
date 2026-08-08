@@ -330,6 +330,46 @@ const receiveWebhook = async (req, res) => {
             }
           }
 
+          // Escape hatch: let the customer opt out of the carousel if their
+          // preferred vehicle isn't listed.
+          const otherOptionsText = "Don't see the vehicle you want?";
+          const otherOptionsMsg = await Message.create({
+            shopId: tenant.shopId,
+            customerId: customer._id,
+            customerNumber,
+            direction: 'outbound',
+            type: 'text',
+            content: otherOptionsText,
+            status: 'sent',
+            triggeredRuleId: activeSession.ruleId,
+            isRead: true
+          });
+
+          await addToWhatsappQueue({
+            shopId: tenant.shopId,
+            phoneNumberId: tenant.phoneNumberId,
+            encryptedAccessToken: tenant.accessToken,
+            to: customerNumber,
+            message: otherOptionsText,
+            type: 'text',
+            buttons: [{ title: 'Other options', nextKeyword: 'vehicle_other' }],
+            messageId: otherOptionsMsg._id
+          });
+
+          usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+            logger.error('Error incrementing outbound usage:', err)
+          );
+
+          try {
+            socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+              customer,
+              message: otherOptionsMsg,
+              customerNumber
+            });
+          } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+          }
+
           return; // Do not run rule matching
         }
 

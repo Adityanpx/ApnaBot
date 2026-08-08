@@ -45,6 +45,20 @@ const buildVehicleCarouselOptions = (routeFares) => routeFares.map((rf, idx) => 
 }));
 
 /**
+ * Swap the current step's field for the generic, free-choice 'vehicleType'
+ * list field from the template (Hatchback/Sedan/SUV/etc), without advancing
+ * session.step. Used both when a route has no fares left to offer and when
+ * the customer explicitly asks to see options outside the carousel.
+ */
+const fallbackToGenericVehicleField = async (shopId, session) => {
+  const shop = await Shop.findById(shopId).select('businessType');
+  const template = await BusinessTypeTemplate.findOne({ businessType: shop.businessType });
+  const genericVehicleField = template.bookingFields.find(f => f.fieldKey === 'vehicleType');
+  session.fields[session.step] = genericVehicleField;
+  return genericVehicleField;
+};
+
+/**
  * Get Redis key for booking session
  */
 const getSessionKey = (shopId, customerNumber) => {
@@ -175,6 +189,16 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
     if (fieldType === 'vehicle_carousel') {
       const options = currentField.options || [];
       const trimmedReply = (customerReply || '').trim();
+
+      if (trimmedReply.toLowerCase() === 'other') {
+        // Customer opted out of the carousel via the "Other options" button —
+        // drop them into the free-choice vehicleType list instead of trying
+        // (and failing) to parse "other" as a numeric index.
+        const genericVehicleField = await fallbackToGenericVehicleField(shopId, session);
+        await saveBookingSession(shopId, customerNumber, session);
+        return genericVehicleField;
+      }
+
       const asNumber = Number(trimmedReply);
       const tappedOption = Number.isInteger(asNumber)
         ? options.find(opt => opt.index === asNumber)
@@ -214,10 +238,7 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
 
         // Owner pulled every fare for this route — fall back to the
         // generic vehicleType list question so the customer isn't stuck.
-        const shop = await Shop.findById(shopId).select('businessType');
-        const template = await BusinessTypeTemplate.findOne({ businessType: shop.businessType });
-        const genericVehicleField = template.bookingFields.find(f => f.fieldKey === 'vehicleType');
-        session.fields[session.step] = genericVehicleField;
+        const genericVehicleField = await fallbackToGenericVehicleField(shopId, session);
         await saveBookingSession(shopId, customerNumber, session);
         return genericVehicleField;
       }
@@ -261,7 +282,7 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
     // options and swap the generic vehicleType field for a carousel. Shops
     // with no matching (or no) RouteFares are unaffected — session.fields
     // is left untouched and the generic flow proceeds exactly as before.
-    if (currentField.fieldKey === 'dropLocation') {
+    if (currentField.fieldKey === 'carrierRequired') {
       const matchedRouteFares = await findMatchingVehicleOptions(
         shopId,
         session.collected.pickupLocation,
