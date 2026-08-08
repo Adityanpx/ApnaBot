@@ -4,10 +4,14 @@ const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Customer = require('../models/Customer');
 const RouteFare = require('../models/RouteFare');
 const Shop = require('../models/Shop');
+const Vehicle = require('../models/Vehicle');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const usageService = require('./usage.service');
 const socketService = require('./socket.service');
+const distanceMatrixService = require('./distanceMatrix.service');
 const logger = require('../utils/logger');
+
+const tripTypeMap = { 'One Way': 'oneway', 'Round Trip': 'round_trip', 'Local Rental': 'local' };
 
 const BOOKING_SESSION_TTL = 1800; // 30 minutes in seconds
 
@@ -16,7 +20,6 @@ const BOOKING_SESSION_TTL = 1800; // 30 minutes in seconds
  * @returns {Promise<Array>} Populated RouteFare docs (vehicleId + catalogId populated), or [] if none/invalid input
  */
 const findMatchingVehicleOptions = async (shopId, pickupLocation, dropLocation, tripType) => {
-  const tripTypeMap = { 'One Way': 'oneway', 'Round Trip': 'round_trip', 'Local Rental': 'local' };
   const mappedTripType = tripTypeMap[tripType] || 'oneway';
   const fromCity = (pickupLocation || '').toLowerCase().trim();
   const toCity = (dropLocation || '').toLowerCase().trim();
@@ -41,8 +44,114 @@ const buildVehicleCarouselOptions = (routeFares) => routeFares.map((rf, idx) => 
   name: rf.vehicleId.customName || rf.vehicleId.catalogId.name,
   photoUrl: rf.vehicleId.customPhotoUrl || rf.vehicleId.catalogId.photoUrl || null,
   seats: rf.vehicleId.catalogId.seats || null,
-  fare: rf.fare
+  fare: rf.fare,
+  source: 'route_fare'
 }));
+
+/**
+ * Find distance-estimated vehicle options for a pickup/drop pair, for shops
+ * that have opted in via Shop.enableDistanceFares. Falls back to [] on any
+ * "can't compute" condition (opt-out, no Google result, no priced vehicles)
+ * so the caller can fall through to the next tier without special-casing.
+ * @returns {Promise<Array>} Carousel-shaped options with source: 'distance_estimate', or []
+ */
+const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocation, tripType) => {
+  const shop = await Shop.findById(shopId).select('enableDistanceFares');
+  if (!shop || shop.enableDistanceFares !== true) {
+    return [];
+  }
+
+  const fromCity = (pickupLocation || '').toLowerCase().trim();
+  const toCity = (dropLocation || '').toLowerCase().trim();
+  if (!fromCity || !toCity) return [];
+
+  const cacheKey = `distance:${shopId}:${fromCity}:${toCity}`;
+  let oneWayDistanceKm = null;
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached !== null && cached !== undefined) {
+      oneWayDistanceKm = Number(cached);
+    }
+  } catch (error) {
+    logger.error('Error reading distance cache:', error);
+  }
+
+  if (oneWayDistanceKm === null) {
+    oneWayDistanceKm = await distanceMatrixService.getDistanceKm(pickupLocation, dropLocation);
+    if (oneWayDistanceKm === null) {
+      return [];
+    }
+    try {
+      await redis.set(cacheKey, oneWayDistanceKm, 'EX', 604800);
+    } catch (error) {
+      logger.error('Error writing distance cache:', error);
+    }
+  }
+
+  const mappedTripType = tripTypeMap[tripType] || 'oneway';
+  const distanceKm = mappedTripType === 'round_trip' ? oneWayDistanceKm * 2 : oneWayDistanceKm;
+
+  let vehicles;
+  try {
+    vehicles = await Vehicle.find({ shopId, isActive: true, perKmRate: { $ne: null } })
+      .populate({ path: 'catalogId', select: 'name photoUrl seats' });
+  } catch (error) {
+    logger.error('Error finding distance-based vehicle options:', error);
+    return [];
+  }
+
+  if (vehicles.length === 0) {
+    return [];
+  }
+
+  return vehicles.map((vehicle, idx) => ({
+    index: idx,
+    vehicleId: vehicle._id.toString(),
+    name: vehicle.customName || vehicle.catalogId.name,
+    photoUrl: vehicle.customPhotoUrl || vehicle.catalogId.photoUrl || null,
+    seats: vehicle.catalogId.seats || null,
+    fare: Math.round((distanceKm * vehicle.perKmRate) / 10) * 10,
+    source: 'distance_estimate',
+    distanceKm: Math.round(distanceKm * 10) / 10
+  }));
+};
+
+/**
+ * Three-tier vehicle carousel lookup: real route fares first, then a
+ * distance-based estimate for opted-in shops. Returns [] if neither source
+ * has anything to offer, so callers fall through to the generic vehicleType list.
+ */
+const findBestVehicleCarouselOptions = async (shopId, pickupLocation, dropLocation, tripType) => {
+  const matchedRouteFares = await findMatchingVehicleOptions(shopId, pickupLocation, dropLocation, tripType);
+  if (matchedRouteFares.length > 0) {
+    return buildVehicleCarouselOptions(matchedRouteFares);
+  }
+  return findDistanceBasedVehicleOptions(shopId, pickupLocation, dropLocation, tripType);
+};
+
+/**
+ * Shared "carousel gone stale" recovery: re-run the two-tier lookup and
+ * either refresh the carousel in place or drop to the generic vehicleType
+ * list if nothing is left to offer for this route.
+ */
+const rebuildCarouselOrFallback = async (shopId, customerNumber, session, currentField) => {
+  const freshOptions = await findBestVehicleCarouselOptions(
+    shopId,
+    session.collected.pickupLocation,
+    session.collected.dropLocation,
+    session.collected.tripType
+  );
+
+  if (freshOptions.length > 0) {
+    session.fields[session.step] = { ...currentField, options: freshOptions };
+    await saveBookingSession(shopId, customerNumber, session);
+    return 'Sorry, that vehicle is no longer available for this route. Here are the current options:';
+  }
+
+  const genericVehicleField = await fallbackToGenericVehicleField(shopId, session);
+  await saveBookingSession(shopId, customerNumber, session);
+  return genericVehicleField;
+};
 
 /**
  * Swap the current step's field for the generic, free-choice 'vehicleType'
@@ -212,43 +321,48 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
 
       // Tap-time re-verification: never trust the cached option, the fare
       // or vehicle may have changed/been removed since the carousel was sent.
-      const freshRouteFare = await RouteFare.findById(tappedOption.routeFareId)
-        .populate({ path: 'vehicleId', populate: { path: 'catalogId', select: 'name photoUrl seats' } });
+      // The two sources are re-verified independently (RouteFare lookup vs
+      // Vehicle + cached-distance recompute) since they have nothing in common.
+      if (tappedOption.source === 'distance_estimate') {
+        const freshVehicle = await Vehicle.findById(tappedOption.vehicleId)
+          .populate({ path: 'catalogId', select: 'name photoUrl seats' });
 
-      const isStale = !freshRouteFare || !freshRouteFare.isActive ||
-        !freshRouteFare.vehicleId || !freshRouteFare.vehicleId.isActive;
+        const isStale = !freshVehicle || !freshVehicle.isActive ||
+          freshVehicle.perKmRate === null || freshVehicle.perKmRate === undefined;
 
-      if (isStale) {
-        const freshRouteFares = await findMatchingVehicleOptions(
-          shopId,
-          session.collected.pickupLocation,
-          session.collected.dropLocation,
-          session.collected.tripType
-        );
-
-        if (freshRouteFares.length > 0) {
-          // Refresh the carousel in place and re-prompt without advancing.
-          session.fields[session.step] = {
-            ...currentField,
-            options: buildVehicleCarouselOptions(freshRouteFares)
-          };
-          await saveBookingSession(shopId, customerNumber, session);
-          return 'Sorry, that vehicle is no longer available for this route. Here are the current options:';
+        if (isStale) {
+          const result = await rebuildCarouselOrFallback(shopId, customerNumber, session, currentField);
+          return result;
         }
 
-        // Owner pulled every fare for this route — fall back to the
-        // generic vehicleType list question so the customer isn't stuck.
-        const genericVehicleField = await fallbackToGenericVehicleField(shopId, session);
-        await saveBookingSession(shopId, customerNumber, session);
-        return genericVehicleField;
-      }
+        // Still valid — recompute against the CURRENT perKmRate using the
+        // cached distance from the option; the distance itself doesn't
+        // change, only the rate might, so no need to re-call Google.
+        session.collected.vehicleId = freshVehicle._id.toString();
+        session.collected.vehicleName = freshVehicle.customName || freshVehicle.catalogId.name;
+        session.collected.vehicleFare = Math.round((tappedOption.distanceKm * freshVehicle.perKmRate) / 10) * 10;
+        session.collected.fareSource = 'distance_estimate';
+        session.collected[currentField.fieldKey] = session.collected.vehicleName;
+      } else {
+        const freshRouteFare = await RouteFare.findById(tappedOption.routeFareId)
+          .populate({ path: 'vehicleId', populate: { path: 'catalogId', select: 'name photoUrl seats' } });
 
-      // Still valid — always trust the fresh read for fare/name, not the cache.
-      session.collected.vehicleId = freshRouteFare.vehicleId._id.toString();
-      session.collected.vehicleName = freshRouteFare.vehicleId.customName || freshRouteFare.vehicleId.catalogId.name;
-      session.collected.vehicleFare = freshRouteFare.fare;
-      session.collected.routeFareId = freshRouteFare._id.toString();
-      session.collected[currentField.fieldKey] = session.collected.vehicleName;
+        const isStale = !freshRouteFare || !freshRouteFare.isActive ||
+          !freshRouteFare.vehicleId || !freshRouteFare.vehicleId.isActive;
+
+        if (isStale) {
+          const result = await rebuildCarouselOrFallback(shopId, customerNumber, session, currentField);
+          return result;
+        }
+
+        // Still valid — always trust the fresh read for fare/name, not the cache.
+        session.collected.vehicleId = freshRouteFare.vehicleId._id.toString();
+        session.collected.vehicleName = freshRouteFare.vehicleId.customName || freshRouteFare.vehicleId.catalogId.name;
+        session.collected.vehicleFare = freshRouteFare.fare;
+        session.collected.routeFareId = freshRouteFare._id.toString();
+        session.collected.fareSource = 'route_fare';
+        session.collected[currentField.fieldKey] = session.collected.vehicleName;
+      }
     } else if (fieldType === 'buttons' || fieldType === 'list') {
       const options = currentField.options || [];
       const trimmedReply = (customerReply || '').trim();
@@ -283,14 +397,14 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
     // with no matching (or no) RouteFares are unaffected — session.fields
     // is left untouched and the generic flow proceeds exactly as before.
     if (currentField.fieldKey === 'carrierRequired') {
-      const matchedRouteFares = await findMatchingVehicleOptions(
+      const carouselOptions = await findBestVehicleCarouselOptions(
         shopId,
         session.collected.pickupLocation,
         session.collected.dropLocation,
         session.collected.tripType
       );
 
-      if (matchedRouteFares.length > 0) {
+      if (carouselOptions.length > 0) {
         const vehicleFieldIndex = session.fields.findIndex(f => f.fieldKey === 'vehicleType');
         if (vehicleFieldIndex !== -1) {
           session.fields[vehicleFieldIndex] = {
@@ -300,7 +414,7 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
             required: true,
             order: session.fields[vehicleFieldIndex].order,
             fieldType: 'vehicle_carousel',
-            options: buildVehicleCarouselOptions(matchedRouteFares)
+            options: carouselOptions
           };
         }
       }
@@ -354,11 +468,14 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
       .filter(line => line !== null)
       .join('\n');
 
-    const fareLine = (session.collected.vehicleFare !== undefined && session.collected.vehicleFare !== null)
-      ? '\nFare: *₹' + session.collected.vehicleFare + '*'
-      : '';
+    const hasFare = session.collected.vehicleFare !== undefined && session.collected.vehicleFare !== null;
+    const fareLine = !hasFare
+      ? ''
+      : session.collected.fareSource === 'distance_estimate'
+        ? '\nFare: *₹' + session.collected.vehicleFare + ' (estimated, based on distance)*'
+        : '\nFare: *₹' + session.collected.vehicleFare + '*';
 
-    const tollNoteLine = (session.collected.vehicleFare !== undefined && session.collected.vehicleFare !== null)
+    const tollNoteLine = hasFare
       ? '\n\n_Note: Toll & parking charges are not included in this fare and will be collected separately._'
       : '';
 

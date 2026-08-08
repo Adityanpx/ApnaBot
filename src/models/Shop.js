@@ -76,6 +76,10 @@ const shopSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  enableDistanceFares: {
+    type: Boolean,
+    default: false
+  },
   menuItems: {
     type: [{
       number: { type: Number, required: true },

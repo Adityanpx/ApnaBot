@@ -53,5 +53,8 @@ module.exports = {
   FRONTEND_URL: process.env.FRONTEND_URL,
   ADMIN_URL: process.env.ADMIN_URL,
   // Comma-separated list, e.g. "http://localhost:3000,https://app.apnabot.in"
-  WEB_APP_URLS: (process.env.WEB_APP_URLS || '').split(',').map(s => s.trim()).filter(Boolean)
+  WEB_APP_URLS: (process.env.WEB_APP_URLS || '').split(',').map(s => s.trim()).filter(Boolean),
+  // Optional: only needed by shops with enableDistanceFares on; read directly
+  // from process.env in distanceMatrix.service.js, exported here for consistency.
+  GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY
 };
