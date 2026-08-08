@@ -8,6 +8,9 @@ const Message = require('./Message');
 const Booking = require('./Booking');
 const Usage = require('./Usage');
 const BusinessTypeTemplate = require('./BusinessTypeTemplate');
+const VehicleTypeCatalog = require('./VehicleTypeCatalog');
+const Vehicle = require('./Vehicle');
+const RouteFare = require('./RouteFare');
 
 module.exports = {
   User,
@@ -19,5 +22,8 @@ module.exports = {
   Message,
   Booking,
   Usage,
-  BusinessTypeTemplate
+  BusinessTypeTemplate,
+  VehicleTypeCatalog,
+  Vehicle,
+  RouteFare
 };

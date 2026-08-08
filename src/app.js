@@ -19,6 +19,9 @@ const subscriptionRoutes = require('./routes/subscription.routes');
 const staffRoutes = require('./routes/staff.routes');
 const adminRoutes = require('./routes/admin.routes');
 const publicRoutes = require('./routes/public.routes');
+const vehicleCatalogRoutes = require('./routes/vehicleCatalog.routes');
+const vehicleRoutes = require('./routes/vehicle.routes');
+const routeFareRoutes = require('./routes/routeFare.routes');
 
 const app = express();
 
@@ -88,8 +91,11 @@ app.use('/api/webhook', webhookRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/staff', staffRoutes);
+app.use('/api/admin/vehicle-catalog', vehicleCatalogRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/vehicles', vehicleRoutes);
+app.use('/api/route-fares', routeFareRoutes);
 
 // Error handler middleware
 app.use(errorHandler);
