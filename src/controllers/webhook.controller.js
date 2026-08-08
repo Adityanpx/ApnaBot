@@ -204,7 +204,11 @@ const receiveWebhook = async (req, res) => {
       let resolvedReply = messageText;
       const currentField = activeSession.fields[activeSession.step];
       const replyId = listReplyId !== null ? listReplyId : buttonReplyId;
-      if (currentField && (currentField.fieldType === 'buttons' || currentField.fieldType === 'list') && replyId !== null) {
+      if (currentField && currentField.fieldType === 'vehicle_carousel' && buttonReplyId && buttonReplyId.startsWith('vehicle_')) {
+        // Tapped "Book this" on a vehicle carousel message — id is
+        // 'vehicle_<index>'; pass the bare index straight through.
+        resolvedReply = buttonReplyId.slice('vehicle_'.length);
+      } else if (currentField && (currentField.fieldType === 'buttons' || currentField.fieldType === 'list') && replyId !== null) {
         const options = currentField.options || [];
         const idx = parseInt(replyId, 10);
         if (!Number.isNaN(idx) && options[idx] !== undefined) {
@@ -224,9 +228,111 @@ const receiveWebhook = async (req, res) => {
         // Session expired - fall through to rule matching below
         logger.info(`Booking session expired for ${customerNumber}`);
       } else {
-        // stepResult is either the next field object (choice/text question)
-        // or a plain string (re-prompt on bad input, or final confirmation).
+        // stepResult is either the next field object (choice/text question),
+        // a plain string (re-prompt on bad input, or final confirmation), or
+        // — specifically — the stale-vehicle re-prompt string, which needs a
+        // freshly-rebuilt carousel resent alongside it.
         const nextField = typeof stepResult === 'object' ? stepResult : null;
+
+        let carouselOptions = null;
+        if (nextField && nextField.fieldType === 'vehicle_carousel') {
+          carouselOptions = nextField.options || [];
+        } else if (typeof stepResult === 'string' && stepResult.startsWith('Sorry, that vehicle is no longer available')) {
+          const refreshedSession = await bookingService.getBookingSession(tenant.shopId, customerNumber);
+          const refreshedField = refreshedSession?.fields[refreshedSession.step];
+          if (refreshedField && refreshedField.fieldType === 'vehicle_carousel') {
+            carouselOptions = refreshedField.options || [];
+          }
+        }
+
+        if (carouselOptions) {
+          // Intro message (question text or the stale-vehicle re-prompt)
+          const introText = nextField ? nextField.label : stepResult;
+          const introMsg = await Message.create({
+            shopId: tenant.shopId,
+            customerId: customer._id,
+            customerNumber,
+            direction: 'outbound',
+            type: 'text',
+            content: introText,
+            status: 'sent',
+            triggeredRuleId: activeSession.ruleId,
+            isRead: true
+          });
+
+          await addToWhatsappQueue({
+            shopId: tenant.shopId,
+            phoneNumberId: tenant.phoneNumberId,
+            encryptedAccessToken: tenant.accessToken,
+            to: customerNumber,
+            message: introText,
+            type: 'text',
+            messageId: introMsg._id
+          });
+
+          usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+            logger.error('Error incrementing outbound usage:', err)
+          );
+
+          try {
+            socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+              customer,
+              message: introMsg,
+              customerNumber
+            });
+          } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+          }
+
+          // One message per vehicle option: image + caption + "Book this" button
+          for (const option of carouselOptions) {
+            const captionParts = [option.name];
+            if (option.seats) captionParts.push(`${option.seats} seats`);
+            captionParts.push(`₹${option.fare}`);
+            const caption = captionParts.join(' • ');
+
+            const vehicleMsg = await Message.create({
+              shopId: tenant.shopId,
+              customerId: customer._id,
+              customerNumber,
+              direction: 'outbound',
+              type: 'text',
+              content: caption,
+              status: 'sent',
+              triggeredRuleId: activeSession.ruleId,
+              isRead: true
+            });
+
+            await addToWhatsappQueue({
+              shopId: tenant.shopId,
+              phoneNumberId: tenant.phoneNumberId,
+              encryptedAccessToken: tenant.accessToken,
+              to: customerNumber,
+              message: caption,
+              type: 'text',
+              imageUrl: option.photoUrl || null,
+              buttons: [{ title: 'Book this', nextKeyword: `vehicle_${option.index}` }],
+              messageId: vehicleMsg._id
+            });
+
+            usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+              logger.error('Error incrementing outbound usage:', err)
+            );
+
+            try {
+              socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+                customer,
+                message: vehicleMsg,
+                customerNumber
+              });
+            } catch (socketError) {
+              logger.error('Error emitting socket event:', socketError);
+            }
+          }
+
+          return; // Do not run rule matching
+        }
+
         const replyText = nextField ? nextField.label : stepResult;
 
         // Save outbound message to DB

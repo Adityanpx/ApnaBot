@@ -2,6 +2,7 @@ const redis = require('../config/redis');
 const Booking = require('../models/Booking');
 const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Customer = require('../models/Customer');
+const RouteFare = require('../models/RouteFare');
 const Shop = require('../models/Shop');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const usageService = require('./usage.service');
@@ -9,6 +10,39 @@ const socketService = require('./socket.service');
 const logger = require('../utils/logger');
 
 const BOOKING_SESSION_TTL = 1800; // 30 minutes in seconds
+
+/**
+ * Find active route-fare based vehicle options for a pickup/drop pair.
+ * @returns {Promise<Array>} Populated RouteFare docs (vehicleId + catalogId populated), or [] if none/invalid input
+ */
+const findMatchingVehicleOptions = async (shopId, pickupLocation, dropLocation, tripType) => {
+  const tripTypeMap = { 'One Way': 'oneway', 'Round Trip': 'round_trip', 'Local Rental': 'local' };
+  const mappedTripType = tripTypeMap[tripType] || 'oneway';
+  const fromCity = (pickupLocation || '').toLowerCase().trim();
+  const toCity = (dropLocation || '').toLowerCase().trim();
+  if (!fromCity || !toCity) return [];
+  try {
+    const routeFares = await RouteFare.find({ shopId, fromCity, toCity, tripType: mappedTripType, isActive: true })
+      .populate({ path: 'vehicleId', match: { isActive: true }, populate: { path: 'catalogId', select: 'name photoUrl seats' } });
+    return routeFares.filter(rf => rf.vehicleId);
+  } catch (error) {
+    logger.error('Error finding matching vehicle options:', error);
+    return [];
+  }
+};
+
+/**
+ * Map populated RouteFare docs to the option shape stored on a vehicle_carousel field.
+ */
+const buildVehicleCarouselOptions = (routeFares) => routeFares.map((rf, idx) => ({
+  index: idx,
+  routeFareId: rf._id.toString(),
+  vehicleId: rf.vehicleId._id.toString(),
+  name: rf.vehicleId.customName || rf.vehicleId.catalogId.name,
+  photoUrl: rf.vehicleId.customPhotoUrl || rf.vehicleId.catalogId.photoUrl || null,
+  seats: rf.vehicleId.catalogId.seats || null,
+  fare: rf.fare
+}));
 
 /**
  * Get Redis key for booking session
@@ -138,7 +172,63 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
 
     // Step 3: Store customer reply in collected
     const fieldType = currentField.fieldType || 'text';
-    if (fieldType === 'buttons' || fieldType === 'list') {
+    if (fieldType === 'vehicle_carousel') {
+      const options = currentField.options || [];
+      const trimmedReply = (customerReply || '').trim();
+      const asNumber = Number(trimmedReply);
+      const tappedOption = Number.isInteger(asNumber)
+        ? options.find(opt => opt.index === asNumber)
+        : null;
+
+      if (!tappedOption) {
+        // No match - re-prompt without advancing the step
+        await saveBookingSession(shopId, customerNumber, session);
+        return 'Please tap one of the vehicle options above.';
+      }
+
+      // Tap-time re-verification: never trust the cached option, the fare
+      // or vehicle may have changed/been removed since the carousel was sent.
+      const freshRouteFare = await RouteFare.findById(tappedOption.routeFareId)
+        .populate({ path: 'vehicleId', populate: { path: 'catalogId', select: 'name photoUrl seats' } });
+
+      const isStale = !freshRouteFare || !freshRouteFare.isActive ||
+        !freshRouteFare.vehicleId || !freshRouteFare.vehicleId.isActive;
+
+      if (isStale) {
+        const freshRouteFares = await findMatchingVehicleOptions(
+          shopId,
+          session.collected.pickupLocation,
+          session.collected.dropLocation,
+          session.collected.tripType
+        );
+
+        if (freshRouteFares.length > 0) {
+          // Refresh the carousel in place and re-prompt without advancing.
+          session.fields[session.step] = {
+            ...currentField,
+            options: buildVehicleCarouselOptions(freshRouteFares)
+          };
+          await saveBookingSession(shopId, customerNumber, session);
+          return 'Sorry, that vehicle is no longer available for this route. Here are the current options:';
+        }
+
+        // Owner pulled every fare for this route — fall back to the
+        // generic vehicleType list question so the customer isn't stuck.
+        const shop = await Shop.findById(shopId).select('businessType');
+        const template = await BusinessTypeTemplate.findOne({ businessType: shop.businessType });
+        const genericVehicleField = template.bookingFields.find(f => f.fieldKey === 'vehicleType');
+        session.fields[session.step] = genericVehicleField;
+        await saveBookingSession(shopId, customerNumber, session);
+        return genericVehicleField;
+      }
+
+      // Still valid — always trust the fresh read for fare/name, not the cache.
+      session.collected.vehicleId = freshRouteFare.vehicleId._id.toString();
+      session.collected.vehicleName = freshRouteFare.vehicleId.customName || freshRouteFare.vehicleId.catalogId.name;
+      session.collected.vehicleFare = freshRouteFare.fare;
+      session.collected.routeFareId = freshRouteFare._id.toString();
+      session.collected[currentField.fieldKey] = session.collected.vehicleName;
+    } else if (fieldType === 'buttons' || fieldType === 'list') {
       const options = currentField.options || [];
       const trimmedReply = (customerReply || '').trim();
 
@@ -165,6 +255,34 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
       session.collected[currentField.fieldKey] = resolvedOption;
     } else {
       session.collected[currentField.fieldKey] = customerReply.trim();
+    }
+
+    // If pickup/drop are both known now, try to find route-specific vehicle
+    // options and swap the generic vehicleType field for a carousel. Shops
+    // with no matching (or no) RouteFares are unaffected — session.fields
+    // is left untouched and the generic flow proceeds exactly as before.
+    if (currentField.fieldKey === 'dropLocation') {
+      const matchedRouteFares = await findMatchingVehicleOptions(
+        shopId,
+        session.collected.pickupLocation,
+        session.collected.dropLocation,
+        session.collected.tripType
+      );
+
+      if (matchedRouteFares.length > 0) {
+        const vehicleFieldIndex = session.fields.findIndex(f => f.fieldKey === 'vehicleType');
+        if (vehicleFieldIndex !== -1) {
+          session.fields[vehicleFieldIndex] = {
+            fieldKey: 'vehicleType',
+            label: 'Choose your vehicle:',
+            summaryLabel: 'Vehicle',
+            required: true,
+            order: session.fields[vehicleFieldIndex].order,
+            fieldType: 'vehicle_carousel',
+            options: buildVehicleCarouselOptions(matchedRouteFares)
+          };
+        }
+      }
     }
 
     // Step 4: Advance step
@@ -215,9 +333,14 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
       .filter(line => line !== null)
       .join('\n');
 
+    const fareLine = (session.collected.vehicleFare !== undefined && session.collected.vehicleFare !== null)
+      ? '\nFare: *₹' + session.collected.vehicleFare + '*'
+      : '';
+
     const confirmationText = '✅ *Booking request received!*\n' +
       'Booking ID: *' + bookingCode + '*\n\n' +
       fieldLines +
+      fareLine +
       '\n\nOur team will contact you shortly to confirm. 🚕';
 
     // Emit Socket.io event (wrap in try/catch)
@@ -242,5 +365,6 @@ module.exports = {
   saveBookingSession,
   deleteBookingSession,
   startBookingSession,
-  processBookingStep
+  processBookingStep,
+  findMatchingVehicleOptions
 };
