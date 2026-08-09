@@ -31,11 +31,14 @@ const generateResetToken = () => {
   return crypto.randomBytes(32).toString('hex');
 };
 
+const generateOtp = () => crypto.randomInt(100000, 999999).toString();
+
 module.exports = {
   encrypt,
   decrypt,
   generateWebhookToken,
   generateResetToken,
+  generateOtp,
   hashPassword: async (password) => {
     return bcrypt.hash(password, 10);
   },

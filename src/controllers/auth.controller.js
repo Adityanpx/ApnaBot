@@ -10,7 +10,7 @@ const {
 } = require('../services/auth.service');
 const { errorResponse, successResponse } = require('../utils/response');
 const logger = require('../utils/logger');
-const { generateResetToken } = require('../utils/crypto');
+const { generateResetToken, generateOtp } = require('../utils/crypto');
 const redis = require('../config/redis');
 
 const register = async (req, res, next) => {
@@ -37,23 +37,38 @@ const register = async (req, res, next) => {
       role: 'owner',
       shopId: null,
       permissions: buildPermissions('owner'),
-      isVerified: true
+      isVerified: false
     });
-    
+
     await user.save();
-    
+
+    const otp = generateOtp();
+
+    await redis.set(`verify-email:${user._id}`, otp, 'EX', 600);
+
+    // DEV MODE — log OTP to terminal so you can test without email setup
+    logger.info(`DEV MODE — Email verification OTP for ${user.email}: ${otp}`);
+
+    try {
+      const emailService = require('../services/email.service');
+      await emailService.sendVerificationEmail(user.email, otp, user.name);
+    } catch (emailError) {
+      // Log but don't fail the request — OTP is saved and logged above
+      logger.error('Failed to send verification email:', emailError);
+    }
+
     const payload = {
       userId: user._id,
       shopId: user.shopId,
       role: user.role,
       permissions: user.permissions
     };
-    
+
     const accessToken = generateAccessToken(payload);
     const refreshToken = generateRefreshToken(user._id);
-    
+
     await saveRefreshToken(user._id.toString(), refreshToken);
-    
+
     return successResponse(res, 201, {
       user: {
         _id: user._id,
@@ -94,7 +109,11 @@ const login = async (req, res, next) => {
     if (!isMatch) {
       return errorResponse(res, 401, 'Invalid credentials');
     }
-    
+
+    if (!user.isVerified) {
+      return errorResponse(res, 403, 'Please verify your email before logging in', { code: 'EMAIL_NOT_VERIFIED' });
+    }
+
     user.lastLoginAt = new Date();
     await user.save();
     
@@ -267,11 +286,85 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
+const verifyEmail = async (req, res, next) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return errorResponse(res, 400, 'Email and OTP are required');
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return errorResponse(res, 404, 'User not found');
+    }
+
+    if (user.isVerified) {
+      return successResponse(res, 200, null, 'Email already verified');
+    }
+
+    const storedOtp = await redis.get(`verify-email:${user._id}`);
+    if (!storedOtp || storedOtp !== otp) {
+      return errorResponse(res, 400, 'Invalid or expired OTP');
+    }
+
+    user.isVerified = true;
+    await user.save();
+
+    await redis.del(`verify-email:${user._id}`);
+
+    return successResponse(res, 200, null, 'Email verified successfully');
+  } catch (error) {
+    logger.error('Verify email error:', error);
+    next(error);
+  }
+};
+
+const resendVerificationOtp = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return errorResponse(res, 400, 'Email is required');
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return errorResponse(res, 404, 'User not found');
+    }
+
+    if (user.isVerified) {
+      return successResponse(res, 200, null, 'Email already verified');
+    }
+
+    const otp = generateOtp();
+
+    await redis.set(`verify-email:${user._id}`, otp, 'EX', 600);
+
+    // DEV MODE — log OTP to terminal so you can test without email setup
+    logger.info(`DEV MODE — Email verification OTP for ${user.email}: ${otp}`);
+
+    try {
+      const emailService = require('../services/email.service');
+      await emailService.sendVerificationEmail(user.email, otp, user.name);
+    } catch (emailError) {
+      logger.error('Failed to send verification email:', emailError);
+    }
+
+    return successResponse(res, 200, null, 'Verification code sent');
+  } catch (error) {
+    logger.error('Resend verification OTP error:', error);
+    next(error);
+  }
+};
+
 module.exports = {
   register,
   login,
   refresh,
   logout,
   forgotPassword,
-  resetPassword
+  resetPassword,
+  verifyEmail,
+  resendVerificationOtp
 };

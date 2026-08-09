@@ -58,6 +58,40 @@ const sendPasswordResetEmail = async (toEmail, resetToken, userName) => {
 };
 
 /**
+ * Send email verification OTP
+ * @param {string} toEmail - Recipient email
+ * @param {string} otp - The 6-digit OTP
+ * @param {string} userName - Recipient name
+ */
+const sendVerificationEmail = async (toEmail, otp, userName) => {
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_FROM || 'ApnaBot <noreply@apnabot.com>',
+      to: toEmail,
+      subject: 'Verify your ApnaBot email',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #1a1a2e;">Verify Your Email</h2>
+          <p>Hi ${userName},</p>
+          <p>Use the code below to verify your ApnaBot email address. This code expires in <strong>10 minutes</strong>.</p>
+          <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1a1a2e; margin: 16px 0;">
+            ${otp}
+          </p>
+          <p style="color: #777; font-size: 13px;">
+            If you did not request this, ignore this email.
+          </p>
+        </div>
+      `
+    });
+
+    logger.info(`Verification email sent to ${toEmail}`);
+  } catch (error) {
+    logger.error('Error sending verification email:', error);
+    throw error;
+  }
+};
+
+/**
  * Send subscription expiry warning email
  * @param {string} toEmail
  * @param {string} shopName
@@ -95,5 +129,6 @@ const sendExpiryWarningEmail = async (toEmail, shopName, expiryDate) => {
 
 module.exports = {
   sendPasswordResetEmail,
+  sendVerificationEmail,
   sendExpiryWarningEmail
 };
