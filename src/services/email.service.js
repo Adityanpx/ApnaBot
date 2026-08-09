@@ -1,19 +1,22 @@
 // src/services/email.service.js — CREATE THIS FILE
 
-const nodemailer = require('nodemailer');
+const SibApiV3Sdk = require('@getbrevo/brevo');
 const logger = require('../utils/logger');
 
-// Create reusable transporter
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.EMAIL_PORT) || 587,
-  secure: false, // true for 465, false for other ports
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  family: 4
-});
+const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
+apiInstance.setApiKey(
+  SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey,
+  process.env.BREVO_API_KEY
+);
+
+const sendEmail = async ({ to, subject, html }) => {
+  const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
+  sendSmtpEmail.subject = subject;
+  sendSmtpEmail.htmlContent = html;
+  sendSmtpEmail.sender = { email: process.env.EMAIL_SENDER_ADDRESS || 'averixsolutions09@gmail.com', name: 'ApnaBot' };
+  sendSmtpEmail.to = [{ email: to }];
+  return apiInstance.sendTransacEmail(sendSmtpEmail);
+};
 
 /**
  * Send password reset email
@@ -25,8 +28,7 @@ const sendPasswordResetEmail = async (toEmail, resetToken, userName) => {
   try {
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}&email=${toEmail}`;
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM || 'ApnaBot <noreply@apnabot.com>',
+    await sendEmail({
       to: toEmail,
       subject: 'Reset your ApnaBot password',
       html: `
@@ -66,8 +68,7 @@ const sendPasswordResetEmail = async (toEmail, resetToken, userName) => {
  */
 const sendVerificationEmail = async (toEmail, otp, userName) => {
   try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM || 'ApnaBot <noreply@apnabot.com>',
+    await sendEmail({
       to: toEmail,
       subject: 'Verify your ApnaBot email',
       html: `
@@ -100,8 +101,7 @@ const sendVerificationEmail = async (toEmail, otp, userName) => {
  */
 const sendExpiryWarningEmail = async (toEmail, shopName, expiryDate) => {
   try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM || 'ApnaBot <noreply@apnabot.com>',
+    await sendEmail({
       to: toEmail,
       subject: `Your ApnaBot subscription for ${shopName} is expiring soon`,
       html: `
