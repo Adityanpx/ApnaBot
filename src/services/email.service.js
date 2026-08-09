@@ -1,21 +1,17 @@
 // src/services/email.service.js — CREATE THIS FILE
 
-const SibApiV3Sdk = require('@getbrevo/brevo');
+const { BrevoClient } = require('@getbrevo/brevo');
 const logger = require('../utils/logger');
 
-const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
-apiInstance.setApiKey(
-  SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey,
-  process.env.BREVO_API_KEY
-);
+const brevo = new BrevoClient({ apiKey: process.env.BREVO_API_KEY });
 
 const sendEmail = async ({ to, subject, html }) => {
-  const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
-  sendSmtpEmail.subject = subject;
-  sendSmtpEmail.htmlContent = html;
-  sendSmtpEmail.sender = { email: process.env.EMAIL_SENDER_ADDRESS || 'averixsolutions09@gmail.com', name: 'ApnaBot' };
-  sendSmtpEmail.to = [{ email: to }];
-  return apiInstance.sendTransacEmail(sendSmtpEmail);
+  return brevo.transactionalEmails.sendTransacEmail({
+    subject,
+    htmlContent: html,
+    sender: { email: process.env.EMAIL_SENDER_ADDRESS || 'averixsolutions09@gmail.com', name: 'ApnaBot' },
+    to: [{ email: to }]
+  });
 };
 
 /**
