@@ -505,11 +505,52 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
   }
 };
 
+/**
+ * Read-only preview of the booking field sequence for a shop's business type,
+ * for the dashboard's Conversation Preview. Same template lookup and field
+ * ordering as startBookingSession, but no session is created and Redis is
+ * never touched.
+ * @param {string} shopId
+ * @returns {Promise<Object>} { fields: [...] } - the ordered bookingFields
+ */
+const getBookingFieldsPreview = async (shopId) => {
+  const shop = await Shop.findById(shopId).select('businessType');
+  if (!shop) {
+    throw new Error('Shop not found');
+  }
+
+  const template = await BusinessTypeTemplate.findOne({ businessType: shop.businessType });
+  if (!template || !template.bookingFields || template.bookingFields.length === 0) {
+    throw new Error('No booking fields configured for this business type');
+  }
+
+  const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
+
+  return { fields: sortedFields };
+};
+
+/**
+ * Read-only preview of the vehicle carousel a customer would see for a given
+ * pickup/drop/tripType, for the dashboard's Conversation Preview. Delegates
+ * straight to the real fare-lookup logic (route fares first, then distance
+ * estimate) so preview results match production - no session is touched.
+ * @param {string} shopId
+ * @param {string} pickupLocation
+ * @param {string} dropLocation
+ * @param {string} tripType
+ * @returns {Promise<Array>} Carousel-shaped vehicle options, or []
+ */
+const getVehicleCarouselPreview = async (shopId, pickupLocation, dropLocation, tripType) => {
+  return findBestVehicleCarouselOptions(shopId, pickupLocation, dropLocation, tripType);
+};
+
 module.exports = {
   getBookingSession,
   saveBookingSession,
   deleteBookingSession,
   startBookingSession,
   processBookingStep,
-  findMatchingVehicleOptions
+  findMatchingVehicleOptions,
+  getBookingFieldsPreview,
+  getVehicleCarouselPreview
 };
