@@ -84,6 +84,18 @@ const shopSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  roundTripPerDayKm: {
+    type: Number,
+    default: 250
+  },
+  roundTripDriverDaEnabled: {
+    type: Boolean,
+    default: false
+  },
+  roundTripDriverDaAmount: {
+    type: Number,
+    default: 0
+  },
   menuItems: {
     type: [{
       number: { type: Number, required: true },

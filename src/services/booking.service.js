@@ -3,6 +3,7 @@ const Booking = require('../models/Booking');
 const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Customer = require('../models/Customer');
 const RouteFare = require('../models/RouteFare');
+const RentalPackage = require('../models/RentalPackage');
 const Shop = require('../models/Shop');
 const Vehicle = require('../models/Vehicle');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
@@ -53,43 +54,58 @@ const buildVehicleCarouselOptions = (routeFares) => routeFares.map((rf, idx) => 
  * that have opted in via Shop.enableDistanceFares. Falls back to [] on any
  * "can't compute" condition (opt-out, no Google result, no priced vehicles)
  * so the caller can fall through to the next tier without special-casing.
+ *
+ * For round trips where numberOfDays is known, distance is estimated as
+ * numberOfDays * shop.roundTripPerDayKm instead of doubling the one-way
+ * distance, and the Google/cache one-way lookup is skipped entirely since
+ * it isn't needed for that calculation.
+ * @param {string|number} [numberOfDays] - customer-provided day count for round trips
  * @returns {Promise<Array>} Carousel-shaped options with source: 'distance_estimate', or []
  */
-const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocation, tripType) => {
-  const shop = await Shop.findById(shopId).select('enableDistanceFares');
+const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocation, tripType, numberOfDays) => {
+  const shop = await Shop.findById(shopId).select('enableDistanceFares roundTripPerDayKm roundTripDriverDaEnabled roundTripDriverDaAmount');
   if (!shop || shop.enableDistanceFares !== true) {
     return [];
   }
 
-  const fromCity = (pickupLocation || '').toLowerCase().trim();
-  const toCity = (dropLocation || '').toLowerCase().trim();
-  if (!fromCity || !toCity) return [];
-
-  const cacheKey = `distance:${shopId}:${fromCity}:${toCity}`;
-  let oneWayDistanceKm = null;
-  try {
-    const cached = await redis.get(cacheKey);
-    if (cached !== null && cached !== undefined) {
-      oneWayDistanceKm = Number(cached);
-    }
-  } catch (error) {
-    logger.error('Error reading distance cache:', error);
-  }
-
-  if (oneWayDistanceKm === null) {
-    oneWayDistanceKm = await distanceMatrixService.getDistanceKm(pickupLocation, dropLocation);
-    if (oneWayDistanceKm === null) {
-      return [];
-    }
-    try {
-      await redis.set(cacheKey, oneWayDistanceKm, 'EX', 604800);
-    } catch (error) {
-      logger.error('Error writing distance cache:', error);
-    }
-  }
-
   const mappedTripType = tripTypeMap[tripType] || 'oneway';
-  const distanceKm = mappedTripType === 'round_trip' ? oneWayDistanceKm * 2 : oneWayDistanceKm;
+  const days = Number(numberOfDays);
+  const useDayBasedEstimate = mappedTripType === 'round_trip' && Number.isFinite(days) && days > 0;
+
+  let distanceKm;
+  if (useDayBasedEstimate) {
+    const perDayKm = shop.roundTripPerDayKm || 250;
+    distanceKm = days * perDayKm;
+  } else {
+    const fromCity = (pickupLocation || '').toLowerCase().trim();
+    const toCity = (dropLocation || '').toLowerCase().trim();
+    if (!fromCity || !toCity) return [];
+
+    const cacheKey = `distance:${shopId}:${fromCity}:${toCity}`;
+    let oneWayDistanceKm = null;
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached !== null && cached !== undefined) {
+        oneWayDistanceKm = Number(cached);
+      }
+    } catch (error) {
+      logger.error('Error reading distance cache:', error);
+    }
+
+    if (oneWayDistanceKm === null) {
+      oneWayDistanceKm = await distanceMatrixService.getDistanceKm(pickupLocation, dropLocation);
+      if (oneWayDistanceKm === null) {
+        return [];
+      }
+      try {
+        await redis.set(cacheKey, oneWayDistanceKm, 'EX', 604800);
+      } catch (error) {
+        logger.error('Error writing distance cache:', error);
+      }
+    }
+
+    distanceKm = mappedTripType === 'round_trip' ? oneWayDistanceKm * 2 : oneWayDistanceKm;
+  }
 
   let vehicles;
   try {
@@ -104,43 +120,143 @@ const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocat
     return [];
   }
 
-  return vehicles.map((vehicle, idx) => ({
-    index: idx,
-    vehicleId: vehicle._id.toString(),
-    name: vehicle.customName || vehicle.catalogId.name,
-    photoUrl: vehicle.customPhotoUrl || vehicle.catalogId.photoUrl || null,
-    seats: vehicle.catalogId.seats || null,
-    fare: Math.round((distanceKm * vehicle.perKmRate) / 10) * 10,
-    source: 'distance_estimate',
-    distanceKm: Math.round(distanceKm * 10) / 10
-  }));
+  const driverDaTotal = (useDayBasedEstimate && shop.roundTripDriverDaEnabled)
+    ? shop.roundTripDriverDaAmount * days
+    : 0;
+
+  return vehicles.map((vehicle, idx) => {
+    const baseFare = Math.round((distanceKm * vehicle.perKmRate) / 10) * 10;
+    const option = {
+      index: idx,
+      vehicleId: vehicle._id.toString(),
+      name: vehicle.customName || vehicle.catalogId.name,
+      photoUrl: vehicle.customPhotoUrl || vehicle.catalogId.photoUrl || null,
+      seats: vehicle.catalogId.seats || null,
+      fare: baseFare + driverDaTotal,
+      source: 'distance_estimate',
+      distanceKm: Math.round(distanceKm * 10) / 10
+    };
+    if (driverDaTotal > 0) {
+      option.driverDaIncluded = true;
+      option.driverDaTotal = driverDaTotal;
+      option.driverDaPerDay = shop.roundTripDriverDaAmount;
+      option.driverDaDays = days;
+    }
+    return option;
+  });
 };
 
 /**
  * Three-tier vehicle carousel lookup: real route fares first, then a
  * distance-based estimate for opted-in shops. Returns [] if neither source
  * has anything to offer, so callers fall through to the generic vehicleType list.
+ * @param {string|number} [numberOfDays] - passed through to the distance-estimate tier for round trips
  */
-const findBestVehicleCarouselOptions = async (shopId, pickupLocation, dropLocation, tripType) => {
+const findBestVehicleCarouselOptions = async (shopId, pickupLocation, dropLocation, tripType, numberOfDays) => {
   const matchedRouteFares = await findMatchingVehicleOptions(shopId, pickupLocation, dropLocation, tripType);
   if (matchedRouteFares.length > 0) {
     return buildVehicleCarouselOptions(matchedRouteFares);
   }
-  return findDistanceBasedVehicleOptions(shopId, pickupLocation, dropLocation, tripType);
+  return findDistanceBasedVehicleOptions(shopId, pickupLocation, dropLocation, tripType, numberOfDays);
 };
 
 /**
- * Shared "carousel gone stale" recovery: re-run the two-tier lookup and
- * either refresh the carousel in place or drop to the generic vehicleType
- * list if nothing is left to offer for this route.
+ * Group a shop's active rental packages by packageKey, deduplicating across
+ * vehicles (per-vehicle price differences are resolved later, at the
+ * vehicleType/carousel step). Returns a Map<packageKey, label> so callers
+ * can build both the display option list and a label->packageKey lookup.
  */
-const rebuildCarouselOrFallback = async (shopId, customerNumber, session, currentField) => {
-  const freshOptions = await findBestVehicleCarouselOptions(
+const groupRentalPackagesByKey = async (shopId) => {
+  const byKey = new Map();
+  try {
+    const packages = await RentalPackage.find({ shopId, isActive: true }).populate('vehicleId');
+    for (const pkg of packages) {
+      if (!byKey.has(pkg.packageKey)) {
+        byKey.set(pkg.packageKey, pkg.label || pkg.packageKey);
+      }
+    }
+  } catch (error) {
+    logger.error('Error grouping rental packages:', error);
+  }
+  return byKey;
+};
+
+/**
+ * Unique, customer-facing rental package labels for a shop (deduplicated
+ * across vehicles), for populating the dynamically-inserted 'rentalPackage'
+ * list field.
+ * @returns {Promise<Array<string>>}
+ */
+const findRentalPackageOptions = async (shopId) => {
+  const byKey = await groupRentalPackagesByKey(shopId);
+  return Array.from(byKey.values());
+};
+
+/**
+ * Build carousel-shaped vehicle options for a specific rental package key,
+ * one per vehicle offering that package. Mirrors buildVehicleCarouselOptions'
+ * shape (source: 'rental_package' instead of 'route_fare').
+ * @returns {Promise<Array>}
+ */
+const findRentalVehicleCarouselOptions = async (shopId, packageKey) => {
+  try {
+    const rentalPackages = await RentalPackage.find({ shopId, packageKey, isActive: true })
+      .populate({ path: 'vehicleId', match: { isActive: true }, populate: { path: 'catalogId', select: 'name photoUrl seats' } });
+
+    return rentalPackages
+      .filter(rp => rp.vehicleId)
+      .map((rp, idx) => ({
+        index: idx,
+        rentalPackageId: rp._id.toString(),
+        vehicleId: rp.vehicleId._id.toString(),
+        name: rp.vehicleId.customName || rp.vehicleId.catalogId.name,
+        photoUrl: rp.vehicleId.customPhotoUrl || rp.vehicleId.catalogId.photoUrl || null,
+        seats: rp.vehicleId.catalogId.seats || null,
+        fare: rp.price,
+        source: 'rental_package',
+        extraKmRate: rp.extraKmRate,
+        extraHrRate: rp.extraHrRate
+      }));
+  } catch (error) {
+    logger.error('Error finding rental vehicle carousel options:', error);
+    return [];
+  }
+};
+
+/**
+ * Resolve the right carousel-options source for the session's trip type:
+ * rental packages for Local Rental (using the packageKey resolved from the
+ * label the customer picked), otherwise the route-fare/distance-estimate
+ * two-tier lookup (with numberOfDays passed through for round trips).
+ */
+const getCarouselOptionsForSession = async (shopId, session) => {
+  const mappedTripType = tripTypeMap[session.collected.tripType] || 'oneway';
+  if (mappedTripType === 'local') {
+    if (session.localRentalUnconfigured) {
+      // No RentalPackage configured for this shop — skip pricing entirely
+      // and let the generic vehicleType list field stand, same as the
+      // "no route fare exists" case.
+      return [];
+    }
+    const packageKey = session.rentalPackageKeyByLabel && session.rentalPackageKeyByLabel[session.collected.rentalPackage];
+    return packageKey ? findRentalVehicleCarouselOptions(shopId, packageKey) : [];
+  }
+  return findBestVehicleCarouselOptions(
     shopId,
     session.collected.pickupLocation,
     session.collected.dropLocation,
-    session.collected.tripType
+    session.collected.tripType,
+    session.collected.numberOfDays
   );
+};
+
+/**
+ * Shared "carousel gone stale" recovery: re-run the appropriate lookup and
+ * either refresh the carousel in place or drop to the generic vehicleType
+ * list if nothing is left to offer.
+ */
+const rebuildCarouselOrFallback = async (shopId, customerNumber, session, currentField) => {
+  const freshOptions = await getCarouselOptionsForSession(shopId, session);
 
   if (freshOptions.length > 0) {
     session.fields[session.step] = { ...currentField, options: freshOptions };
@@ -337,12 +453,42 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
 
         // Still valid — recompute against the CURRENT perKmRate using the
         // cached distance from the option; the distance itself doesn't
-        // change, only the rate might, so no need to re-call Google.
+        // change, only the rate might, so no need to re-call Google. The
+        // driver DA total (if any) was already computed against the
+        // customer's day count when the carousel was built, so it's carried
+        // over from the cached option rather than recomputed here.
+        const daTotal = tappedOption.driverDaIncluded ? tappedOption.driverDaTotal : 0;
         session.collected.vehicleId = freshVehicle._id.toString();
         session.collected.vehicleName = freshVehicle.customName || freshVehicle.catalogId.name;
-        session.collected.vehicleFare = Math.round((tappedOption.distanceKm * freshVehicle.perKmRate) / 10) * 10;
+        session.collected.vehicleFare = Math.round((tappedOption.distanceKm * freshVehicle.perKmRate) / 10) * 10 + daTotal;
         session.collected.fareSource = 'distance_estimate';
         session.collected.distanceKm = Math.round(tappedOption.distanceKm * 10) / 10;
+        if (daTotal > 0) {
+          session.collected.driverDaTotal = daTotal;
+          session.collected.driverDaPerDay = tappedOption.driverDaPerDay;
+          session.collected.driverDaDays = tappedOption.driverDaDays;
+        }
+        session.collected[currentField.fieldKey] = session.collected.vehicleName;
+      } else if (tappedOption.source === 'rental_package') {
+        const freshRentalPackage = await RentalPackage.findById(tappedOption.rentalPackageId)
+          .populate({ path: 'vehicleId', populate: { path: 'catalogId', select: 'name photoUrl seats' } });
+
+        const isStale = !freshRentalPackage || !freshRentalPackage.isActive ||
+          !freshRentalPackage.vehicleId || !freshRentalPackage.vehicleId.isActive;
+
+        if (isStale) {
+          const result = await rebuildCarouselOrFallback(shopId, customerNumber, session, currentField);
+          return result;
+        }
+
+        // Still valid — always trust the fresh read for fare/name, not the cache.
+        session.collected.vehicleId = freshRentalPackage.vehicleId._id.toString();
+        session.collected.vehicleName = freshRentalPackage.vehicleId.customName || freshRentalPackage.vehicleId.catalogId.name;
+        session.collected.vehicleFare = freshRentalPackage.price;
+        session.collected.rentalPackageId = freshRentalPackage._id.toString();
+        session.collected.fareSource = 'rental_package';
+        session.collected.extraKmRate = freshRentalPackage.extraKmRate;
+        session.collected.extraHrRate = freshRentalPackage.extraHrRate;
         session.collected[currentField.fieldKey] = session.collected.vehicleName;
       } else {
         const freshRouteFare = await RouteFare.findById(tappedOption.routeFareId)
@@ -393,17 +539,69 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
       session.collected[currentField.fieldKey] = customerReply.trim();
     }
 
-    // If pickup/drop are both known now, try to find route-specific vehicle
-    // options and swap the generic vehicleType field for a carousel. Shops
-    // with no matching (or no) RouteFares are unaffected — session.fields
+    // Branch the remaining field sequence by trip type, right after tripType
+    // is answered. One Way is left untouched (session.fields exactly as the
+    // template provided). Round Trip inserts a numberOfDays question after
+    // travelDate. Local Rental swaps dropLocation for a rentalPackage
+    // question, populated immediately with this shop's package options.
+    if (currentField.fieldKey === 'tripType') {
+      const mappedTripType = tripTypeMap[session.collected.tripType] || 'oneway';
+
+      if (mappedTripType === 'round_trip') {
+        const travelDateIndex = session.fields.findIndex(f => f.fieldKey === 'travelDate');
+        if (travelDateIndex !== -1) {
+          session.fields.splice(travelDateIndex + 1, 0, {
+            fieldKey: 'numberOfDays',
+            label: 'How many days is this round trip?',
+            summaryLabel: 'Days',
+            required: true,
+            order: session.fields[travelDateIndex].order + 0.5,
+            fieldType: 'text',
+            options: []
+          });
+        }
+      } else if (mappedTripType === 'local') {
+        const dropLocationIndex = session.fields.findIndex(f => f.fieldKey === 'dropLocation');
+        if (dropLocationIndex !== -1) {
+          const rentalPackageOptions = await findRentalPackageOptions(shopId);
+
+          if (rentalPackageOptions.length === 0) {
+            // No RentalPackage configured for this shop — leave session.fields
+            // untouched (dropLocation stays) so the rest of the flow falls
+            // back to the same shape as One Way. The confirmation builder
+            // checks this flag to show a "team will confirm pricing" note
+            // instead of a fare, and the carrierRequired-triggered carousel
+            // swap is skipped for local rental below (getCarouselOptionsForSession).
+            session.localRentalUnconfigured = true;
+          } else {
+            const packagesByKey = await groupRentalPackagesByKey(shopId);
+            const labelToKey = {};
+            for (const [key, label] of packagesByKey) {
+              labelToKey[label] = key;
+            }
+            session.rentalPackageKeyByLabel = labelToKey;
+
+            session.fields.splice(dropLocationIndex, 1, {
+              fieldKey: 'rentalPackage',
+              label: 'Choose your rental package:',
+              summaryLabel: 'Package',
+              required: true,
+              order: session.fields[dropLocationIndex].order,
+              fieldType: 'list',
+              options: rentalPackageOptions
+            });
+          }
+        }
+      }
+    }
+
+    // Once carrierRequired is answered, pickup/drop/package are all known —
+    // try to find a priced carousel (route fare, distance estimate, or
+    // rental package, per trip type) and swap the generic vehicleType field
+    // for it. Shops with no matching pricing are unaffected — session.fields
     // is left untouched and the generic flow proceeds exactly as before.
     if (currentField.fieldKey === 'carrierRequired') {
-      const carouselOptions = await findBestVehicleCarouselOptions(
-        shopId,
-        session.collected.pickupLocation,
-        session.collected.dropLocation,
-        session.collected.tripType
-      );
+      const carouselOptions = await getCarouselOptionsForSession(shopId, session);
 
       if (carouselOptions.length > 0) {
         const vehicleFieldIndex = session.fields.findIndex(f => f.fieldKey === 'vehicleType');
@@ -477,15 +675,32 @@ const processBookingStep = async (shopId, customerNumber, customerReply, tenant)
           '\nDistance: *' + session.collected.distanceKm + ' km*'
         : '\nFare: *₹' + session.collected.vehicleFare + '*';
 
+    const driverDaLine = session.collected.driverDaTotal
+      ? '\nDriver DA: *₹' + session.collected.driverDaTotal + ' (' + session.collected.driverDaDays + ' days × ₹' + session.collected.driverDaPerDay + ')*'
+      : '';
+
     const tollNoteLine = hasFare
       ? '\n\n_Note: Toll & parking charges are not included in this fare and will be collected separately._'
+      : '';
+
+    const extraRateNoteLine = (session.collected.fareSource === 'rental_package' &&
+      session.collected.extraKmRate !== undefined && session.collected.extraKmRate !== null &&
+      session.collected.extraHrRate !== undefined && session.collected.extraHrRate !== null)
+      ? '\n\n_Extra km: ₹' + session.collected.extraKmRate + '/km, Extra hour: ₹' + session.collected.extraHrRate + '/hr beyond package limits._'
+      : '';
+
+    const localRentalUnconfiguredNoteLine = session.localRentalUnconfigured
+      ? '\n\n_Note: this shop hasn\'t set up rental packages yet — our team will call you to confirm pricing for this rental._'
       : '';
 
     const confirmationText = '✅ *Booking request received!*\n' +
       'Booking ID: *' + bookingCode + '*\n\n' +
       fieldLines +
       fareLine +
+      driverDaLine +
       tollNoteLine +
+      extraRateNoteLine +
+      localRentalUnconfiguredNoteLine +
       '\n\nOur team will contact you shortly to confirm. 🚕';
 
     // Emit Socket.io event (wrap in try/catch)

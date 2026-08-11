@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check src/services/smartFallback.service.js)",
+      "Bash(node --check src/controllers/webhook.controller.js)",
+      "Bash(node --check src/models/Shop.js)",
+      "Bash(node --check src/services/tenant.service.js)"
+    ]
+  }
+}
