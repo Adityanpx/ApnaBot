@@ -68,6 +68,10 @@ const shopSchema = new mongoose.Schema({
     type: String,
     default: 'Thank you for your message. We will get back to you shortly.'
   },
+  enableSmartFallback: {
+    type: Boolean,
+    default: false
+  },
   welcomeMessage: {
     type: String,
     default: ''

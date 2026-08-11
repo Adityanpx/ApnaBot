@@ -43,6 +43,7 @@ const resolveShopByPhoneNumberId = async (phoneNumberId) => {
       phoneNumberId: shop.phoneNumberId,
       accessToken: shop.accessToken, // Still encrypted here
       fallbackReply: shop.fallbackReply,
+      enableSmartFallback: shop.enableSmartFallback,
       businessType: shop.businessType,
       isActive: shop.isActive,
       subscription: subscription || null,

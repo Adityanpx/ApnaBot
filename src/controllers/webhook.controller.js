@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const config = require('../config/env');
 const tenantService = require('../services/tenant.service');
 const chatbotService = require('../services/chatbot.service');
+const smartFallbackService = require('../services/smartFallback.service');
 const usageService = require('../services/usage.service');
 const bookingService = require('../services/booking.service');
 const socketService = require('../services/socket.service');
@@ -536,8 +537,22 @@ const receiveWebhook = async (req, res) => {
         replyText = matchedRule.reply || 'Please complete your payment.';
       }
     } else {
-      // No rule matched — send fallback reply
-      replyText = tenant.fallbackReply || 'Thank you for your message. We will get back to you soon.';
+      // No rule matched — try an AI-generated fallback (opt-in per shop),
+      // falling back to the static reply on any failure or timeout.
+      let smartReply = null;
+      if (tenant.enableSmartFallback) {
+        try {
+          smartReply = await Promise.race([
+            smartFallbackService.getSmartFallbackReply(tenant.shopId, messageText),
+            new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+          ]);
+        } catch (smartFallbackError) {
+          logger.error('Error generating smart fallback reply:', smartFallbackError);
+          smartReply = null;
+        }
+      }
+
+      replyText = smartReply || tenant.fallbackReply || 'Thank you for your message. We will get back to you soon.';
     }
 
     // Step 15 - Save outbound message
