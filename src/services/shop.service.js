@@ -110,7 +110,7 @@ const createShop = async (ownerUserId, data) => {
  */
 const updateShop = async (shopId, data) => {
   try {
-    const allowedFields = ['name', 'displayName', 'address', 'city', 'profileImage', 'upiId', 'fallbackReply', 'welcomeMessage', 'isMenuEnabled', 'menuItems', 'enableDistanceFares'];
+    const allowedFields = ['name', 'displayName', 'address', 'city', 'profileImage', 'upiId', 'fallbackReply', 'welcomeMessage', 'isMenuEnabled', 'menuItems', 'enableDistanceFares', 'enableSmartFallback'];
     const updateData = {};
     
     // Only allow updating specific fields
