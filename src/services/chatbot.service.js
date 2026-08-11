@@ -1,6 +1,19 @@
+const { distance } = require('fastest-levenshtein');
 const Rule = require('../models/Rule');
 const redis = require('../config/redis');
 const logger = require('../utils/logger');
+
+/**
+ * Adaptive edit-distance threshold for fuzzy keyword matching, scaled to
+ * keyword length so short keywords (e.g. "hi") don't fuzzy-match everything.
+ * @param {number} keywordLength
+ * @returns {number}
+ */
+const fuzzyThresholdFor = (keywordLength) => {
+  if (keywordLength <= 5) return 1;
+  if (keywordLength <= 10) return 2;
+  return 3;
+};
 
 /**
  * Get rules from cache or DB
@@ -143,6 +156,32 @@ const findMatchingRule = async (shopId, incomingText) => {
       Rule.findByIdAndUpdate(hindiContainsMatch._id, { $inc: { triggerCount: 1 } })
         .catch(err => logger.error('Error incrementing trigger count:', err));
       return hindiContainsMatch;
+    }
+
+    // Pass 5 - Fuzzy match (last resort, free/local, no AI). Catches typos
+    // and near-misses of the full keyword (e.g. "pric" vs "price") for
+    // short customer messages — not substring fuzzy matching within longer
+    // sentences, which produces too many false positives.
+    let closestFuzzyMatch = null;
+    let closestFuzzyDistance = Infinity;
+
+    for (const rule of activeRules) {
+      const normalizedKeyword = normalizeText(rule.keyword);
+      if (!normalizedKeyword) continue;
+
+      const editDistance = distance(normalizedText, normalizedKeyword);
+      const threshold = fuzzyThresholdFor(normalizedKeyword.length);
+
+      if (editDistance <= threshold && editDistance < closestFuzzyDistance) {
+        closestFuzzyMatch = rule;
+        closestFuzzyDistance = editDistance;
+      }
+    }
+
+    if (closestFuzzyMatch) {
+      Rule.findByIdAndUpdate(closestFuzzyMatch._id, { $inc: { triggerCount: 1 } })
+        .catch(err => logger.error('Error incrementing trigger count:', err));
+      return closestFuzzyMatch;
     }
 
     // No match found

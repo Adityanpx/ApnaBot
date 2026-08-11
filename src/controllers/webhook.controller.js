@@ -18,6 +18,29 @@ const logger = require('../utils/logger');
 const GREETING_KEYWORDS = new Set(['hi', 'hello', 'hey', 'hii', 'hlo', 'namaste', 'start', 'menu']);
 
 /**
+ * Build the numbered-menu list options for a shop's enabled menu, in the
+ * {label, nextKeyword} shape sendRuleListMessage expects. Shared by the
+ * Step 12.5 greeting handler and the "no rule matched" fallback.
+ * @param {Array} menuItems - shop.menuItems
+ * @returns {Promise<Array<{label: string, nextKeyword: string}>>}
+ */
+const buildMenuListOptions = async (menuItems) => {
+  const sortedItems = [...menuItems]
+    .sort((a, b) => a.order - b.order)
+    .slice(0, 10);
+  const ruleIds = sortedItems.map(item => item.ruleId);
+  const rules = await Rule.find({ _id: { $in: ruleIds } }).select('keyword');
+  const keywordByRuleId = new Map(rules.map(rule => [rule._id.toString(), rule.keyword]));
+
+  return sortedItems
+    .filter(item => keywordByRuleId.has(item.ruleId.toString()))
+    .map(item => ({
+      label: item.label,
+      nextKeyword: keywordByRuleId.get(item.ruleId.toString())
+    }));
+};
+
+/**
  * GET /api/webhook/verify
  * Meta webhook verification
  */
@@ -461,19 +484,7 @@ const receiveWebhook = async (req, res) => {
         let menuListOptions = [];
 
         if (hasMenu) {
-          const sortedItems = [...shopDoc.menuItems]
-            .sort((a, b) => a.order - b.order)
-            .slice(0, 10);
-          const ruleIds = sortedItems.map(item => item.ruleId);
-          const rules = await Rule.find({ _id: { $in: ruleIds } }).select('keyword');
-          const keywordByRuleId = new Map(rules.map(rule => [rule._id.toString(), rule.keyword]));
-
-          menuListOptions = sortedItems
-            .filter(item => keywordByRuleId.has(item.ruleId.toString()))
-            .map(item => ({
-              label: item.label,
-              nextKeyword: keywordByRuleId.get(item.ruleId.toString())
-            }));
+          menuListOptions = await buildMenuListOptions(shopDoc.menuItems);
 
           if (!greetingReplyText) {
             greetingReplyText = 'How can we help you today?';
@@ -534,6 +545,7 @@ const receiveWebhook = async (req, res) => {
     let replyText = null;
     let triggeredRuleId = null;
     let bookingField = null; // set when booking_trigger fires, for interactive rendering below
+    let fallbackMenuListOptions = null; // set when no rule matched and shop has an enabled menu
 
     if (matchedRule) {
       triggeredRuleId = matchedRule._id;
@@ -572,6 +584,19 @@ const receiveWebhook = async (req, res) => {
       }
 
       replyText = smartReply || tenant.fallbackReply || 'Thank you for your message. We will get back to you soon.';
+
+      // Attach the numbered menu (if the shop has one enabled) regardless of
+      // whether replyText above came from the AI smart fallback or the
+      // static fallbackReply — gives the customer a way to reach a real
+      // rule instead of a dead-end message.
+      const fallbackShopDoc = await Shop.findById(tenant.shopId)
+        .select('isMenuEnabled menuItems')
+        .lean();
+      const fallbackHasMenu = !!(fallbackShopDoc?.isMenuEnabled && fallbackShopDoc.menuItems?.length > 0);
+
+      if (fallbackHasMenu) {
+        fallbackMenuListOptions = await buildMenuListOptions(fallbackShopDoc.menuItems);
+      }
     }
 
     // Step 15 - Save outbound message
@@ -597,9 +622,12 @@ const receiveWebhook = async (req, res) => {
       type: 'text',
       imageUrl: matchedRule?.replyImageUrl || null,
       buttons: matchedRule?.buttons || [],
-      listOptions: matchedRule?.listOptions || [],
+      listOptions: fallbackMenuListOptions || matchedRule?.listOptions || [],
       messageId: outboundMsg._id
     };
+    if (fallbackMenuListOptions) {
+      outboundJobData.listButtonLabel = 'Menu';
+    }
     if (bookingField && bookingField.fieldType === 'buttons') {
       outboundJobData.interactiveButtons = bookingField.options || [];
     } else if (bookingField && bookingField.fieldType === 'list') {
