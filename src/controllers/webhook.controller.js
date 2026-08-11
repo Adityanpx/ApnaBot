@@ -6,7 +6,7 @@ const smartFallbackService = require('../services/smartFallback.service');
 const usageService = require('../services/usage.service');
 const bookingService = require('../services/booking.service');
 const socketService = require('../services/socket.service');
-const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
+const { addToWhatsappQueue, addToWhatsappQueueAndWait } = require('../queues/whatsapp.queue');
 const Customer = require('../models/Customer');
 const Message = require('../models/Message');
 const Shop = require('../models/Shop');
@@ -261,15 +261,22 @@ const receiveWebhook = async (req, res) => {
             isRead: true
           });
 
-          await addToWhatsappQueue({
-            shopId: tenant.shopId,
-            phoneNumberId: tenant.phoneNumberId,
-            encryptedAccessToken: tenant.accessToken,
-            to: customerNumber,
-            message: introText,
-            type: 'text',
-            messageId: introMsg._id
-          });
+          // Awaited-to-completion (not just enqueued) so this intro message
+          // is guaranteed to land at WhatsApp before the vehicle messages
+          // below, even though the worker processes jobs with concurrency: 5.
+          try {
+            await addToWhatsappQueueAndWait({
+              shopId: tenant.shopId,
+              phoneNumberId: tenant.phoneNumberId,
+              encryptedAccessToken: tenant.accessToken,
+              to: customerNumber,
+              message: introText,
+              type: 'text',
+              messageId: introMsg._id
+            });
+          } catch (sendError) {
+            logger.error('Error sending carousel intro message:', sendError);
+          }
 
           usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
             logger.error('Error incrementing outbound usage:', err)
@@ -304,17 +311,23 @@ const receiveWebhook = async (req, res) => {
               isRead: true
             });
 
-            await addToWhatsappQueue({
-              shopId: tenant.shopId,
-              phoneNumberId: tenant.phoneNumberId,
-              encryptedAccessToken: tenant.accessToken,
-              to: customerNumber,
-              message: caption,
-              type: 'text',
-              imageUrl: option.photoUrl || null,
-              buttons: [{ title: 'Book this', nextKeyword: `vehicle_${option.index}` }],
-              messageId: vehicleMsg._id
-            });
+            // Awaited-to-completion so vehicle messages send in the same
+            // order they're constructed, regardless of worker concurrency.
+            try {
+              await addToWhatsappQueueAndWait({
+                shopId: tenant.shopId,
+                phoneNumberId: tenant.phoneNumberId,
+                encryptedAccessToken: tenant.accessToken,
+                to: customerNumber,
+                message: caption,
+                type: 'text',
+                imageUrl: option.photoUrl || null,
+                buttons: [{ title: 'Book this', nextKeyword: `vehicle_${option.index}` }],
+                messageId: vehicleMsg._id
+              });
+            } catch (sendError) {
+              logger.error('Error sending carousel vehicle message:', sendError);
+            }
 
             usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
               logger.error('Error incrementing outbound usage:', err)
@@ -346,16 +359,22 @@ const receiveWebhook = async (req, res) => {
             isRead: true
           });
 
-          await addToWhatsappQueue({
-            shopId: tenant.shopId,
-            phoneNumberId: tenant.phoneNumberId,
-            encryptedAccessToken: tenant.accessToken,
-            to: customerNumber,
-            message: otherOptionsText,
-            type: 'text',
-            buttons: [{ title: 'Other options', nextKeyword: 'vehicle_other' }],
-            messageId: otherOptionsMsg._id
-          });
+          // Awaited-to-completion so this message lands after the last
+          // vehicle message, preserving the constructed order.
+          try {
+            await addToWhatsappQueueAndWait({
+              shopId: tenant.shopId,
+              phoneNumberId: tenant.phoneNumberId,
+              encryptedAccessToken: tenant.accessToken,
+              to: customerNumber,
+              message: otherOptionsText,
+              type: 'text',
+              buttons: [{ title: 'Other options', nextKeyword: 'vehicle_other' }],
+              messageId: otherOptionsMsg._id
+            });
+          } catch (sendError) {
+            logger.error('Error sending carousel "other options" message:', sendError);
+          }
 
           usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
             logger.error('Error incrementing outbound usage:', err)
