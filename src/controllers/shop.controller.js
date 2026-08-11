@@ -5,7 +5,7 @@ const subscriptionService = require('../services/subscription.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { generateTokens, saveTokenToRedis } = require('../services/auth.service');
 const logger = require('../utils/logger');
-const cloudinary = require('../services/cloudinary.service');
+const r2 = require('../services/r2.service');
 const config = require('../config/env');
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
@@ -299,7 +299,7 @@ const getDashboardStats = async (req, res, next) => {
 
 /**
  * POST /api/shop/upload-image
- * Upload profile image to Cloudinary
+ * Upload profile image to R2
  */
 const uploadProfileImage = async (req, res, next) => {
   try {
@@ -312,17 +312,18 @@ const uploadProfileImage = async (req, res, next) => {
       return errorResponse(res, 404, 'No shop found');
     }
 
-    // Upload to Cloudinary
-    const result = await cloudinary.uploadImage(
+    // Upload to R2
+    const result = await r2.uploadImage(
       req.file.buffer,
       'shop-profiles',
-      `shop-${shopId}`
+      `shop-${shopId}`,
+      req.file.mimetype
     );
 
     // Update shop with new profile image URL
-    await shopService.updateShop(shopId, { profileImage: result.secure_url });
+    await shopService.updateShop(shopId, { profileImage: result.url });
 
-    return successResponse(res, 200, { profileImage: result.secure_url });
+    return successResponse(res, 200, { profileImage: result.url });
   } catch (error) {
     logger.error('Error in uploadProfileImage:', error);
     next(error);

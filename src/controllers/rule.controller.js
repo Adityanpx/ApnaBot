@@ -3,7 +3,7 @@ const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Shop = require('../models/Shop');
 const Subscription = require('../models/Subscription');
 const { invalidateRulesCache } = require('../services/chatbot.service');
-const cloudinary = require('../services/cloudinary.service');
+const r2 = require('../services/r2.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const logger = require('../utils/logger');
@@ -399,7 +399,7 @@ const bulkImportRules = async (req, res, next) => {
 
 /**
  * POST /api/rules/upload-image
- * Upload a rule reply image to Cloudinary
+ * Upload a rule reply image to R2
  */
 const uploadRuleImage = async (req, res, next) => {
   try {
@@ -412,13 +412,14 @@ const uploadRuleImage = async (req, res, next) => {
       return errorResponse(res, 404, 'No shop found');
     }
 
-    const result = await cloudinary.uploadImage(
+    const result = await r2.uploadImage(
       req.file.buffer,
       'rule-images',
-      `rule-${shopId}-${Date.now()}`
+      `rule-${shopId}-${Date.now()}`,
+      req.file.mimetype
     );
 
-    return successResponse(res, 200, { imageUrl: result.secure_url });
+    return successResponse(res, 200, { imageUrl: result.url });
   } catch (error) {
     logger.error('Error in uploadRuleImage:', error);
     next(error);

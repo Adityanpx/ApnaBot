@@ -1,6 +1,6 @@
 const Vehicle = require('../models/Vehicle');
 const VehicleTypeCatalog = require('../models/VehicleTypeCatalog');
-const cloudinary = require('../services/cloudinary.service');
+const r2 = require('../services/r2.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -158,7 +158,7 @@ const toggleVehicle = async (req, res, next) => {
 
 /**
  * POST /api/vehicles/upload-image
- * Upload a vehicle photo to Cloudinary
+ * Upload a vehicle photo to R2
  */
 const uploadVehicleImage = async (req, res, next) => {
   try {
@@ -171,13 +171,14 @@ const uploadVehicleImage = async (req, res, next) => {
       return errorResponse(res, 404, 'No shop found');
     }
 
-    const result = await cloudinary.uploadImage(
+    const result = await r2.uploadImage(
       req.file.buffer,
       'vehicle-photos',
-      `vehicle-${shopId}-${Date.now()}`
+      `vehicle-${shopId}-${Date.now()}`,
+      req.file.mimetype
     );
 
-    return successResponse(res, 200, { imageUrl: result.secure_url });
+    return successResponse(res, 200, { imageUrl: result.url });
   } catch (error) {
     logger.error('Error in uploadVehicleImage:', error);
     next(error);
