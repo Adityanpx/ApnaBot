@@ -18,6 +18,10 @@ const ruleSchema = new mongoose.Schema({
     enum: ['exact', 'contains', 'startsWith'],
     default: 'contains'
   },
+  hindiAliases: {
+    type: [String],
+    default: []
+  },
   reply: {
     type: String,
     required: true

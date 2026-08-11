@@ -119,6 +119,32 @@ const findMatchingRule = async (shopId, incomingText) => {
       return containsMatch;
     }
 
+    // Pass 4 - Hindi/Hinglish alias match (last resort, after English matching fails)
+    // Exact alias match first (highest confidence)
+    const hindiExactMatch = activeRules.find(rule =>
+      (rule.hindiAliases || []).some(alias => normalizeText(alias) === normalizedText)
+    );
+
+    if (hindiExactMatch) {
+      Rule.findByIdAndUpdate(hindiExactMatch._id, { $inc: { triggerCount: 1 } })
+        .catch(err => logger.error('Error incrementing trigger count:', err));
+      return hindiExactMatch;
+    }
+
+    // Contains match - customer's message contains an alias phrase anywhere in it
+    const hindiContainsMatch = activeRules.find(rule =>
+      (rule.hindiAliases || []).some(alias => {
+        const normalizedAlias = normalizeText(alias);
+        return normalizedAlias && normalizedText.includes(normalizedAlias);
+      })
+    );
+
+    if (hindiContainsMatch) {
+      Rule.findByIdAndUpdate(hindiContainsMatch._id, { $inc: { triggerCount: 1 } })
+        .catch(err => logger.error('Error incrementing trigger count:', err));
+      return hindiContainsMatch;
+    }
+
     // No match found
     return null;
   } catch (error) {

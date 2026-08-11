@@ -48,13 +48,16 @@ const getRules = async (req, res, next) => {
 const createRule = async (req, res, next) => {
   try {
     const { keyword, matchType = 'contains', replyType = 'text',
-            replyImageUrl = null, buttons = [], listOptions = [] } = req.body;
+            replyImageUrl = null, buttons = [], listOptions = [], hindiAliases = [] } = req.body;
     let { reply } = req.body;
     const shopId = req.user.shopId;
 
     // Validate required fields
     if (!keyword) {
       return errorResponse(res, 400, 'Keyword is required');
+    }
+    if (hindiAliases !== undefined && !Array.isArray(hindiAliases)) {
+      return errorResponse(res, 400, 'hindiAliases must be an array of strings.');
     }
     if (Array.isArray(buttons)) {
       if (buttons.length > 3) {
@@ -137,6 +140,7 @@ const createRule = async (req, res, next) => {
         description: (o.description || '').trim(),
         nextKeyword: o.nextKeyword.toLowerCase().trim()
       })),
+      hindiAliases: (hindiAliases || []).map(a => a.trim()).filter(Boolean),
       isActive: true,
       triggerCount: 0
     });
@@ -158,13 +162,17 @@ const createRule = async (req, res, next) => {
 const updateRule = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { keyword, matchType, reply, replyType, isActive, replyImageUrl, buttons, listOptions } = req.body;
+    const { keyword, matchType, reply, replyType, isActive, replyImageUrl, buttons, listOptions, hindiAliases } = req.body;
     const shopId = req.user.shopId;
 
     // Find rule
     const rule = await Rule.findOne({ _id: id, shopId });
     if (!rule) {
       return errorResponse(res, 404, 'Rule not found');
+    }
+
+    if (hindiAliases !== undefined && !Array.isArray(hindiAliases)) {
+      return errorResponse(res, 400, 'hindiAliases must be an array of strings.');
     }
 
     if (buttons !== undefined) {
@@ -242,6 +250,9 @@ const updateRule = async (req, res, next) => {
         description: (o.description || '').trim(),
         nextKeyword: o.nextKeyword.toLowerCase().trim()
       }));
+    }
+    if (hindiAliases !== undefined) {
+      rule.hindiAliases = hindiAliases.map(a => a.trim()).filter(Boolean);
     }
 
     await rule.save();
