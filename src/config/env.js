@@ -20,6 +20,12 @@ const requiredEnvVars = [
   'CLOUDINARY_CLOUD_NAME',
   'CLOUDINARY_API_KEY',
   'CLOUDINARY_API_SECRET',
+  'R2_ACCOUNT_ID',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+  'R2_BUCKET_NAME',
+  'R2_ENDPOINT',
+  'R2_PUBLIC_URL',
   'FRONTEND_URL',
   'ADMIN_URL'
 ];
@@ -50,6 +56,12 @@ module.exports = {
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET,
+  R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID,
+  R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+  R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+  R2_BUCKET_NAME: process.env.R2_BUCKET_NAME,
+  R2_ENDPOINT: process.env.R2_ENDPOINT,
+  R2_PUBLIC_URL: process.env.R2_PUBLIC_URL,
   FRONTEND_URL: process.env.FRONTEND_URL,
   ADMIN_URL: process.env.ADMIN_URL,
   // Comma-separated list, e.g. "http://localhost:3000,https://app.apnabot.in"
