@@ -1,4 +1,5 @@
 const { Queue, QueueEvents } = require('bullmq');
+const logger = require('../utils/logger');
 
 const redisUrl = new URL(process.env.REDIS_URL);
 
@@ -22,12 +23,35 @@ const whatsappQueue = new Queue('whatsapp-outbound', {
 
 // Only instantiated lazily because it opens its own blocking Redis
 // connection; most callers (single-message replies) never need it.
-let whatsappQueueEvents = null;
+// Cache the readiness promise (not just the instance) so concurrent
+// callers all await the same initialization instead of racing to create
+// multiple QueueEvents instances.
+let whatsappQueueEventsReady = null;
 const getQueueEvents = () => {
-  if (!whatsappQueueEvents) {
-    whatsappQueueEvents = new QueueEvents('whatsapp-outbound', { connection });
+  if (!whatsappQueueEventsReady) {
+    const queueEvents = new QueueEvents('whatsapp-outbound', { connection });
+    queueEvents.on('error', (err) => {
+      logger.error('WhatsApp QueueEvents connection error', { error: err.message });
+    });
+    whatsappQueueEventsReady = queueEvents.waitUntilReady().then(() => queueEvents);
   }
-  return whatsappQueueEvents;
+  return whatsappQueueEventsReady;
+};
+
+const withTimeout = (promise, ms, message) => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 };
 
 const addToWhatsappQueue = async (jobData) => {
@@ -41,9 +65,26 @@ const addToWhatsappQueue = async (jobData) => {
 // before enqueueing the next and guarantee WhatsApp delivery order within
 // that one customer's sequence. Concurrency: 5 on the worker is unaffected -
 // other customers' jobs still process in parallel.
+//
+// The wait is best-effort: if QueueEvents never becomes ready or the
+// 'completed' event is missed, we log and return the already-enqueued job
+// rather than hang or throw - the worker will still send it, we just lose
+// the ordering guarantee for that one message.
 const addToWhatsappQueueAndWait = async (jobData) => {
   const job = await whatsappQueue.add('send-message', jobData);
-  await job.waitUntilFinished(getQueueEvents());
+  try {
+    const queueEvents = await withTimeout(
+      getQueueEvents(),
+      20000,
+      'Timed out waiting for WhatsApp QueueEvents connection to become ready'
+    );
+    await job.waitUntilFinished(queueEvents, 20000);
+  } catch (err) {
+    logger.warn('Timed out waiting for WhatsApp job to finish; continuing without ordering guarantee', {
+      jobId: job.id,
+      reason: err.message
+    });
+  }
   return job;
 };
 
