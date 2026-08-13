@@ -372,86 +372,43 @@ const receiveWebhook = async (req, res) => {
         }
 
         if (carouselOptions) {
-          // Intro message (question text or the stale-vehicle re-prompt)
-          const introText = nextField ? nextField.label : stepResult;
-          const introMsg = await Message.create({
-            shopId: tenant.shopId,
-            customerId: customer._id,
-            customerNumber,
-            direction: 'outbound',
-            type: 'text',
-            content: introText,
-            status: 'sent',
-            triggeredRuleId: activeSession.ruleId,
-            isRead: true
-          });
-
-          // Awaited-to-completion (not just enqueued) so this intro message
-          // is guaranteed to land at WhatsApp before the vehicle messages
-          // below, even though the worker processes jobs with concurrency: 5.
           try {
-            await addToWhatsappQueueAndWait({
-              shopId: tenant.shopId,
-              phoneNumberId: tenant.phoneNumberId,
-              encryptedAccessToken: tenant.accessToken,
-              to: customerNumber,
-              message: introText,
-              type: 'text',
-              messageId: introMsg._id
-            });
-          } catch (sendError) {
-            logger.error('Error sending carousel intro message:', sendError);
-          }
-
-          usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
-            logger.error('Error incrementing outbound usage:', err)
-          );
-
-          try {
-            socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
-              customer,
-              message: introMsg,
-              customerNumber
-            });
-          } catch (socketError) {
-            logger.error('Error emitting socket event:', socketError);
-          }
-
-          // One message per vehicle option: image + caption + "Book this" button
-          for (const option of carouselOptions) {
-            const captionParts = [option.name];
-            if (option.seats) captionParts.push(`${option.seats} seats`);
-            captionParts.push(`₹${option.fare}`);
-            const caption = captionParts.join(' • ');
-
-            const vehicleMsg = await Message.create({
+            // Intro message (question text or the stale-vehicle re-prompt)
+            const introText = nextField ? nextField.label : stepResult;
+            const introMsgShape = {
               shopId: tenant.shopId,
               customerId: customer._id,
               customerNumber,
               direction: 'outbound',
               type: 'text',
-              content: caption,
+              content: introText,
               status: 'sent',
               triggeredRuleId: activeSession.ruleId,
               isRead: true
-            });
+            };
+            let introMsg;
+            try {
+              introMsg = await Message.create(introMsgShape);
+            } catch (createError) {
+              logger.error('Error creating carousel intro message record:', { message: createError.message, stack: createError.stack });
+              introMsg = introMsgShape;
+            }
 
-            // Awaited-to-completion so vehicle messages send in the same
-            // order they're constructed, regardless of worker concurrency.
+            // Awaited-to-completion (not just enqueued) so this intro message
+            // is guaranteed to land at WhatsApp before the vehicle messages
+            // below, even though the worker processes jobs with concurrency: 5.
             try {
               await addToWhatsappQueueAndWait({
                 shopId: tenant.shopId,
                 phoneNumberId: tenant.phoneNumberId,
                 encryptedAccessToken: tenant.accessToken,
                 to: customerNumber,
-                message: caption,
+                message: introText,
                 type: 'text',
-                imageUrl: option.photoUrl || null,
-                buttons: [{ title: 'Book this', nextKeyword: `vehicle_${option.index}` }],
-                messageId: vehicleMsg._id
+                messageId: introMsg._id
               });
             } catch (sendError) {
-              logger.error('Error sending carousel vehicle message:', sendError);
+              logger.error('Error sending carousel intro message:', sendError);
             }
 
             usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
@@ -461,58 +418,127 @@ const receiveWebhook = async (req, res) => {
             try {
               socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
                 customer,
-                message: vehicleMsg,
+                message: introMsg,
                 customerNumber
               });
             } catch (socketError) {
               logger.error('Error emitting socket event:', socketError);
             }
-          }
 
-          // Escape hatch: let the customer opt out of the carousel if their
-          // preferred vehicle isn't listed.
-          const otherOptionsText = "Don't see the vehicle you want?";
-          const otherOptionsMsg = await Message.create({
-            shopId: tenant.shopId,
-            customerId: customer._id,
-            customerNumber,
-            direction: 'outbound',
-            type: 'text',
-            content: otherOptionsText,
-            status: 'sent',
-            triggeredRuleId: activeSession.ruleId,
-            isRead: true
-          });
+            // One message per vehicle option: image + caption + "Book this" button
+            logger.info('Sending vehicle carousel', { customerNumber, optionCount: carouselOptions.length });
+            for (const option of carouselOptions) {
+              const captionParts = [option.name];
+              if (option.seats) captionParts.push(`${option.seats} seats`);
+              captionParts.push(`₹${option.fare}`);
+              const caption = captionParts.join(' • ');
 
-          // Awaited-to-completion so this message lands after the last
-          // vehicle message, preserving the constructed order.
-          try {
-            await addToWhatsappQueueAndWait({
+              const vehicleMsgShape = {
+                shopId: tenant.shopId,
+                customerId: customer._id,
+                customerNumber,
+                direction: 'outbound',
+                type: 'text',
+                content: caption,
+                status: 'sent',
+                triggeredRuleId: activeSession.ruleId,
+                isRead: true
+              };
+              let vehicleMsg;
+              try {
+                vehicleMsg = await Message.create(vehicleMsgShape);
+              } catch (createError) {
+                logger.error(`Error creating carousel vehicle message record for option index ${option.index}:`, { message: createError.message, stack: createError.stack });
+                vehicleMsg = vehicleMsgShape;
+              }
+
+              // Awaited-to-completion so vehicle messages send in the same
+              // order they're constructed, regardless of worker concurrency.
+              try {
+                await addToWhatsappQueueAndWait({
+                  shopId: tenant.shopId,
+                  phoneNumberId: tenant.phoneNumberId,
+                  encryptedAccessToken: tenant.accessToken,
+                  to: customerNumber,
+                  message: caption,
+                  type: 'text',
+                  imageUrl: option.photoUrl || null,
+                  buttons: [{ title: 'Book this', nextKeyword: `vehicle_${option.index}` }],
+                  messageId: vehicleMsg._id
+                });
+              } catch (sendError) {
+                logger.error('Error sending carousel vehicle message:', sendError);
+              }
+
+              usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+                logger.error('Error incrementing outbound usage:', err)
+              );
+
+              try {
+                socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+                  customer,
+                  message: vehicleMsg,
+                  customerNumber
+                });
+              } catch (socketError) {
+                logger.error('Error emitting socket event:', socketError);
+              }
+            }
+
+            // Escape hatch: let the customer opt out of the carousel if their
+            // preferred vehicle isn't listed.
+            const otherOptionsText = "Don't see the vehicle you want?";
+            const otherOptionsMsgShape = {
               shopId: tenant.shopId,
-              phoneNumberId: tenant.phoneNumberId,
-              encryptedAccessToken: tenant.accessToken,
-              to: customerNumber,
-              message: otherOptionsText,
+              customerId: customer._id,
+              customerNumber,
+              direction: 'outbound',
               type: 'text',
-              buttons: [{ title: 'Other options', nextKeyword: 'vehicle_other' }],
-              messageId: otherOptionsMsg._id
-            });
-          } catch (sendError) {
-            logger.error('Error sending carousel "other options" message:', sendError);
-          }
+              content: otherOptionsText,
+              status: 'sent',
+              triggeredRuleId: activeSession.ruleId,
+              isRead: true
+            };
+            let otherOptionsMsg;
+            try {
+              otherOptionsMsg = await Message.create(otherOptionsMsgShape);
+            } catch (createError) {
+              logger.error('Error creating carousel other-options message record:', { message: createError.message, stack: createError.stack });
+              otherOptionsMsg = otherOptionsMsgShape;
+            }
 
-          usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
-            logger.error('Error incrementing outbound usage:', err)
-          );
+            // Awaited-to-completion so this message lands after the last
+            // vehicle message, preserving the constructed order.
+            try {
+              await addToWhatsappQueueAndWait({
+                shopId: tenant.shopId,
+                phoneNumberId: tenant.phoneNumberId,
+                encryptedAccessToken: tenant.accessToken,
+                to: customerNumber,
+                message: otherOptionsText,
+                type: 'text',
+                buttons: [{ title: 'Other options', nextKeyword: 'vehicle_other' }],
+                messageId: otherOptionsMsg._id
+              });
+            } catch (sendError) {
+              logger.error('Error sending carousel "other options" message:', sendError);
+            }
 
-          try {
-            socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
-              customer,
-              message: otherOptionsMsg,
-              customerNumber
-            });
-          } catch (socketError) {
-            logger.error('Error emitting socket event:', socketError);
+            usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+              logger.error('Error incrementing outbound usage:', err)
+            );
+
+            try {
+              socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+                customer,
+                message: otherOptionsMsg,
+                customerNumber
+              });
+            } catch (socketError) {
+              logger.error('Error emitting socket event:', socketError);
+            }
+          } catch (error) {
+            logger.error('Error in vehicle carousel send block:', { message: error.message, stack: error.stack });
           }
 
           return; // Do not run rule matching
