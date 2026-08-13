@@ -10,19 +10,19 @@ const requireFeature = (featureName) => {
     }
 
     try {
-      const shopId = req.user.shopId;
-      const cacheKey = `subscription:${shopId}`;
+      const businessId = req.user.businessId;
+      const cacheKey = `subscription:${businessId}`;
 
       // Try to get from cache first
       let subscription = await redis.get(cacheKey);
-      
+
       if (subscription) {
         subscription = JSON.parse(subscription);
       } else {
         // Query DB if not in cache
-        subscription = await Subscription.findOne({ 
-          shopId, 
-          status: 'active' 
+        subscription = await Subscription.findOne({
+          businessId,
+          status: 'active'
         }).populate('planId');
 
         if (subscription) {

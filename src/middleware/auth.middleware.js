@@ -34,7 +34,7 @@ const protect = async (req, res, next) => {
     // Attach user to request
     req.user = {
       userId: user._id,
-      shopId: user.shopId,
+      businessId: user.businessId,
       role: user.role,
       permissions: user.permissions,
       name: user.name,
@@ -47,11 +47,11 @@ const protect = async (req, res, next) => {
   }
 };
 
-const requireShop = (req, res, next) => {
-  if (!req.user.shopId) {
-    return errorResponse(res, 403, 'No shop found. Please create a shop first.');
+const requireBusiness = (req, res, next) => {
+  if (!req.user.businessId) {
+    return errorResponse(res, 403, 'No business found. Please create a business first.');
   }
   next();
 };
 
-module.exports = { protect, requireShop };
+module.exports = { protect, requireBusiness };

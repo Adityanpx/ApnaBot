@@ -1,5 +1,5 @@
 const axios = require('axios');
-const shopService = require('../services/shop.service');
+const businessService = require('../services/business.service');
 const tenantService = require('../services/tenant.service');
 const subscriptionService = require('../services/subscription.service');
 const bookingService = require('../services/booking.service');
@@ -11,8 +11,8 @@ const config = require('../config/env');
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 
-// Valid business types
-const VALID_BUSINESS_TYPES = [
+// Valid business categories
+const VALID_BUSINESS_CATEGORIES = [
   'tailor',
   'salon',
   'garage',
@@ -35,80 +35,80 @@ const VALID_BUSINESS_TYPES = [
 ];
 
 /**
- * GET /api/shop
- * Get the logged-in owner's shop profile
+ * GET /api/business
+ * Get the logged-in owner's business profile
  */
-const getShop = async (req, res, next) => {
+const getBusiness = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    if (!shopId) {
-      return successResponse(res, 200, null, 'No shop created yet');
+    if (!businessId) {
+      return successResponse(res, 200, null, 'No business created yet');
     }
 
-    const shop = await shopService.getShopByOwnerId(req.user.userId);
+    const business = await businessService.getBusinessByOwnerId(req.user.userId);
 
-    if (!shop) {
-      return errorResponse(res, 404, 'Shop not found');
+    if (!business) {
+      return errorResponse(res, 404, 'Business not found');
     }
 
     // Remove accessToken from response (never expose it)
-    const shopData = shop.toObject();
-    delete shopData.accessToken;
+    const businessData = business.toObject();
+    delete businessData.accessToken;
 
-    const { remaining, resetAt } = bookingService.getPreviewCreditsStatus(shop);
-    shopData.previewCreditsRemaining = remaining;
-    shopData.previewCreditsResetAt = resetAt;
+    const { remaining, resetAt } = bookingService.getPreviewCreditsStatus(business);
+    businessData.previewCreditsRemaining = remaining;
+    businessData.previewCreditsResetAt = resetAt;
 
-    return successResponse(res, 200, shopData);
+    return successResponse(res, 200, businessData);
   } catch (error) {
-    logger.error('Error in getShop:', error);
+    logger.error('Error in getBusiness:', error);
     next(error);
   }
 };
 
 /**
- * POST /api/shop
- * Create shop (only if user does not have one yet)
+ * POST /api/business
+ * Create business (only if user does not have one yet)
  */
-const createShop = async (req, res, next) => {
+const createBusiness = async (req, res, next) => {
   try {
-    const { name, businessType, displayName, address, city } = req.body;
+    const { name, businessCategory, displayName, address, city } = req.body;
 
-    // Check if user already has a shop
-    if (req.user.shopId) {
-      return errorResponse(res, 409, 'You already have a shop. Use PUT /api/shop to update it.');
+    // Check if user already has a business
+    if (req.user.businessId) {
+      return errorResponse(res, 409, 'You already have a business. Use PUT /api/business to update it.');
     }
 
     // Validate required fields
     if (!name) {
-      return errorResponse(res, 400, 'Shop name is required');
+      return errorResponse(res, 400, 'Business name is required');
     }
 
-    if (!businessType) {
-      return errorResponse(res, 400, 'Business type is required');
+    if (!businessCategory) {
+      return errorResponse(res, 400, 'Business category is required');
     }
 
-    // Validate business type
-    if (!VALID_BUSINESS_TYPES.includes(businessType)) {
-      return errorResponse(res, 400, `Invalid business type. Must be one of: ${VALID_BUSINESS_TYPES.join(', ')}`);
+    // Validate business category
+    if (!VALID_BUSINESS_CATEGORIES.includes(businessCategory)) {
+      return errorResponse(res, 400, `Invalid business category. Must be one of: ${VALID_BUSINESS_CATEGORIES.join(', ')}`);
     }
 
-    // Create shop
-    const shop = await shopService.createShop(req.user.userId, {
+    // Create business
+    const business = await businessService.createBusiness(req.user.userId, {
       name,
-      businessType,
+      businessCategory,
       displayName,
       address,
       city
     });
 
-    // Generate new tokens with shopId
+    // Generate new tokens with businessId
     const userPayload = {
       userId: req.user.userId,
       email: req.user.email,
       role: req.user.role,
-      shopId: shop._id
+      businessId: business._id
     };
 
     const { accessToken, refreshToken } = await generateTokens(userPayload);
@@ -116,50 +116,50 @@ const createShop = async (req, res, next) => {
     // Save refresh token to Redis
     await saveTokenToRedis(req.user.userId, refreshToken);
 
-    // Remove accessToken from shop data
-    const shopData = shop.toObject();
-    delete shopData.accessToken;
+    // Remove accessToken from business data
+    const businessData = business.toObject();
+    delete businessData.accessToken;
 
     return successResponse(res, 201, {
-      shop: shopData,
+      business: businessData,
       accessToken,
       refreshToken,
-      message: 'Shop created successfully. Default rules have been added based on your business type.'
+      message: 'Business created successfully. Default rules have been added based on your business category.'
     });
   } catch (error) {
-    logger.error('Error in createShop:', error);
+    logger.error('Error in createBusiness:', error);
     next(error);
   }
 };
 
 /**
- * PUT /api/shop
- * Update shop profile
+ * PUT /api/business
+ * Update business profile
  */
-const updateShop = async (req, res, next) => {
+const updateBusiness = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    if (!shopId) {
-      return errorResponse(res, 404, 'No shop found');
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
     }
 
-    const shop = await shopService.updateShop(shopId, req.body);
+    const business = await businessService.updateBusiness(businessId, req.body);
 
     // Remove accessToken from response
-    const shopData = shop.toObject();
-    delete shopData.accessToken;
+    const businessData = business.toObject();
+    delete businessData.accessToken;
 
-    return successResponse(res, 200, shopData);
+    return successResponse(res, 200, businessData);
   } catch (error) {
-    logger.error('Error in updateShop:', error);
+    logger.error('Error in updateBusiness:', error);
     next(error);
   }
 };
 
 /**
- * POST /api/shop/connect-whatsapp
- * Connect WhatsApp Business number to shop
+ * POST /api/business/connect-whatsapp
+ * Connect WhatsApp Business number to business
  */
 const connectWhatsapp = async (req, res, next) => {
   try {
@@ -178,10 +178,10 @@ const connectWhatsapp = async (req, res, next) => {
       return errorResponse(res, 400, 'Phone number ID is required');
     }
 
-    // Check if phoneNumberId is already used by another shop
-    const existingShop = await shopService.getShopByPhoneNumberId(phoneNumberId);
-    if (existingShop && existingShop._id.toString() !== req.user.shopId.toString()) {
-      return errorResponse(res, 409, 'This WhatsApp number is already connected to another shop.');
+    // Check if phoneNumberId is already used by another business
+    const existingBusiness = await businessService.getBusinessByPhoneNumberId(phoneNumberId);
+    if (existingBusiness && existingBusiness._id.toString() !== req.user.businessId.toString()) {
+      return errorResponse(res, 409, 'This WhatsApp number is already connected to another business.');
     }
 
     // Exchange the OAuth code for an access token server-side (never trust a
@@ -227,7 +227,7 @@ const connectWhatsapp = async (req, res, next) => {
     }
 
     // Connect WhatsApp (service encrypts the access token before saving)
-    const shop = await shopService.connectWhatsapp(req.user.shopId, {
+    const business = await businessService.connectWhatsapp(req.user.businessId, {
       phoneNumberId,
       wabaId,
       whatsappNumber,
@@ -236,14 +236,14 @@ const connectWhatsapp = async (req, res, next) => {
     });
 
     // Invalidate caches after connecting so the new connection takes effect immediately
-    await subscriptionService.invalidateSubscriptionCache(req.user.shopId.toString());
+    await subscriptionService.invalidateSubscriptionCache(req.user.businessId.toString());
     await tenantService.invalidateTenantCache(phoneNumberId);
 
     // Remove accessToken from response
-    const shopData = shop.toObject();
-    delete shopData.accessToken;
+    const businessData = business.toObject();
+    delete businessData.accessToken;
 
-    return successResponse(res, 200, { shop: shopData }, 'WhatsApp connected successfully');
+    return successResponse(res, 200, { business: businessData }, 'WhatsApp connected successfully');
   } catch (error) {
     logger.error('Error in connectWhatsapp:', error);
     next(error);
@@ -251,23 +251,23 @@ const connectWhatsapp = async (req, res, next) => {
 };
 
 /**
- * DELETE /api/shop/disconnect-whatsapp
- * Disconnect WhatsApp from shop
+ * DELETE /api/business/disconnect-whatsapp
+ * Disconnect WhatsApp from business
  */
 const disconnectWhatsapp = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    if (!shopId) {
-      return errorResponse(res, 404, 'No shop found');
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
     }
 
-    // Get shop first to get phoneNumberId for cache invalidation
-    const shop = await shopService.getShopById(shopId);
-    const phoneNumberId = shop?.phoneNumberId;
+    // Get business first to get phoneNumberId for cache invalidation
+    const business = await businessService.getBusinessById(businessId);
+    const phoneNumberId = business?.phoneNumberId;
 
     // Disconnect WhatsApp
-    await shopService.disconnectWhatsapp(shopId);
+    await businessService.disconnectWhatsapp(businessId);
 
     // Invalidate tenant cache after disconnecting
     if (phoneNumberId) {
@@ -282,18 +282,18 @@ const disconnectWhatsapp = async (req, res, next) => {
 };
 
 /**
- * GET /api/shop/dashboard-stats
- * Get today's stats for shop dashboard
+ * GET /api/business/dashboard-stats
+ * Get today's stats for business dashboard
  */
 const getDashboardStats = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    if (!shopId) {
-      return errorResponse(res, 404, 'No shop found');
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
     }
 
-    const stats = await shopService.getDashboardStats(shopId);
+    const stats = await businessService.getDashboardStats(businessId);
 
     return successResponse(res, 200, stats);
   } catch (error) {
@@ -303,7 +303,7 @@ const getDashboardStats = async (req, res, next) => {
 };
 
 /**
- * POST /api/shop/upload-image
+ * POST /api/business/upload-image
  * Upload profile image to R2
  */
 const uploadProfileImage = async (req, res, next) => {
@@ -312,21 +312,21 @@ const uploadProfileImage = async (req, res, next) => {
       return errorResponse(res, 400, 'No image provided');
     }
 
-    const shopId = req.user.shopId;
-    if (!shopId) {
-      return errorResponse(res, 404, 'No shop found');
+    const businessId = req.user.businessId;
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
     }
 
     // Upload to R2
     const result = await r2.uploadImage(
       req.file.buffer,
-      'shop-profiles',
-      `shop-${shopId}`,
+      'business-profiles',
+      `business-${businessId}`,
       req.file.mimetype
     );
 
-    // Update shop with new profile image URL
-    await shopService.updateShop(shopId, { profileImage: result.url });
+    // Update business with new profile image URL
+    await businessService.updateBusiness(businessId, { profileImage: result.url });
 
     return successResponse(res, 200, { profileImage: result.url });
   } catch (error) {
@@ -336,9 +336,9 @@ const uploadProfileImage = async (req, res, next) => {
 };
 
 module.exports = {
-  getShop,
-  createShop,
-  updateShop,
+  getBusiness,
+  createBusiness,
+  updateBusiness,
   connectWhatsapp,
   disconnectWhatsapp,
   getDashboardStats,

@@ -17,17 +17,17 @@ const razorpay = new Razorpay({
 
 /**
  * GET /api/subscription
- * Get current plan + usage + expiry for the shop
+ * Get current plan + usage + expiry for the business
  */
 const getCurrentSubscription = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     const [subscription, usage] = await Promise.all([
-      Subscription.findOne({ shopId, status: { $in: ['active', 'trial'] } })
+      Subscription.findOne({ businessId, status: { $in: ['active', 'trial'] } })
         .populate('planId')
         .lean(),
-      usageService.getUsageForShop(shopId)
+      usageService.getUsageForBusiness(businessId)
     ]);
 
     return successResponse(res, 200, {
@@ -63,7 +63,7 @@ const getPlans = async (req, res, next) => {
 const createSubscriptionOrder = async (req, res, next) => {
   try {
     const { planId } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!planId) return errorResponse(res, 400, 'planId is required');
 
@@ -75,13 +75,13 @@ const createSubscriptionOrder = async (req, res, next) => {
       currency: 'INR',
       receipt: `sub_${Date.now()}`, // Max 40 chars: "sub_" + 13 digits = 17 chars
       notes: {
-        shopId: shopId.toString(),
+        businessId: businessId.toString(),
         planId: planId.toString(),
         planName: plan.name
       }
     });
 
-    logger.info(`Razorpay order created: ${order.id} for shop ${shopId}`);
+    logger.info(`Razorpay order created: ${order.id} for business ${businessId}`);
     return successResponse(res, 200, {
       orderId: order.id,
       amount: order.amount,
@@ -111,7 +111,7 @@ const verifyAndActivate = async (req, res, next) => {
       razorpay_signature,
       planId
     } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !planId) {
       return errorResponse(res, 400, 'Missing payment verification fields');
@@ -124,12 +124,12 @@ const verifyAndActivate = async (req, res, next) => {
       .digest('hex');
 
     if (expectedSig !== razorpay_signature) {
-      logger.warn(`Invalid payment signature for shop ${shopId}`);
+      logger.warn(`Invalid payment signature for business ${businessId}`);
       return errorResponse(res, 400, 'Invalid payment signature');
     }
 
     // Activate subscription
-    const subscription = await subscriptionService.createSubscription(shopId, planId, {
+    const subscription = await subscriptionService.createSubscription(businessId, planId, {
       status: 'active',
       razorpayPaymentId: razorpay_payment_id,
       razorpaySubscriptionId: razorpay_order_id
@@ -137,7 +137,7 @@ const verifyAndActivate = async (req, res, next) => {
 
     const populated = await Subscription.findById(subscription._id).populate('planId');
 
-    logger.info(`Subscription activated for shop ${shopId}, payment ${razorpay_payment_id}`);
+    logger.info(`Subscription activated for business ${businessId}, payment ${razorpay_payment_id}`);
     return successResponse(res, 200, { subscription: populated }, 'Subscription activated successfully');
   } catch (error) {
     logger.error('Error in verifyAndActivate:', error);
@@ -151,16 +151,16 @@ const verifyAndActivate = async (req, res, next) => {
  */
 const cancelAutoRenew = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const sub = await Subscription.findOne({ shopId, status: 'active' });
+    const sub = await Subscription.findOne({ businessId, status: 'active' });
     if (!sub) return errorResponse(res, 404, 'No active subscription found');
     if (!sub.autoRenew) return errorResponse(res, 400, 'Auto-renew is already disabled');
 
     sub.autoRenew = false;
     await sub.save();
 
-    logger.info(`Auto-renew cancelled for shop ${shopId}`);
+    logger.info(`Auto-renew cancelled for business ${businessId}`);
     return successResponse(
       res, 200, sub,
       `Auto-renew cancelled. Subscription active until ${sub.endDate.toDateString()}`

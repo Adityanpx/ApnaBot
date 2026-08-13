@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const Message = require('../models/Message');
 const Customer = require('../models/Customer');
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
@@ -15,11 +15,11 @@ const logger = require('../utils/logger');
 const getConversations = async (req, res, next) => {
   try {
     const { page = 1, limit = 20 } = req.query;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const conversations = await Message.aggregate([
-      { $match: { shopId: new mongoose.Types.ObjectId(shopId.toString()) } },
+      { $match: { businessId: new mongoose.Types.ObjectId(businessId.toString()) } },
       { $sort: { createdAt: -1 } },
       {
         $group: {
@@ -56,7 +56,7 @@ const getConversations = async (req, res, next) => {
     ]);
 
     const totalResult = await Message.aggregate([
-      { $match: { shopId: new mongoose.Types.ObjectId(shopId.toString()) } },
+      { $match: { businessId: new mongoose.Types.ObjectId(businessId.toString()) } },
       { $group: { _id: '$customerId' } },
       { $count: 'total' }
     ]);
@@ -79,12 +79,12 @@ const getChatHistory = async (req, res, next) => {
   try {
     const { customerId } = req.params;
     const { page = 1, limit = 50 } = req.query;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: customerId, shopId });
+    const customer = await Customer.findOne({ _id: customerId, businessId });
     if (!customer) return errorResponse(res, 404, 'Customer not found');
 
-    const filter = { shopId, customerId };
+    const filter = { businessId, customerId };
     const [total, messages] = await Promise.all([
       Message.countDocuments(filter),
       Message.find(filter)
@@ -113,10 +113,10 @@ const getChatHistory = async (req, res, next) => {
 const markAsRead = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     const message = await Message.findOneAndUpdate(
-      { _id: id, shopId, direction: 'inbound' },
+      { _id: id, businessId, direction: 'inbound' },
       { isRead: true },
       { new: true }
     );
@@ -137,7 +137,7 @@ const markAsRead = async (req, res, next) => {
 const sendMessage = async (req, res, next) => {
   try {
     const { customerNumber, message } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!customerNumber || !message) {
       return errorResponse(res, 400, 'customerNumber and message are required');
@@ -146,16 +146,16 @@ const sendMessage = async (req, res, next) => {
       return errorResponse(res, 400, 'Message cannot be empty');
     }
 
-    // Verify shop has WhatsApp connected
-    const shop = await Shop.findById(shopId);
-    if (!shop) return errorResponse(res, 404, 'Shop not found');
-    if (!shop.isWhatsappConnected || !shop.phoneNumberId) {
-      return errorResponse(res, 400, 'WhatsApp is not connected to this shop');
+    // Verify business has WhatsApp connected
+    const business = await Business.findById(businessId);
+    if (!business) return errorResponse(res, 404, 'Business not found');
+    if (!business.isWhatsappConnected || !business.phoneNumberId) {
+      return errorResponse(res, 400, 'WhatsApp is not connected to this business');
     }
 
     // Upsert customer record
     const customer = await Customer.findOneAndUpdate(
-      { shopId, whatsappNumber: customerNumber },
+      { businessId, whatsappNumber: customerNumber },
       {
         $setOnInsert: { firstSeenAt: new Date() },
         $set: { lastMessageAt: new Date() }
@@ -165,7 +165,7 @@ const sendMessage = async (req, res, next) => {
 
     // Save outbound message to DB
     const outboundMsg = await Message.create({
-      shopId,
+      businessId,
       customerId: customer._id,
       customerNumber,
       direction: 'outbound',
@@ -177,16 +177,16 @@ const sendMessage = async (req, res, next) => {
 
     // Queue via BullMQ — NEVER call Meta API directly from controller
     await addToWhatsappQueue({
-      shopId: shopId.toString(),
-      phoneNumberId: shop.phoneNumberId,
-      encryptedAccessToken: shop.accessToken,
+      businessId: businessId.toString(),
+      phoneNumberId: business.phoneNumberId,
+      encryptedAccessToken: business.accessToken,
       to: customerNumber,
       message: message.trim(),
       type: 'text',
       messageId: outboundMsg._id.toString()
     });
 
-    logger.info(`Manual message queued to ${customerNumber} for shop ${shopId}`);
+    logger.info(`Manual message queued to ${customerNumber} for business ${businessId}`);
     return successResponse(res, 201, outboundMsg, 'Message queued for delivery');
   } catch (error) {
     logger.error('Error in sendMessage:', error);

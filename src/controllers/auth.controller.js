@@ -35,7 +35,7 @@ const register = async (req, res, next) => {
       email: email.toLowerCase(),
       passwordHash: password,
       role: 'owner',
-      shopId: null,
+      businessId: null,
       permissions: buildPermissions('owner'),
       isVerified: false
     });
@@ -59,7 +59,7 @@ const register = async (req, res, next) => {
 
     const payload = {
       userId: user._id,
-      shopId: user.shopId,
+      businessId: user.businessId,
       role: user.role,
       permissions: user.permissions
     };
@@ -75,7 +75,7 @@ const register = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        shopId: user.shopId,
+        businessId: user.businessId,
         permissions: user.permissions
       },
       accessToken,
@@ -119,7 +119,7 @@ const login = async (req, res, next) => {
     
     const payload = {
       userId: user._id,
-      shopId: user.shopId,
+      businessId: user.businessId,
       role: user.role,
       permissions: user.permissions
     };
@@ -135,7 +135,7 @@ const login = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        shopId: user.shopId,
+        businessId: user.businessId,
         permissions: user.permissions
       },
       accessToken,
@@ -174,7 +174,7 @@ const refresh = async (req, res, next) => {
     
     const payload = {
       userId: user._id,
-      shopId: user.shopId,
+      businessId: user.businessId,
       role: user.role,
       permissions: user.permissions
     };

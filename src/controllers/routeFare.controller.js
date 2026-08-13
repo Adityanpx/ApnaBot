@@ -5,13 +5,13 @@ const logger = require('../utils/logger');
 
 /**
  * GET /api/route-fares
- * List all route fares for shop
+ * List all route fares for business
  */
 const getRouteFares = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const routeFares = await RouteFare.find({ shopId })
+    const routeFares = await RouteFare.find({ businessId })
       .populate({
         path: 'vehicleId',
         select: 'customName catalogId',
@@ -33,13 +33,13 @@ const getRouteFares = async (req, res, next) => {
 const createRouteFare = async (req, res, next) => {
   try {
     const { fromCity, toCity, tripType = 'oneway', vehicleId, fare } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!fromCity || !toCity || !vehicleId || fare === undefined) {
       return errorResponse(res, 400, 'fromCity, toCity, vehicleId, and fare are required');
     }
 
-    const vehicle = await Vehicle.findOne({ _id: vehicleId, shopId });
+    const vehicle = await Vehicle.findOne({ _id: vehicleId, businessId });
     if (!vehicle) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
@@ -48,7 +48,7 @@ const createRouteFare = async (req, res, next) => {
     const normalizedToCity = toCity.toLowerCase().trim();
 
     const routeFare = await RouteFare.findOneAndUpdate(
-      { shopId, fromCity: normalizedFromCity, toCity: normalizedToCity, tripType, vehicleId },
+      { businessId, fromCity: normalizedFromCity, toCity: normalizedToCity, tripType, vehicleId },
       { fare, isActive: true },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
@@ -67,9 +67,9 @@ const createRouteFare = async (req, res, next) => {
 const updateRouteFare = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const routeFare = await RouteFare.findOne({ _id: id, shopId });
+    const routeFare = await RouteFare.findOne({ _id: id, businessId });
     if (!routeFare) {
       return errorResponse(res, 404, 'Route fare not found');
     }
@@ -77,7 +77,7 @@ const updateRouteFare = async (req, res, next) => {
     const { fromCity, toCity, tripType, vehicleId, fare, isActive } = req.body;
 
     if (vehicleId !== undefined) {
-      const vehicle = await Vehicle.findOne({ _id: vehicleId, shopId });
+      const vehicle = await Vehicle.findOne({ _id: vehicleId, businessId });
       if (!vehicle) {
         return errorResponse(res, 404, 'Vehicle not found');
       }
@@ -106,9 +106,9 @@ const updateRouteFare = async (req, res, next) => {
 const deleteRouteFare = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const routeFare = await RouteFare.findOne({ _id: id, shopId });
+    const routeFare = await RouteFare.findOne({ _id: id, businessId });
     if (!routeFare) {
       return errorResponse(res, 404, 'Route fare not found');
     }

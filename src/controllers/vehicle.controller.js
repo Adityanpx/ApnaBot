@@ -6,27 +6,27 @@ const logger = require('../utils/logger');
 
 /**
  * GET /api/vehicles/catalog
- * List active vehicle type catalog entries for shop owners to pick from
+ * List active vehicle type catalog entries for business owners to pick from
  */
-const getVehicleCatalogForShop = async (req, res, next) => {
+const getVehicleCatalogForBusiness = async (req, res, next) => {
   try {
     const catalog = await VehicleTypeCatalog.find({ isActive: true }).sort({ order: 1 });
     return successResponse(res, 200, { catalog });
   } catch (error) {
-    logger.error('Error in getVehicleCatalogForShop:', error);
+    logger.error('Error in getVehicleCatalogForBusiness:', error);
     next(error);
   }
 };
 
 /**
  * GET /api/vehicles
- * List all vehicles for shop
+ * List all vehicles for business
  */
 const getVehicles = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const vehicles = await Vehicle.find({ shopId })
+    const vehicles = await Vehicle.find({ businessId })
       .populate('catalogId', 'name type photoUrl seats')
       .sort({ order: 1 });
 
@@ -44,7 +44,7 @@ const getVehicles = async (req, res, next) => {
 const createVehicle = async (req, res, next) => {
   try {
     const { catalogId, customName = null, customPhotoUrl = null, perKmRate = null, order = 0 } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!catalogId) {
       return errorResponse(res, 400, 'catalogId is required');
@@ -56,7 +56,7 @@ const createVehicle = async (req, res, next) => {
     }
 
     const vehicle = await Vehicle.create({
-      shopId,
+      businessId,
       catalogId,
       customName,
       customPhotoUrl,
@@ -79,9 +79,9 @@ const createVehicle = async (req, res, next) => {
 const updateVehicle = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const vehicle = await Vehicle.findOne({ _id: id, shopId });
+    const vehicle = await Vehicle.findOne({ _id: id, businessId });
     if (!vehicle) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
@@ -116,9 +116,9 @@ const updateVehicle = async (req, res, next) => {
 const deleteVehicle = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const vehicle = await Vehicle.findOne({ _id: id, shopId });
+    const vehicle = await Vehicle.findOne({ _id: id, businessId });
     if (!vehicle) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
@@ -139,9 +139,9 @@ const deleteVehicle = async (req, res, next) => {
 const toggleVehicle = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const vehicle = await Vehicle.findOne({ _id: id, shopId });
+    const vehicle = await Vehicle.findOne({ _id: id, businessId });
     if (!vehicle) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
@@ -166,15 +166,15 @@ const uploadVehicleImage = async (req, res, next) => {
       return errorResponse(res, 400, 'No image provided');
     }
 
-    const shopId = req.user.shopId;
-    if (!shopId) {
-      return errorResponse(res, 404, 'No shop found');
+    const businessId = req.user.businessId;
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
     }
 
     const result = await r2.uploadImage(
       req.file.buffer,
       'vehicle-photos',
-      `vehicle-${shopId}-${Date.now()}`,
+      `vehicle-${businessId}-${Date.now()}`,
       req.file.mimetype
     );
 
@@ -186,7 +186,7 @@ const uploadVehicleImage = async (req, res, next) => {
 };
 
 module.exports = {
-  getVehicleCatalogForShop,
+  getVehicleCatalogForBusiness,
   getVehicles,
   createVehicle,
   updateVehicle,

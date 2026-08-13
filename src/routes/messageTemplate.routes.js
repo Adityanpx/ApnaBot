@@ -1,20 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const messageTemplateController = require('../controllers/messageTemplate.controller');
-const { protect, requireShop } = require('../middleware/auth.middleware');
+const { protect, requireBusiness } = require('../middleware/auth.middleware');
 
-// All routes require: protect, requireShop
+// All routes require: protect, requireBusiness
 
 // GET / - List message templates
-router.get('/', protect, requireShop, messageTemplateController.getMessageTemplates);
+router.get('/', protect, requireBusiness, messageTemplateController.getMessageTemplates);
 
 // POST / - Create message template (draft)
-router.post('/', protect, requireShop, messageTemplateController.createMessageTemplate);
+router.post('/', protect, requireBusiness, messageTemplateController.createMessageTemplate);
 
 // POST /:id/submit - Submit template to Meta for review
-router.post('/:id/submit', protect, requireShop, messageTemplateController.submitMessageTemplate);
+router.post('/:id/submit', protect, requireBusiness, messageTemplateController.submitMessageTemplate);
 
 // DELETE /:id - Delete a draft/rejected template
-router.delete('/:id', protect, requireShop, messageTemplateController.deleteMessageTemplate);
+router.delete('/:id', protect, requireBusiness, messageTemplateController.deleteMessageTemplate);
 
 module.exports = router;

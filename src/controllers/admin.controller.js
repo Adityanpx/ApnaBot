@@ -1,6 +1,6 @@
 // src/controllers/admin.controller.js — CREATE THIS FILE
 
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const User = require('../models/User');
 const Plan = require('../models/Plan');
 const Subscription = require('../models/Subscription');
@@ -16,11 +16,11 @@ const logger = require('../utils/logger');
 
 /**
  * GET /api/admin/shops
- * List all shops — paginated + searchable
+ * List all businesses — paginated + searchable
  */
 const getShops = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, search, isActive, businessType } = req.query;
+    const { page = 1, limit = 20, search, isActive, businessCategory } = req.query;
 
     const filter = {};
 
@@ -31,11 +31,11 @@ const getShops = async (req, res, next) => {
       ];
     }
     if (isActive !== undefined) filter.isActive = isActive === 'true';
-    if (businessType) filter.businessType = businessType;
+    if (businessCategory) filter.businessCategory = businessCategory;
 
     const [total, shops] = await Promise.all([
-      Shop.countDocuments(filter),
-      Shop.find(filter)
+      Business.countDocuments(filter),
+      Business.find(filter)
         .populate('ownerUserId', 'name email')
         .sort({ createdAt: -1 })
         .skip((parseInt(page) - 1) * parseInt(limit))
@@ -53,27 +53,27 @@ const getShops = async (req, res, next) => {
 
 /**
  * GET /api/admin/shops/:id
- * Get full shop detail — includes subscription + usage + users + stats
+ * Get full business detail — includes subscription + usage + users + stats
  */
 const getShopById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const shop = await Shop.findById(id)
+    const business = await Business.findById(id)
       .populate('ownerUserId', 'name email lastLoginAt')
       .select('-accessToken');
 
-    if (!shop) return errorResponse(res, 404, 'Shop not found');
+    if (!business) return errorResponse(res, 404, 'Business not found');
 
     const subscription = await Subscription.findOne({
-      shopId: id,
+      businessId: id,
       status: { $in: ['active', 'trial'] }
     }).populate('planId');
 
     // Get all users (owner + staff)
     const [owner, staff] = await Promise.all([
-      User.findById(shop.ownerUserId).select('name email role lastLoginAt isActive'),
-      User.find({ shopId: id, role: 'staff' }).select('name email role lastLoginAt isActive')
+      User.findById(business.ownerUserId).select('name email role lastLoginAt isActive'),
+      User.find({ businessId: id, role: 'staff' }).select('name email role lastLoginAt isActive')
     ]);
 
     const users = owner ? [owner, ...staff] : staff;
@@ -81,12 +81,12 @@ const getShopById = async (req, res, next) => {
 
     // Get customer and booking counts
     const [customerCount, bookingCount] = await Promise.all([
-      Customer.countDocuments({ shopId: id }),
-      Booking.countDocuments({ shopId: id })
+      Customer.countDocuments({ businessId: id }),
+      Booking.countDocuments({ businessId: id })
     ]);
 
     return successResponse(res, 200, {
-      shop,
+      shop: business,
       subscription: subscription || null,
       plan: subscription?.planId || null,
       users,
@@ -102,22 +102,22 @@ const getShopById = async (req, res, next) => {
 
 /**
  * PUT /api/admin/shops/:id/toggle
- * Activate or deactivate a shop
+ * Activate or deactivate a business
  */
 const toggleShop = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const shop = await Shop.findById(id);
-    if (!shop) return errorResponse(res, 404, 'Shop not found');
+    const business = await Business.findById(id);
+    if (!business) return errorResponse(res, 404, 'Business not found');
 
-    shop.isActive = !shop.isActive;
-    await shop.save();
+    business.isActive = !business.isActive;
+    await business.save();
 
-    const action = shop.isActive ? 'activated' : 'deactivated';
-    logger.info(`Shop ${id} ${action} by superadmin`);
+    const action = business.isActive ? 'activated' : 'deactivated';
+    logger.info(`Business ${id} ${action} by superadmin`);
 
-    return successResponse(res, 200, { isActive: shop.isActive }, `Shop ${action} successfully`);
+    return successResponse(res, 200, { isActive: business.isActive }, `Business ${action} successfully`);
   } catch (error) {
     logger.error('Error in toggleShop:', error);
     next(error);
@@ -126,7 +126,7 @@ const toggleShop = async (req, res, next) => {
 
 /**
  * PUT /api/admin/shops/:id/plan
- * Manually change a shop's subscription plan
+ * Manually change a business's subscription plan
  */
 const changeShopPlan = async (req, res, next) => {
   try {
@@ -135,8 +135,8 @@ const changeShopPlan = async (req, res, next) => {
 
     if (!planId) return errorResponse(res, 400, 'planId is required');
 
-    const shop = await Shop.findById(id);
-    if (!shop) return errorResponse(res, 404, 'Shop not found');
+    const business = await Business.findById(id);
+    if (!business) return errorResponse(res, 404, 'Business not found');
 
     const plan = await Plan.findById(planId);
     if (!plan || !plan.isActive) return errorResponse(res, 404, 'Plan not found');
@@ -150,11 +150,11 @@ const changeShopPlan = async (req, res, next) => {
     // Clear cached subscription status so the new plan takes effect immediately
     await subscriptionService.invalidateSubscriptionCache(id);
     // Also clear the webhook's tenant cache, which stores its own subscription snapshot
-    if (shop.phoneNumberId) {
-      await tenantService.invalidateTenantCache(shop.phoneNumberId);
+    if (business.phoneNumberId) {
+      await tenantService.invalidateTenantCache(business.phoneNumberId);
     }
 
-    logger.info(`Shop ${id} plan changed to ${plan.name} by superadmin`);
+    logger.info(`Business ${id} plan changed to ${plan.name} by superadmin`);
     return successResponse(res, 200, { subscription: populated }, 'Plan changed successfully');
   } catch (error) {
     logger.error('Error in changeShopPlan:', error);
@@ -164,7 +164,7 @@ const changeShopPlan = async (req, res, next) => {
 
 /**
  * PUT /api/admin/shops/:id/extend
- * Extend a shop's subscription expiry by N days
+ * Extend a business's subscription expiry by N days
  */
 const extendSubscription = async (req, res, next) => {
   try {
@@ -172,28 +172,28 @@ const extendSubscription = async (req, res, next) => {
     const { days = 30 } = req.body;
 
     const subscription = await Subscription.findOne({
-      shopId: id,
+      businessId: id,
       status: { $in: ['active', 'expired'] }
     });
 
-    if (!subscription) return errorResponse(res, 404, 'No subscription found for this shop');
+    if (!subscription) return errorResponse(res, 404, 'No subscription found for this business');
 
     const currentEnd = subscription.endDate > new Date() ? subscription.endDate : new Date();
     subscription.endDate = new Date(currentEnd.getTime() + days * 24 * 60 * 60 * 1000);
     subscription.status = 'active';
     await subscription.save();
 
-    // Reactivate shop if it was deactivated
-    const updatedShop = await Shop.findByIdAndUpdate(id, { isActive: true });
+    // Reactivate business if it was deactivated
+    const updatedBusiness = await Business.findByIdAndUpdate(id, { isActive: true });
 
     // Clear Redis cache
     await subscriptionService.invalidateSubscriptionCache(id);
     // Also clear the webhook's tenant cache, which stores its own subscription snapshot
-    if (updatedShop?.phoneNumberId) {
-      await tenantService.invalidateTenantCache(updatedShop.phoneNumberId);
+    if (updatedBusiness?.phoneNumberId) {
+      await tenantService.invalidateTenantCache(updatedBusiness.phoneNumberId);
     }
 
-    logger.info(`Shop ${id} subscription extended by ${days} days by superadmin`);
+    logger.info(`Business ${id} subscription extended by ${days} days by superadmin`);
     return successResponse(res, 200, subscription, `Subscription extended by ${days} days`);
   } catch (error) {
     logger.error('Error in extendSubscription:', error);
@@ -347,11 +347,11 @@ const deletePlan = async (req, res, next) => {
 
 /**
  * GET /api/admin/templates
- * List all business type templates
+ * List all business category templates
  */
 const getTemplates = async (req, res, next) => {
   try {
-    const templates = await BusinessTypeTemplate.find().sort({ businessType: 1 });
+    const templates = await BusinessTypeTemplate.find().sort({ businessCategory: 1 });
     return successResponse(res, 200, { templates });
   } catch (error) {
     logger.error('Error in getTemplates:', error);
@@ -361,7 +361,7 @@ const getTemplates = async (req, res, next) => {
 
 /**
  * PUT /api/admin/templates/:id
- * Update a business type template's default rules and booking fields
+ * Update a business category template's default rules and booking fields
  */
 const updateTemplate = async (req, res, next) => {
   try {

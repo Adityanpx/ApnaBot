@@ -9,7 +9,7 @@ const socketService = require('../services/socket.service');
 const { addToWhatsappQueue, addToWhatsappQueueAndWait } = require('../queues/whatsapp.queue');
 const Customer = require('../models/Customer');
 const Message = require('../models/Message');
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const Rule = require('../models/Rule');
 const logger = require('../utils/logger');
 
@@ -24,10 +24,10 @@ const GREETING_KEYWORDS = new Set(['hi', 'hello', 'hey', 'hii', 'hlo', 'namaste'
 const ESCAPE_KEYWORDS = new Set(['menu', 'cancel', 'exit', 'restart', 'stop']);
 
 /**
- * Build the numbered-menu list options for a shop's enabled menu, in the
+ * Build the numbered-menu list options for a business's enabled menu, in the
  * {label, nextKeyword} shape sendRuleListMessage expects. Shared by the
  * Step 12.5 greeting handler and the "no rule matched" fallback.
- * @param {Array} menuItems - shop.menuItems
+ * @param {Array} menuItems - business.menuItems
  * @returns {Promise<Array<{label: string, nextKeyword: string}>>}
  */
 const buildMenuListOptions = async (menuItems) => {
@@ -112,7 +112,7 @@ const receiveWebhook = async (req, res) => {
         );
         if (updatedMsg) {
           try {
-            socketService.emitToShop(updatedMsg.shopId.toString(), 'message_status', {
+            socketService.emitToBusiness(updatedMsg.businessId.toString(), 'message_status', {
               messageId: updatedMsg._id,
               metaMessageId: status.id,
               status: status.status
@@ -146,35 +146,35 @@ const receiveWebhook = async (req, res) => {
     const phoneNumberId = value.metadata.phone_number_id;
 
     // Step 4 - Resolve tenant
-    const tenant = await tenantService.resolveShopByPhoneNumberId(phoneNumberId);
+    const tenant = await tenantService.resolveBusinessByPhoneNumberId(phoneNumberId);
     if (!tenant) {
-      logger.warn(`No shop found for phoneNumberId: ${phoneNumberId}`);
+      logger.warn(`No business found for phoneNumberId: ${phoneNumberId}`);
       return;
     }
 
-    // Step 5 - Check shop active
+    // Step 5 - Check business active
     if (!tenant.isActive) {
-      logger.warn(`Shop ${tenant.shopId} is inactive`);
+      logger.warn(`Business ${tenant.businessId} is inactive`);
       return;
     }
 
     // Step 6 - Check subscription
     if (!tenant.subscription || tenant.subscription.status !== 'active') {
-      logger.warn(`Shop ${tenant.shopId} has no active subscription`);
+      logger.warn(`Business ${tenant.businessId} has no active subscription`);
       return;
     }
 
     // Step 7 - Check usage limit
     const msgLimit = tenant.plan?.msgLimit || 500;
-    const usageCheck = await usageService.checkUsageLimit(tenant.shopId, msgLimit);
+    const usageCheck = await usageService.checkUsageLimit(tenant.businessId, msgLimit);
     if (!usageCheck.allowed) {
-      logger.warn(`Usage limit reached for shop ${tenant.shopId}`);
+      logger.warn(`Usage limit reached for business ${tenant.businessId}`);
       return;
     }
 
     // Step 8 - Upsert customer
     const customer = await Customer.findOneAndUpdate(
-      { shopId: tenant.shopId, whatsappNumber: customerNumber },
+      { businessId: tenant.businessId, whatsappNumber: customerNumber },
       {
         $setOnInsert: { firstSeenAt: new Date() },
         $set: { lastMessageAt: new Date() },
@@ -190,7 +190,7 @@ const receiveWebhook = async (req, res) => {
 
     // Step 9 - Save inbound message
     const inboundMsg = await Message.create({
-      shopId: tenant.shopId,
+      businessId: tenant.businessId,
       customerId: customer._id,
       customerNumber,
       direction: 'inbound',
@@ -202,12 +202,12 @@ const receiveWebhook = async (req, res) => {
     });
 
     // Step 10 - Increment usage (fire and forget)
-    usageService.incrementUsage(tenant.shopId, 'inbound');
+    usageService.incrementUsage(tenant.businessId, 'inbound');
 
     // ADD THIS — Emit usage_update to Flutter dashboard
-    usageService.checkUsageLimit(tenant.shopId, tenant.plan?.msgLimit || 500)
+    usageService.checkUsageLimit(tenant.businessId, tenant.plan?.msgLimit || 500)
       .then(usageCheck => {
-        socketService.emitToShop(tenant.shopId.toString(), 'usage_update', {
+        socketService.emitToBusiness(tenant.businessId.toString(), 'usage_update', {
           msgCount: usageCheck.current,
           limit: usageCheck.limit
         });
@@ -222,7 +222,7 @@ const receiveWebhook = async (req, res) => {
     }
 
     // Step 12 - Check active booking session
-    const activeSession = await bookingService.getBookingSession(tenant.shopId, customerNumber);
+    const activeSession = await bookingService.getBookingSession(tenant.businessId, customerNumber);
     if (activeSession) {
       logger.info(`Active booking session for ${customerNumber}`);
 
@@ -234,19 +234,19 @@ const receiveWebhook = async (req, res) => {
       const isPlainTextMessage = !buttonReplyId && !listReplyId;
       const normalizedEscapeText = isPlainTextMessage ? (message.text?.body || '').trim().toLowerCase() : '';
       if (ESCAPE_KEYWORDS.has(normalizedEscapeText)) {
-        await bookingService.deleteBookingSession(tenant.shopId, customerNumber);
+        await bookingService.deleteBookingSession(tenant.businessId, customerNumber);
 
-        const escapeShopDoc = await Shop.findById(tenant.shopId)
+        const escapeBusinessDoc = await Business.findById(tenant.businessId)
           .select('welcomeMessage isMenuEnabled menuItems')
           .lean();
-        const escapeHasMenu = !!(escapeShopDoc?.isMenuEnabled && escapeShopDoc.menuItems?.length > 0);
+        const escapeHasMenu = !!(escapeBusinessDoc?.isMenuEnabled && escapeBusinessDoc.menuItems?.length > 0);
 
         // Cancellation confirmation message
         const cancelText = escapeHasMenu
           ? 'Booking cancelled.'
           : "Booking cancelled. Type 'hi' to see what I can help with.";
         const cancelMsg = await Message.create({
-          shopId: tenant.shopId,
+          businessId: tenant.businessId,
           customerId: customer._id,
           customerNumber,
           direction: 'outbound',
@@ -256,7 +256,7 @@ const receiveWebhook = async (req, res) => {
           isRead: true
         });
         await addToWhatsappQueue({
-          shopId: tenant.shopId,
+          businessId: tenant.businessId,
           phoneNumberId: tenant.phoneNumberId,
           encryptedAccessToken: tenant.accessToken,
           to: customerNumber,
@@ -264,11 +264,11 @@ const receiveWebhook = async (req, res) => {
           type: 'text',
           messageId: cancelMsg._id
         });
-        usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+        usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
           logger.error('Error incrementing outbound usage:', err)
         );
         try {
-          socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+          socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
             customer,
             message: cancelMsg,
             customerNumber
@@ -277,14 +277,14 @@ const receiveWebhook = async (req, res) => {
           logger.error('Error emitting socket event:', socketError);
         }
 
-        // If the shop has a menu, follow up with the same welcome/menu send
+        // If the business has a menu, follow up with the same welcome/menu send
         // Step 12.5 does for a greeting.
         if (escapeHasMenu) {
-          const menuListOptions = await buildMenuListOptions(escapeShopDoc.menuItems);
-          const menuReplyText = escapeShopDoc.welcomeMessage || 'How can we help you today?';
+          const menuListOptions = await buildMenuListOptions(escapeBusinessDoc.menuItems);
+          const menuReplyText = escapeBusinessDoc.welcomeMessage || 'How can we help you today?';
 
           const menuOutboundMsg = await Message.create({
-            shopId: tenant.shopId,
+            businessId: tenant.businessId,
             customerId: customer._id,
             customerNumber,
             direction: 'outbound',
@@ -294,7 +294,7 @@ const receiveWebhook = async (req, res) => {
             isRead: true
           });
           await addToWhatsappQueue({
-            shopId: tenant.shopId,
+            businessId: tenant.businessId,
             phoneNumberId: tenant.phoneNumberId,
             encryptedAccessToken: tenant.accessToken,
             to: customerNumber,
@@ -304,11 +304,11 @@ const receiveWebhook = async (req, res) => {
             listButtonLabel: 'Menu',
             messageId: menuOutboundMsg._id
           });
-          usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+          usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
             logger.error('Error incrementing outbound usage:', err)
           );
           try {
-            socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+            socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
               customer,
               message: menuOutboundMsg,
               customerNumber
@@ -344,7 +344,7 @@ const receiveWebhook = async (req, res) => {
 
       // Process booking step
       const stepResult = await bookingService.processBookingStep(
-        tenant.shopId,
+        tenant.businessId,
         customerNumber,
         resolvedReply,
         tenant
@@ -364,7 +364,7 @@ const receiveWebhook = async (req, res) => {
         if (nextField && nextField.fieldType === 'vehicle_carousel') {
           carouselOptions = nextField.options || [];
         } else if (typeof stepResult === 'string' && stepResult.startsWith('Sorry, that vehicle is no longer available')) {
-          const refreshedSession = await bookingService.getBookingSession(tenant.shopId, customerNumber);
+          const refreshedSession = await bookingService.getBookingSession(tenant.businessId, customerNumber);
           const refreshedField = refreshedSession?.fields[refreshedSession.step];
           if (refreshedField && refreshedField.fieldType === 'vehicle_carousel') {
             carouselOptions = refreshedField.options || [];
@@ -377,7 +377,7 @@ const receiveWebhook = async (req, res) => {
             // Intro message (question text or the stale-vehicle re-prompt)
             const introText = nextField ? nextField.label : stepResult;
             const introMsgShape = {
-              shopId: tenant.shopId,
+              businessId: tenant.businessId,
               customerId: customer._id,
               customerNumber,
               direction: 'outbound',
@@ -400,7 +400,7 @@ const receiveWebhook = async (req, res) => {
             // below, even though the worker processes jobs with concurrency: 5.
             try {
               await addToWhatsappQueueAndWait({
-                shopId: tenant.shopId,
+                businessId: tenant.businessId,
                 phoneNumberId: tenant.phoneNumberId,
                 encryptedAccessToken: tenant.accessToken,
                 to: customerNumber,
@@ -410,19 +410,19 @@ const receiveWebhook = async (req, res) => {
               });
             } catch (sendError) {
               logger.error('Error sending carousel intro message', {
-                shopId: tenant.shopId,
+                businessId: tenant.businessId,
                 customerNumber,
                 message: sendError.message,
                 stack: sendError.stack
               });
             }
 
-            usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+            usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
               logger.error('Error incrementing outbound usage:', err)
             );
 
             try {
-              socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+              socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
                 customer,
                 message: introMsg,
                 customerNumber
@@ -432,7 +432,7 @@ const receiveWebhook = async (req, res) => {
             }
 
             // One message per vehicle option: image + caption + "Book this" button
-            logger.info('Sending vehicle carousel', { shopId: tenant.shopId, customerNumber, optionCount: carouselOptions.length });
+            logger.info('Sending vehicle carousel', { businessId: tenant.businessId, customerNumber, optionCount: carouselOptions.length });
             for (const option of carouselOptions) {
               const captionParts = [option.name];
               if (option.seats) captionParts.push(`${option.seats} seats`);
@@ -440,7 +440,7 @@ const receiveWebhook = async (req, res) => {
               const caption = captionParts.join(' • ');
 
               const vehicleMsgShape = {
-                shopId: tenant.shopId,
+                businessId: tenant.businessId,
                 customerId: customer._id,
                 customerNumber,
                 direction: 'outbound',
@@ -455,7 +455,7 @@ const receiveWebhook = async (req, res) => {
                 vehicleMsg = await Message.create(vehicleMsgShape);
               } catch (createError) {
                 logger.error('Error creating carousel vehicle message record', {
-                  shopId: tenant.shopId,
+                  businessId: tenant.businessId,
                   customerNumber,
                   optionIndex: option.index,
                   optionName: option.name,
@@ -469,7 +469,7 @@ const receiveWebhook = async (req, res) => {
               // order they're constructed, regardless of worker concurrency.
               try {
                 await addToWhatsappQueueAndWait({
-                  shopId: tenant.shopId,
+                  businessId: tenant.businessId,
                   phoneNumberId: tenant.phoneNumberId,
                   encryptedAccessToken: tenant.accessToken,
                   to: customerNumber,
@@ -482,7 +482,7 @@ const receiveWebhook = async (req, res) => {
                 sentCount++;
               } catch (sendError) {
                 logger.error('Error sending carousel vehicle message', {
-                  shopId: tenant.shopId,
+                  businessId: tenant.businessId,
                   customerNumber,
                   optionIndex: option.index,
                   optionName: option.name,
@@ -491,12 +491,12 @@ const receiveWebhook = async (req, res) => {
                 });
               }
 
-              usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+              usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
                 logger.error('Error incrementing outbound usage:', err)
               );
 
               try {
-                socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+                socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
                   customer,
                   message: vehicleMsg,
                   customerNumber
@@ -507,7 +507,7 @@ const receiveWebhook = async (req, res) => {
             }
 
             logger.info('Vehicle carousel send complete', {
-              shopId: tenant.shopId,
+              businessId: tenant.businessId,
               customerNumber,
               totalOptions: carouselOptions.length,
               sentCount
@@ -517,7 +517,7 @@ const receiveWebhook = async (req, res) => {
             // preferred vehicle isn't listed.
             const otherOptionsText = "Don't see the vehicle you want?";
             const otherOptionsMsgShape = {
-              shopId: tenant.shopId,
+              businessId: tenant.businessId,
               customerId: customer._id,
               customerNumber,
               direction: 'outbound',
@@ -539,7 +539,7 @@ const receiveWebhook = async (req, res) => {
             // vehicle message, preserving the constructed order.
             try {
               await addToWhatsappQueueAndWait({
-                shopId: tenant.shopId,
+                businessId: tenant.businessId,
                 phoneNumberId: tenant.phoneNumberId,
                 encryptedAccessToken: tenant.accessToken,
                 to: customerNumber,
@@ -550,19 +550,19 @@ const receiveWebhook = async (req, res) => {
               });
             } catch (sendError) {
               logger.error('Error sending carousel "other options" message', {
-                shopId: tenant.shopId,
+                businessId: tenant.businessId,
                 customerNumber,
                 message: sendError.message,
                 stack: sendError.stack
               });
             }
 
-            usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+            usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
               logger.error('Error incrementing outbound usage:', err)
             );
 
             try {
-              socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+              socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
                 customer,
                 message: otherOptionsMsg,
                 customerNumber
@@ -572,7 +572,7 @@ const receiveWebhook = async (req, res) => {
             }
           } catch (error) {
             logger.error('Fatal error in vehicle carousel send block', {
-              shopId: tenant.shopId,
+              businessId: tenant.businessId,
               customerNumber,
               message: error.message,
               stack: error.stack
@@ -586,7 +586,7 @@ const receiveWebhook = async (req, res) => {
 
         // Save outbound message to DB
         const outboundMsg = await Message.create({
-          shopId: tenant.shopId,
+          businessId: tenant.businessId,
           customerId: customer._id,
           customerNumber,
           direction: 'outbound',
@@ -599,7 +599,7 @@ const receiveWebhook = async (req, res) => {
 
         // Queue outbound message via addToWhatsappQueue
         const outboundJobData = {
-          shopId: tenant.shopId,
+          businessId: tenant.businessId,
           phoneNumberId: tenant.phoneNumberId,
           encryptedAccessToken: tenant.accessToken,
           to: customerNumber,
@@ -616,13 +616,13 @@ const receiveWebhook = async (req, res) => {
         await addToWhatsappQueue(outboundJobData);
 
         // Increment outbound usage (fire and forget)
-        usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+        usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
           logger.error('Error incrementing outbound usage:', err)
         );
 
         // Emit socket event
         try {
-          socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+          socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
             customer,
             message: outboundMsg,
             customerNumber
@@ -639,18 +639,18 @@ const receiveWebhook = async (req, res) => {
     // real rule keywords still take priority over this).
     const normalizedText = (messageText || '').trim().toLowerCase();
     if (GREETING_KEYWORDS.has(normalizedText)) {
-      const shopDoc = await Shop.findById(tenant.shopId)
+      const businessDoc = await Business.findById(tenant.businessId)
         .select('welcomeMessage isMenuEnabled menuItems')
         .lean();
 
-      const hasMenu = !!(shopDoc?.isMenuEnabled && shopDoc.menuItems?.length > 0);
+      const hasMenu = !!(businessDoc?.isMenuEnabled && businessDoc.menuItems?.length > 0);
 
-      if (shopDoc && (shopDoc.welcomeMessage || hasMenu)) {
-        let greetingReplyText = shopDoc.welcomeMessage || '';
+      if (businessDoc && (businessDoc.welcomeMessage || hasMenu)) {
+        let greetingReplyText = businessDoc.welcomeMessage || '';
         let menuListOptions = [];
 
         if (hasMenu) {
-          menuListOptions = await buildMenuListOptions(shopDoc.menuItems);
+          menuListOptions = await buildMenuListOptions(businessDoc.menuItems);
 
           if (!greetingReplyText) {
             greetingReplyText = 'How can we help you today?';
@@ -659,7 +659,7 @@ const receiveWebhook = async (req, res) => {
 
         // Save outbound message
         const greetingOutboundMsg = await Message.create({
-          shopId: tenant.shopId,
+          businessId: tenant.businessId,
           customerId: customer._id,
           customerNumber,
           direction: 'outbound',
@@ -671,7 +671,7 @@ const receiveWebhook = async (req, res) => {
 
         // Queue outbound message the same way Step 16 does
         const greetingJobData = {
-          shopId: tenant.shopId,
+          businessId: tenant.businessId,
           phoneNumberId: tenant.phoneNumberId,
           encryptedAccessToken: tenant.accessToken,
           to: customerNumber,
@@ -684,13 +684,13 @@ const receiveWebhook = async (req, res) => {
         await addToWhatsappQueue(greetingJobData);
 
         // Increment outbound usage (fire and forget)
-        usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+        usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
           logger.error('Error incrementing outbound usage:', err)
         );
 
         // Emit socket event
         try {
-          socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+          socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
             customer,
             message: greetingOutboundMsg,
             customerNumber
@@ -699,19 +699,19 @@ const receiveWebhook = async (req, res) => {
           logger.error('Error emitting new_message socket event for greeting:', socketError);
         }
 
-        logger.info(`Sent welcome message for shop ${tenant.shopId}, customer ${customerNumber}`);
+        logger.info(`Sent welcome message for business ${tenant.businessId}, customer ${customerNumber}`);
         return; // Do not run rule matching or fallback
       }
     }
 
     // Step 13 - Run rule matching
-    const matchedRule = await chatbotService.findMatchingRule(tenant.shopId, messageText);
+    const matchedRule = await chatbotService.findMatchingRule(tenant.businessId, messageText);
 
     // Step 14 — Prepare reply based on rule type
     let replyText = null;
     let triggeredRuleId = null;
     let bookingField = null; // set when booking_trigger fires, for interactive rendering below
-    let fallbackMenuListOptions = null; // set when no rule matched and shop has an enabled menu
+    let fallbackMenuListOptions = null; // set when no rule matched and business has an enabled menu
 
     if (matchedRule) {
       triggeredRuleId = matchedRule._id;
@@ -723,7 +723,7 @@ const receiveWebhook = async (req, res) => {
       } else if (matchedRule.replyType === 'booking_trigger') {
         // Start booking flow — ask first question
         const firstField = await bookingService.startBookingSession(
-          tenant.shopId,
+          tenant.businessId,
           customerNumber,
           matchedRule._id
         );
@@ -734,13 +734,13 @@ const receiveWebhook = async (req, res) => {
         replyText = matchedRule.reply || 'Please complete your payment.';
       }
     } else {
-      // No rule matched — try an AI-generated fallback (opt-in per shop),
+      // No rule matched — try an AI-generated fallback (opt-in per business),
       // falling back to the static reply on any failure or timeout.
       let smartReply = null;
       if (tenant.enableSmartFallback) {
         try {
           smartReply = await Promise.race([
-            smartFallbackService.getSmartFallbackReply(tenant.shopId, messageText),
+            smartFallbackService.getSmartFallbackReply(tenant.businessId, messageText),
             new Promise((resolve) => setTimeout(() => resolve(null), 4000))
           ]);
         } catch (smartFallbackError) {
@@ -751,23 +751,23 @@ const receiveWebhook = async (req, res) => {
 
       replyText = smartReply || tenant.fallbackReply || 'Thank you for your message. We will get back to you soon.';
 
-      // Attach the numbered menu (if the shop has one enabled) regardless of
+      // Attach the numbered menu (if the business has one enabled) regardless of
       // whether replyText above came from the AI smart fallback or the
       // static fallbackReply — gives the customer a way to reach a real
       // rule instead of a dead-end message.
-      const fallbackShopDoc = await Shop.findById(tenant.shopId)
+      const fallbackBusinessDoc = await Business.findById(tenant.businessId)
         .select('isMenuEnabled menuItems')
         .lean();
-      const fallbackHasMenu = !!(fallbackShopDoc?.isMenuEnabled && fallbackShopDoc.menuItems?.length > 0);
+      const fallbackHasMenu = !!(fallbackBusinessDoc?.isMenuEnabled && fallbackBusinessDoc.menuItems?.length > 0);
 
       if (fallbackHasMenu) {
-        fallbackMenuListOptions = await buildMenuListOptions(fallbackShopDoc.menuItems);
+        fallbackMenuListOptions = await buildMenuListOptions(fallbackBusinessDoc.menuItems);
       }
     }
 
     // Step 15 - Save outbound message
     const outboundMsg = await Message.create({
-      shopId: tenant.shopId,
+      businessId: tenant.businessId,
       customerId: customer._id,
       customerNumber,
       direction: 'outbound',
@@ -780,7 +780,7 @@ const receiveWebhook = async (req, res) => {
 
     // Step 16 - Queue outbound message
     const outboundJobData = {
-      shopId: tenant.shopId,
+      businessId: tenant.businessId,
       phoneNumberId: tenant.phoneNumberId,
       encryptedAccessToken: tenant.accessToken,
       to: customerNumber,
@@ -804,7 +804,7 @@ const receiveWebhook = async (req, res) => {
 
     // ADD THIS — Emit new_message to Flutter app with full customer object
     try {
-      socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+      socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
         customer,
         message: outboundMsg,
         customerNumber
@@ -814,9 +814,9 @@ const receiveWebhook = async (req, res) => {
     }
 
     // Step 17 - Increment outbound usage (fire and forget)
-    usageService.incrementUsage(tenant.shopId, 'outbound');
+    usageService.incrementUsage(tenant.businessId, 'outbound');
 
-    logger.info(`Processed webhook for shop ${tenant.shopId}, customer ${customerNumber}`);
+    logger.info(`Processed webhook for business ${tenant.businessId}, customer ${customerNumber}`);
 
   } catch (error) {
     logger.error('Error processing webhook:', error);

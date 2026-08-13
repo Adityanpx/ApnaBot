@@ -11,13 +11,13 @@ const serializeRentalPackage = (doc) => {
 
 /**
  * GET /api/rental-packages
- * List all rental packages for shop
+ * List all rental packages for business
  */
 const getRentalPackages = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const rentalPackages = await RentalPackage.find({ shopId })
+    const rentalPackages = await RentalPackage.find({ businessId })
       .populate({
         path: 'vehicleId',
         select: 'customName catalogId',
@@ -40,19 +40,19 @@ const createRentalPackage = async (req, res, next) => {
   try {
     const { vehicleId, label, price, extraKmRate, extraHrRate } = req.body;
     const packageKey = req.body.packageKey || req.body.package;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!vehicleId || !packageKey || price === undefined) {
       return errorResponse(res, 400, 'vehicleId, package, and price are required');
     }
 
-    const vehicle = await Vehicle.findOne({ _id: vehicleId, shopId });
+    const vehicle = await Vehicle.findOne({ _id: vehicleId, businessId });
     if (!vehicle) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
 
     const rentalPackage = await RentalPackage.create({
-      shopId,
+      businessId,
       vehicleId,
       packageKey,
       label,
@@ -75,9 +75,9 @@ const createRentalPackage = async (req, res, next) => {
 const updateRentalPackage = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const rentalPackage = await RentalPackage.findOne({ _id: id, shopId });
+    const rentalPackage = await RentalPackage.findOne({ _id: id, businessId });
     if (!rentalPackage) {
       return errorResponse(res, 404, 'Rental package not found');
     }
@@ -86,7 +86,7 @@ const updateRentalPackage = async (req, res, next) => {
     const packageKey = req.body.packageKey !== undefined ? req.body.packageKey : req.body.package;
 
     if (vehicleId !== undefined) {
-      const vehicle = await Vehicle.findOne({ _id: vehicleId, shopId });
+      const vehicle = await Vehicle.findOne({ _id: vehicleId, businessId });
       if (!vehicle) {
         return errorResponse(res, 404, 'Vehicle not found');
       }
@@ -116,9 +116,9 @@ const updateRentalPackage = async (req, res, next) => {
 const deleteRentalPackage = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const rentalPackage = await RentalPackage.findOne({ _id: id, shopId });
+    const rentalPackage = await RentalPackage.findOne({ _id: id, businessId });
     if (!rentalPackage) {
       return errorResponse(res, 404, 'Rental package not found');
     }

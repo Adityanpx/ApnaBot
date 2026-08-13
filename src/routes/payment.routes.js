@@ -2,14 +2,14 @@ const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/payment.controller');
 const { protect } = require('../middleware/auth.middleware');
-const { requireShop } = require('../middleware/shop.middleware');
+const { requireBusiness } = require('../middleware/business.middleware');
 
 // ─── PUBLIC ROUTE — No auth (Razorpay calls this directly) ───────────────────
 // MUST be declared BEFORE the protect middleware is applied
 router.post('/webhook', paymentController.razorpayWebhook);
 
-// ─── PROTECTED ROUTES — require auth + shop ──────────────────────────────────
-router.use(protect, requireShop);
+// ─── PROTECTED ROUTES — require auth + business ──────────────────────────────────
+router.use(protect, requireBusiness);
 
 // Create Razorpay payment link for a booking
 router.post('/create-razorpay-link', paymentController.createRazorpayLink);

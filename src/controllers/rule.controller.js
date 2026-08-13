@@ -1,6 +1,6 @@
 const Rule = require('../models/Rule');
 const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const Subscription = require('../models/Subscription');
 const { invalidateRulesCache } = require('../services/chatbot.service');
 const r2 = require('../services/r2.service');
@@ -10,15 +10,15 @@ const logger = require('../utils/logger');
 
 /**
  * GET /api/rules
- * List all rules for shop (paginated)
+ * List all rules for business (paginated)
  */
 const getRules = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, isActive } = req.query;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     // Build filter
-    const filter = { shopId };
+    const filter = { businessId };
     if (isActive !== undefined) {
       filter.isActive = isActive === 'true';
     }
@@ -50,7 +50,7 @@ const createRule = async (req, res, next) => {
     const { keyword, matchType = 'contains', replyType = 'text',
             replyImageUrl = null, buttons = [], listOptions = [], hindiAliases = [] } = req.body;
     let { reply } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     // Validate required fields
     if (!keyword) {
@@ -109,23 +109,23 @@ const createRule = async (req, res, next) => {
     const normalizedKeyword = keyword.toLowerCase().trim();
 
     // Check plan rule limit
-    const subscription = await Subscription.findOne({ shopId, status: 'active' }).populate('planId');
+    const subscription = await Subscription.findOne({ businessId, status: 'active' }).populate('planId');
     if (subscription && subscription.planId && subscription.planId.ruleLimit !== -1) {
-      const ruleCount = await Rule.countDocuments({ shopId });
+      const ruleCount = await Rule.countDocuments({ businessId });
       if (ruleCount >= subscription.planId.ruleLimit) {
         return errorResponse(res, 403, 'Rule limit reached for your plan. Please upgrade.');
       }
     }
 
     // Check for duplicate keyword
-    const existingRule = await Rule.findOne({ shopId, keyword: normalizedKeyword });
+    const existingRule = await Rule.findOne({ businessId, keyword: normalizedKeyword });
     if (existingRule) {
       return errorResponse(res, 409, 'A rule with this keyword already exists.');
     }
 
     // Create rule
     const rule = await Rule.create({
-      shopId,
+      businessId,
       keyword: normalizedKeyword,
       matchType,
       reply,
@@ -146,7 +146,7 @@ const createRule = async (req, res, next) => {
     });
 
     // Invalidate cache
-    await invalidateRulesCache(shopId);
+    await invalidateRulesCache(businessId);
 
     return successResponse(res, 201, rule);
   } catch (error) {
@@ -163,10 +163,10 @@ const updateRule = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { keyword, matchType, reply, replyType, isActive, replyImageUrl, buttons, listOptions, hindiAliases } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     // Find rule
-    const rule = await Rule.findOne({ _id: id, shopId });
+    const rule = await Rule.findOne({ _id: id, businessId });
     if (!rule) {
       return errorResponse(res, 404, 'Rule not found');
     }
@@ -222,7 +222,7 @@ const updateRule = async (req, res, next) => {
     if (keyword) {
       const normalizedKeyword = keyword.toLowerCase().trim();
       const existingRule = await Rule.findOne({
-        shopId,
+        businessId,
         keyword: normalizedKeyword,
         _id: { $ne: id }
       });
@@ -258,7 +258,7 @@ const updateRule = async (req, res, next) => {
     await rule.save();
 
     // Invalidate cache
-    await invalidateRulesCache(shopId);
+    await invalidateRulesCache(businessId);
 
     return successResponse(res, 200, rule);
   } catch (error) {
@@ -274,10 +274,10 @@ const updateRule = async (req, res, next) => {
 const deleteRule = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     // Find rule
-    const rule = await Rule.findOne({ _id: id, shopId });
+    const rule = await Rule.findOne({ _id: id, businessId });
     if (!rule) {
       return errorResponse(res, 404, 'Rule not found');
     }
@@ -286,7 +286,7 @@ const deleteRule = async (req, res, next) => {
     await Rule.findByIdAndDelete(id);
 
     // Invalidate cache
-    await invalidateRulesCache(shopId);
+    await invalidateRulesCache(businessId);
 
     return successResponse(res, 200, null, 'Rule deleted successfully');
   } catch (error) {
@@ -302,10 +302,10 @@ const deleteRule = async (req, res, next) => {
 const toggleRule = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     // Find rule
-    const rule = await Rule.findOne({ _id: id, shopId });
+    const rule = await Rule.findOne({ _id: id, businessId });
     if (!rule) {
       return errorResponse(res, 404, 'Rule not found');
     }
@@ -315,7 +315,7 @@ const toggleRule = async (req, res, next) => {
     await rule.save();
 
     // Invalidate cache
-    await invalidateRulesCache(shopId);
+    await invalidateRulesCache(businessId);
 
     return successResponse(res, 200, rule);
   } catch (error) {
@@ -326,20 +326,20 @@ const toggleRule = async (req, res, next) => {
 
 /**
  * GET /api/rules/templates
- * Get default rules for shop's business type
+ * Get default rules for business's category
  */
 const getTemplates = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    // Get shop to find business type
-    const shop = await Shop.findById(shopId);
-    if (!shop) {
-      return errorResponse(res, 404, 'Shop not found');
+    // Get business to find business category
+    const business = await Business.findById(businessId);
+    if (!business) {
+      return errorResponse(res, 404, 'Business not found');
     }
 
     // Find template
-    const template = await BusinessTypeTemplate.findOne({ businessType: shop.businessType });
+    const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
     if (!template) {
       return successResponse(res, 200, { defaultRules: [], bookingFields: [] });
     }
@@ -361,32 +361,32 @@ const getTemplates = async (req, res, next) => {
 const bulkImportRules = async (req, res, next) => {
   try {
     const { replaceExisting = false } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    // Get shop to find business type
-    const shop = await Shop.findById(shopId);
-    if (!shop) {
-      return errorResponse(res, 404, 'Shop not found');
+    // Get business to find business category
+    const business = await Business.findById(businessId);
+    if (!business) {
+      return errorResponse(res, 404, 'Business not found');
     }
 
     // Find template
-    const template = await BusinessTypeTemplate.findOne({ businessType: shop.businessType });
+    const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
     if (!template || !template.defaultRules) {
       return errorResponse(res, 404, 'No template found for this business type');
     }
 
     // If replaceExisting, delete all existing rules
     if (replaceExisting) {
-      await Rule.deleteMany({ shopId });
+      await Rule.deleteMany({ businessId });
     }
 
     // Import rules that don't already exist
     let createdCount = 0;
     for (const rule of template.defaultRules) {
-      const existingRule = await Rule.findOne({ shopId, keyword: rule.keyword });
+      const existingRule = await Rule.findOne({ businessId, keyword: rule.keyword });
       if (!existingRule) {
         await Rule.create({
-          shopId,
+          businessId,
           keyword: rule.keyword,
           matchType: rule.matchType || 'contains',
           reply: rule.reply || '',
@@ -399,7 +399,7 @@ const bulkImportRules = async (req, res, next) => {
     }
 
     // Invalidate cache
-    await invalidateRulesCache(shopId);
+    await invalidateRulesCache(businessId);
 
     return successResponse(res, 200, { count: createdCount });
   } catch (error) {
@@ -418,15 +418,15 @@ const uploadRuleImage = async (req, res, next) => {
       return errorResponse(res, 400, 'No image provided');
     }
 
-    const shopId = req.user.shopId;
-    if (!shopId) {
-      return errorResponse(res, 404, 'No shop found');
+    const businessId = req.user.businessId;
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
     }
 
     const result = await r2.uploadImage(
       req.file.buffer,
       'rule-images',
-      `rule-${shopId}-${Date.now()}`,
+      `rule-${businessId}-${Date.now()}`,
       req.file.mimetype
     );
 

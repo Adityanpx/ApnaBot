@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/role.middleware');
-const { requireShop } = require('../middleware/shop.middleware');
+const { requireBusiness } = require('../middleware/business.middleware');
 const {
   getConversations,
   getChatHistory,
@@ -12,7 +12,7 @@ const {
   sendMessage
 } = require('../controllers/message.controller');
 
-router.use(protect, requireShop);
+router.use(protect, requireBusiness);
 
 // IMPORTANT: /send must be declared BEFORE /:customerId
 // otherwise Express treats the string 'send' as a customerId param

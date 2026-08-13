@@ -2,32 +2,32 @@ const express = require('express');
 const router = express.Router();
 const bookingController = require('../controllers/booking.controller');
 const { protect } = require('../middleware/auth.middleware');
-const { requireShop } = require('../middleware/shop.middleware');
+const { requireBusiness } = require('../middleware/business.middleware');
 const { requireRole } = require('../middleware/role.middleware');
 
-// All routes: protect, requireShop
+// All routes: protect, requireBusiness
 // Owner and staff can access all booking routes
 // Only owner can delete
 
 // GET /api/bookings - List bookings with filters
-router.get('/', protect, requireShop, bookingController.getBookings);
+router.get('/', protect, requireBusiness, bookingController.getBookings);
 
 // GET /preview-fields - Read-only booking field sequence preview (must be before /:id)
-router.get('/preview-fields', protect, requireShop, bookingController.getBookingFieldsPreview);
+router.get('/preview-fields', protect, requireBusiness, bookingController.getBookingFieldsPreview);
 
 // GET /preview-vehicle-options - Read-only vehicle carousel preview (must be before /:id)
-router.get('/preview-vehicle-options', protect, requireShop, bookingController.getVehicleCarouselPreview);
+router.get('/preview-vehicle-options', protect, requireBusiness, bookingController.getVehicleCarouselPreview);
 
 // PUT /:id/status - Update booking status (must be before /:id)
-router.put('/:id/status', protect, requireShop, bookingController.updateBookingStatus);
+router.put('/:id/status', protect, requireBusiness, bookingController.updateBookingStatus);
 
 // PUT /:id/notes - Add or update internal notes (must be before /:id)
-router.put('/:id/notes', protect, requireShop, bookingController.addBookingNotes);
+router.put('/:id/notes', protect, requireBusiness, bookingController.addBookingNotes);
 
 // GET /:id - Get single booking detail
-router.get('/:id', protect, requireShop, bookingController.getBookingById);
+router.get('/:id', protect, requireBusiness, bookingController.getBookingById);
 
 // DELETE /:id - Delete booking (owner only)
-router.delete('/:id', protect, requireShop, requireRole('owner'), bookingController.deleteBooking);
+router.delete('/:id', protect, requireBusiness, requireRole('owner'), bookingController.deleteBooking);
 
 module.exports = router;

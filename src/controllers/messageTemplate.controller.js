@@ -1,6 +1,6 @@
 const axios = require('axios');
 const MessageTemplate = require('../models/MessageTemplate');
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const { decrypt } = require('../utils/crypto');
 const { META_API_BASE } = require('../services/whatsapp.service');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -17,13 +17,13 @@ const countTemplateVariables = (bodyText) => {
 
 /**
  * GET /api/message-templates
- * List shop's message templates
+ * List business's message templates
  */
 const getMessageTemplates = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const templates = await MessageTemplate.find({ shopId }).sort({ createdAt: -1 });
+    const templates = await MessageTemplate.find({ businessId }).sort({ createdAt: -1 });
 
     return successResponse(res, 200, { templates });
   } catch (error) {
@@ -38,7 +38,7 @@ const getMessageTemplates = async (req, res, next) => {
  */
 const createMessageTemplate = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
     const { name, category, language, bodyText } = req.body;
 
     if (!name || !bodyText) {
@@ -50,7 +50,7 @@ const createMessageTemplate = async (req, res, next) => {
     }
 
     const template = await MessageTemplate.create({
-      shopId,
+      businessId,
       name,
       category: category || 'MARKETING',
       language: language || 'en',
@@ -72,9 +72,9 @@ const createMessageTemplate = async (req, res, next) => {
 const submitMessageTemplate = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const template = await MessageTemplate.findOne({ _id: id, shopId });
+    const template = await MessageTemplate.findOne({ _id: id, businessId });
     if (!template) {
       return errorResponse(res, 404, 'Message template not found');
     }
@@ -83,17 +83,17 @@ const submitMessageTemplate = async (req, res, next) => {
       return errorResponse(res, 400, 'Only draft or rejected templates can be submitted');
     }
 
-    const shop = await Shop.findById(shopId);
-    if (!shop || !shop.wabaId || !shop.accessToken) {
-      return errorResponse(res, 400, 'Shop is not connected to WhatsApp. Please connect WhatsApp first.');
+    const business = await Business.findById(businessId);
+    if (!business || !business.wabaId || !business.accessToken) {
+      return errorResponse(res, 400, 'Business is not connected to WhatsApp. Please connect WhatsApp first.');
     }
 
-    const accessToken = decrypt(shop.accessToken);
+    const accessToken = decrypt(business.accessToken);
 
     let metaResponse;
     try {
       const response = await axios.post(
-        `${META_API_BASE}/${shop.wabaId}/message_templates`,
+        `${META_API_BASE}/${business.wabaId}/message_templates`,
         {
           name: template.name,
           category: template.category,
@@ -112,7 +112,7 @@ const submitMessageTemplate = async (req, res, next) => {
       metaResponse = response.data;
     } catch (error) {
       logger.error('Error submitting message template to Meta:', {
-        shopId,
+        businessId,
         templateId: id,
         error: error.response?.data || error.message
       });
@@ -125,7 +125,7 @@ const submitMessageTemplate = async (req, res, next) => {
     await template.save();
 
     logger.info('Message template submitted to Meta successfully', {
-      shopId,
+      businessId,
       templateId: id,
       metaTemplateId: metaResponse.id
     });
@@ -146,9 +146,9 @@ const submitMessageTemplate = async (req, res, next) => {
 const deleteMessageTemplate = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const template = await MessageTemplate.findOne({ _id: id, shopId });
+    const template = await MessageTemplate.findOne({ _id: id, businessId });
     if (!template) {
       return errorResponse(res, 404, 'Message template not found');
     }

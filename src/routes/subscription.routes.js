@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/role.middleware');
-const { requireShop } = require('../middleware/shop.middleware');
+const { requireBusiness } = require('../middleware/business.middleware');
 const {
   getCurrentSubscription,
   getPlans,
@@ -15,11 +15,11 @@ const {
 
 router.use(protect);
 
-// Plan listing is public (no shop required — needed during onboarding)
+// Plan listing is public (no business required — needed during onboarding)
 router.get('/plans', getPlans);
 
-// All below require shop + owner role
-router.use(requireShop, requireRole('owner', 'superadmin'));
+// All below require business + owner role
+router.use(requireBusiness, requireRole('owner', 'superadmin'));
 
 router.get('/',        getCurrentSubscription);
 router.post('/create', createSubscriptionOrder);

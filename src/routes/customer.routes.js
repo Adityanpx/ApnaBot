@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/role.middleware');
-const { requireShop } = require('../middleware/shop.middleware');
+const { requireBusiness } = require('../middleware/business.middleware');
 const {
   getCustomers,
   getCustomerById,
@@ -13,7 +13,7 @@ const {
   unblockCustomer
 } = require('../controllers/customer.controller');
 
-router.use(protect, requireShop);
+router.use(protect, requireBusiness);
 
 router.get('/',             requireRole('owner', 'staff', 'superadmin'), getCustomers);
 router.get('/:id',          requireRole('owner', 'staff', 'superadmin'), getCustomerById);

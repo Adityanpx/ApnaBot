@@ -13,7 +13,7 @@ const socketService = require('../services/socket.service');
 const createRazorpayLink = async (req, res, next) => {
   try {
     const { bookingId, amount, description } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!amount) {
       return errorResponse(res, 400, 'Amount is required');
@@ -27,7 +27,7 @@ const createRazorpayLink = async (req, res, next) => {
         return errorResponse(res, 400, 'Invalid Booking ID format');
       }
 
-      booking = await Booking.findOne({ _id: bookingId, shopId });
+      booking = await Booking.findOne({ _id: bookingId, businessId });
 
       if (!booking) {
         return errorResponse(res, 404, 'Booking not found');
@@ -51,7 +51,7 @@ const createRazorpayLink = async (req, res, next) => {
     );
 
     // Emit socket event
-    socketService.emitToShop(shopId, 'payment_link_created', {
+    socketService.emitToBusiness(businessId, 'payment_link_created', {
       bookingId,
       paymentLink: paymentLink.short_url
     });
@@ -76,7 +76,7 @@ const createRazorpayLink = async (req, res, next) => {
 const createUPILink = async (req, res, next) => {
   try {
     const { bookingId, amount, vpa, payeeName } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!amount || !vpa || !payeeName) {
       return errorResponse(res, 400, 'Amount, VPA, and payee name are required');
@@ -89,7 +89,7 @@ const createUPILink = async (req, res, next) => {
         return errorResponse(res, 400, 'Invalid Booking ID format');
       }
 
-      booking = await Booking.findOne({ _id: bookingId, shopId });
+      booking = await Booking.findOne({ _id: bookingId, businessId });
 
       if (!booking) {
         return errorResponse(res, 404, 'Booking not found');
@@ -105,7 +105,7 @@ const createUPILink = async (req, res, next) => {
     );
 
     // Emit socket event
-    socketService.emitToShop(shopId, 'upi_link_created', {
+    socketService.emitToBusiness(businessId, 'upi_link_created', {
       bookingId,
       upiLink: upiDetails.upiLink
     });
@@ -132,7 +132,7 @@ const createUPILink = async (req, res, next) => {
 const sendToCustomer = async (req, res, next) => {
   try {
     const { bookingId, paymentLink } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!paymentLink) {
       return errorResponse(res, 400, 'Payment link is required');
@@ -146,7 +146,7 @@ const sendToCustomer = async (req, res, next) => {
       if (!mongoose.Types.ObjectId.isValid(bookingId)) {
         return errorResponse(res, 400, 'Invalid Booking ID format');
       }
-      const booking = await Booking.findOne({ _id: bookingId, shopId });
+      const booking = await Booking.findOne({ _id: bookingId, businessId });
       if (!booking) {
         return errorResponse(res, 404, 'Booking not found');
       }
@@ -160,22 +160,22 @@ const sendToCustomer = async (req, res, next) => {
       return errorResponse(res, 400, 'Could not determine customer phone number');
     }
 
-    // Load shop to get WhatsApp credentials — REQUIRED for queue
-    const Shop = require('../models/Shop');
-    const shop = await Shop.findById(shopId);
-    if (!shop || !shop.isWhatsappConnected || !shop.phoneNumberId) {
-      return errorResponse(res, 400, 'WhatsApp is not connected to this shop');
+    // Load business to get WhatsApp credentials — REQUIRED for queue
+    const Business = require('../models/Business');
+    const business = await Business.findById(businessId);
+    if (!business || !business.isWhatsappConnected || !business.phoneNumberId) {
+      return errorResponse(res, 400, 'WhatsApp is not connected to this business');
     }
 
     const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 
     const message = `Your payment link: ${paymentLink}\n\nPlease complete your payment to confirm your booking.`;
 
-    // Queue with all required fields including shop WhatsApp credentials
+    // Queue with all required fields including business WhatsApp credentials
     await addToWhatsappQueue({
-      shopId: shopId.toString(),
-      phoneNumberId: shop.phoneNumberId,
-      encryptedAccessToken: shop.accessToken,
+      businessId: businessId.toString(),
+      phoneNumberId: business.phoneNumberId,
+      encryptedAccessToken: business.accessToken,
       to: customerPhone,
       message,
       type: 'text'
@@ -191,16 +191,16 @@ const sendToCustomer = async (req, res, next) => {
 };
 
 /**
- * Get payment history for a shop
+ * Get payment history for a business
  * GET /api/payments/history
  */
 const getPaymentHistory = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
     const { page = 1, limit = 20, status, startDate, endDate } = req.query;
 
     // Build filter
-    const filter = { shopId };
+    const filter = { businessId };
     
     // Add payment status filter
     if (status) {
@@ -282,10 +282,10 @@ const razorpayWebhook = async (req, res, next) => {
 const getPaymentStatus = async (req, res, next) => {
   try {
     const { bookingId } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     // Find booking and verify ownership
-    const booking = await Booking.findOne({ _id: bookingId, shopId });
+    const booking = await Booking.findOne({ _id: bookingId, businessId });
 
     if (!booking) {
       return errorResponse(res, 404, 'Booking not found');

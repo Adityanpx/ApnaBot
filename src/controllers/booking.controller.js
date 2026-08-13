@@ -8,14 +8,14 @@ const bookingService = require('../services/booking.service');
 
 /**
  * GET /api/bookings
- * List bookings for shop with filters
+ * List bookings for business with filters
  */
 const getBookings = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, status, date, customerNumber } = req.query;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const filter = { shopId };
+    const filter = { businessId };
 
     if (status) {
       filter.status = status;
@@ -58,9 +58,9 @@ const getBookings = async (req, res, next) => {
 const getBookingById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const booking = await Booking.findOne({ _id: id, shopId }).populate('customerId');
+    const booking = await Booking.findOne({ _id: id, businessId }).populate('customerId');
 
     if (!booking) {
       return errorResponse(res, 404, 'Booking not found');
@@ -81,14 +81,14 @@ const updateBookingStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     const validStatuses = ['pending', 'confirmed', 'completed', 'cancelled'];
     if (!status || !validStatuses.includes(status)) {
       return errorResponse(res, 400, 'Invalid status. Must be one of: pending, confirmed, completed, cancelled');
     }
 
-    const booking = await Booking.findOne({ _id: id, shopId });
+    const booking = await Booking.findOne({ _id: id, businessId });
 
     if (!booking) {
       return errorResponse(res, 404, 'Booking not found');
@@ -98,7 +98,7 @@ const updateBookingStatus = async (req, res, next) => {
     await booking.save();
 
     try {
-      socketService.emitToShop(shopId.toString(), 'booking_updated', {
+      socketService.emitToBusiness(businessId.toString(), 'booking_updated', {
         bookingId: id,
         status
       });
@@ -121,13 +121,13 @@ const addBookingNotes = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { notes } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!notes || typeof notes !== 'string') {
       return errorResponse(res, 400, 'Notes is required');
     }
 
-    const booking = await Booking.findOne({ _id: id, shopId });
+    const booking = await Booking.findOne({ _id: id, businessId });
 
     if (!booking) {
       return errorResponse(res, 404, 'Booking not found');
@@ -152,9 +152,9 @@ const addBookingNotes = async (req, res, next) => {
 const deleteBooking = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const booking = await Booking.findOne({ _id: id, shopId });
+    const booking = await Booking.findOne({ _id: id, businessId });
 
     if (!booking) {
       return errorResponse(res, 404, 'Booking not found');
@@ -171,14 +171,14 @@ const deleteBooking = async (req, res, next) => {
 
 /**
  * GET /api/bookings/preview-fields
- * Read-only preview of the booking field sequence for the shop's business
+ * Read-only preview of the booking field sequence for the business's
  * type, for the dashboard's Conversation Preview. No session is created.
  */
 const getBookingFieldsPreview = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const { fields } = await bookingService.getBookingFieldsPreview(shopId);
+    const { fields } = await bookingService.getBookingFieldsPreview(businessId);
 
     return successResponse(res, 200, { fields });
   } catch (error) {
@@ -194,19 +194,19 @@ const getBookingFieldsPreview = async (req, res, next) => {
  */
 const getVehicleCarouselPreview = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
     const { pickupLocation, dropLocation, tripType, source } = req.query;
 
     let previewCreditsRemaining;
     if (source === 'manual_preview') {
-      const credit = await bookingService.checkAndConsumeManualPreviewCredit(shopId);
+      const credit = await bookingService.checkAndConsumeManualPreviewCredit(businessId);
       if (!credit.allowed) {
         return errorResponse(res, 402, "You've used all your free previews this month.", { previewCreditsRemaining: 0 });
       }
       previewCreditsRemaining = credit.remaining;
     }
 
-    const options = await bookingService.getVehicleCarouselPreview(shopId, pickupLocation, dropLocation, tripType);
+    const options = await bookingService.getVehicleCarouselPreview(businessId, pickupLocation, dropLocation, tripType);
 
     const data = { options };
     if (previewCreditsRemaining !== undefined) {

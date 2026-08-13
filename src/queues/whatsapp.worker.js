@@ -14,7 +14,7 @@ const connection = {
 };
 
 const worker = new Worker('whatsapp-outbound', async (job) => {
-  const { shopId, phoneNumberId, encryptedAccessToken, to, message, messageId,
+  const { businessId, phoneNumberId, encryptedAccessToken, to, message, messageId,
           type = 'text', imageUrl = null, buttons = [], listOptions = [],
           interactiveButtons = null, interactiveList = null, listButtonLabel = 'Choose' } = job.data;
 
@@ -42,10 +42,10 @@ const worker = new Worker('whatsapp-outbound', async (job) => {
       await Message.findByIdAndUpdate(messageId, { status: 'sent' });
     }
 
-    logger.info(`Message sent successfully to ${to} for shop ${shopId}`);
+    logger.info(`Message sent successfully to ${to} for business ${businessId}`);
     return { success: true };
   } catch (error) {
-    logger.error(`Failed to send message to ${to} for shop ${shopId}:`, {
+    logger.error(`Failed to send message to ${to} for business ${businessId}:`, {
       error: error.message
     });
 

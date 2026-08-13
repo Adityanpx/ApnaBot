@@ -6,14 +6,14 @@ const logger = require('../utils/logger');
 
 /**
  * GET /api/customers
- * List all customers for shop — paginated + searchable by name or number
+ * List all customers for business — paginated + searchable by name or number
  */
 const getCustomers = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, search, isBlocked } = req.query;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const filter = { shopId };
+    const filter = { businessId };
 
     if (search) {
       filter.$or = [
@@ -49,12 +49,12 @@ const getCustomers = async (req, res, next) => {
 const getCustomerById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: id, shopId });
+    const customer = await Customer.findOne({ _id: id, businessId });
     if (!customer) return errorResponse(res, 404, 'Customer not found');
 
-    const messages = await Message.find({ shopId, customerId: id })
+    const messages = await Message.find({ businessId, customerId: id })
       .sort({ createdAt: -1 })
       .limit(50)
       .lean();
@@ -74,9 +74,9 @@ const updateCustomer = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, tags, notes } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: id, shopId });
+    const customer = await Customer.findOne({ _id: id, businessId });
     if (!customer) return errorResponse(res, 404, 'Customer not found');
 
     if (name !== undefined) customer.name = name.trim();
@@ -101,16 +101,16 @@ const updateCustomer = async (req, res, next) => {
 const blockCustomer = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: id, shopId });
+    const customer = await Customer.findOne({ _id: id, businessId });
     if (!customer) return errorResponse(res, 404, 'Customer not found');
     if (customer.isBlocked) return errorResponse(res, 400, 'Customer is already blocked');
 
     customer.isBlocked = true;
     await customer.save();
 
-    logger.info(`Customer ${id} blocked for shop ${shopId}`);
+    logger.info(`Customer ${id} blocked for business ${businessId}`);
     return successResponse(res, 200, customer, 'Customer blocked successfully');
   } catch (error) {
     logger.error('Error in blockCustomer:', error);
@@ -125,16 +125,16 @@ const blockCustomer = async (req, res, next) => {
 const unblockCustomer = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: id, shopId });
+    const customer = await Customer.findOne({ _id: id, businessId });
     if (!customer) return errorResponse(res, 404, 'Customer not found');
     if (!customer.isBlocked) return errorResponse(res, 400, 'Customer is not blocked');
 
     customer.isBlocked = false;
     await customer.save();
 
-    logger.info(`Customer ${id} unblocked for shop ${shopId}`);
+    logger.info(`Customer ${id} unblocked for business ${businessId}`);
     return successResponse(res, 200, customer, 'Customer unblocked successfully');
   } catch (error) {
     logger.error('Error in unblockCustomer:', error);

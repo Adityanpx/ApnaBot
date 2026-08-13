@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/role.middleware');
-const { requireShop } = require('../middleware/shop.middleware');
+const { requireBusiness } = require('../middleware/business.middleware');
 const {
   getStaff,
   inviteStaff,
@@ -14,7 +14,7 @@ const {
 } = require('../controllers/staff.controller');
 
 // All staff management routes — owner only
-router.use(protect, requireShop, requireRole('owner', 'superadmin'));
+router.use(protect, requireBusiness, requireRole('owner', 'superadmin'));
 
 router.get('/',                  getStaff);
 router.post('/invite',           inviteStaff);

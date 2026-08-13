@@ -8,13 +8,13 @@ const logger = require('../utils/logger');
 
 /**
  * GET /api/staff
- * List all staff members in the shop
+ * List all staff members in the business
  */
 const getStaff = async (req, res, next) => {
   try {
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const staff = await User.find({ shopId, role: 'staff' })
+    const staff = await User.find({ businessId, role: 'staff' })
       .select('-passwordHash')
       .sort({ createdAt: -1 });
 
@@ -27,13 +27,13 @@ const getStaff = async (req, res, next) => {
 
 /**
  * POST /api/staff/invite
- * Create a staff account under this shop.
+ * Create a staff account under this business.
  * Validates plan staff limit before creating.
  */
 const inviteStaff = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!name || !email || !password) {
       return errorResponse(res, 400, 'Name, email, and password are required');
@@ -43,7 +43,7 @@ const inviteStaff = async (req, res, next) => {
     }
 
     // Check plan allows staff
-    const subscription = await Subscription.findOne({ shopId, status: 'active' })
+    const subscription = await Subscription.findOne({ businessId, status: 'active' })
       .populate('planId');
 
     if (!subscription) {
@@ -54,7 +54,7 @@ const inviteStaff = async (req, res, next) => {
     }
 
     const maxStaff = subscription.planId.maxStaff || 0;
-    const currentCount = await User.countDocuments({ shopId, role: 'staff', isActive: true });
+    const currentCount = await User.countDocuments({ businessId, role: 'staff', isActive: true });
 
     if (currentCount >= maxStaff) {
       return errorResponse(res, 403, `Staff limit reached (${maxStaff}). Please upgrade your plan.`);
@@ -69,7 +69,7 @@ const inviteStaff = async (req, res, next) => {
       email: email.toLowerCase(),
       passwordHash: password, // pre-save hook in User model hashes this
       role: 'staff',
-      shopId,
+      businessId,
       permissions: buildPermissions('staff'),
       isActive: true
     });
@@ -78,7 +78,7 @@ const inviteStaff = async (req, res, next) => {
     const responseUser = staffUser.toObject();
     delete responseUser.passwordHash;
 
-    logger.info(`Staff ${staffUser._id} created for shop ${shopId}`);
+    logger.info(`Staff ${staffUser._id} created for business ${businessId}`);
     return successResponse(res, 201, responseUser, 'Staff member added successfully');
   } catch (error) {
     logger.error('Error in inviteStaff:', error);
@@ -95,13 +95,13 @@ const updatePermissions = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { permissions } = req.body;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
     if (!permissions || typeof permissions !== 'object') {
       return errorResponse(res, 400, 'permissions object is required');
     }
 
-    const staffMember = await User.findOne({ _id: id, shopId, role: 'staff' });
+    const staffMember = await User.findOne({ _id: id, businessId, role: 'staff' });
     if (!staffMember) return errorResponse(res, 404, 'Staff member not found');
 
     // Only these 3 flags are adjustable for staff
@@ -135,14 +135,14 @@ const updatePermissions = async (req, res, next) => {
 const removeStaff = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const staffMember = await User.findOne({ _id: id, shopId, role: 'staff' });
+    const staffMember = await User.findOne({ _id: id, businessId, role: 'staff' });
     if (!staffMember) return errorResponse(res, 404, 'Staff member not found');
 
     await User.findByIdAndDelete(id);
 
-    logger.info(`Staff ${id} removed from shop ${shopId}`);
+    logger.info(`Staff ${id} removed from business ${businessId}`);
     return successResponse(res, 200, null, 'Staff member removed successfully');
   } catch (error) {
     logger.error('Error in removeStaff:', error);
@@ -157,16 +157,16 @@ const removeStaff = async (req, res, next) => {
 const toggleStaff = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const shopId = req.user.shopId;
+    const businessId = req.user.businessId;
 
-    const staffMember = await User.findOne({ _id: id, shopId, role: 'staff' });
+    const staffMember = await User.findOne({ _id: id, businessId, role: 'staff' });
     if (!staffMember) return errorResponse(res, 404, 'Staff member not found');
 
     staffMember.isActive = !staffMember.isActive;
     await staffMember.save();
 
     const action = staffMember.isActive ? 'activated' : 'deactivated';
-    logger.info(`Staff ${id} ${action} for shop ${shopId}`);
+    logger.info(`Staff ${id} ${action} for business ${businessId}`);
 
     const responseUser = staffMember.toObject();
     delete responseUser.passwordHash;
