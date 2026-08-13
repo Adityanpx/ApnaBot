@@ -30,7 +30,9 @@ const findMatchingVehicleOptions = async (shopId, pickupLocation, dropLocation, 
   try {
     const routeFares = await RouteFare.find({ shopId, fromCity, toCity, tripType: mappedTripType, isActive: true })
       .populate({ path: 'vehicleId', match: { isActive: true }, populate: { path: 'catalogId', select: 'name photoUrl seats' } });
-    return routeFares.filter(rf => rf.vehicleId);
+    const result = routeFares.filter(rf => rf.vehicleId);
+    logger.info('Route fare lookup', { shopId, fromCity, toCity, tripType: mappedTripType, matchCount: result.length });
+    return result;
   } catch (error) {
     logger.error('Error finding matching vehicle options:', error);
     return [];
@@ -67,6 +69,7 @@ const buildVehicleCarouselOptions = (routeFares) => routeFares.map((rf, idx) => 
 const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocation, tripType, numberOfDays) => {
   const shop = await Shop.findById(shopId).select('enableDistanceFares roundTripPerDayKm roundTripDriverDaEnabled roundTripDriverDaAmount');
   if (!shop || shop.enableDistanceFares !== true) {
+    logger.warn('Distance fares lookup skipped: not enabled or shop not found', { shopId, enableDistanceFares: shop?.enableDistanceFares });
     return [];
   }
 
@@ -81,7 +84,10 @@ const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocat
   } else {
     const fromCity = (pickupLocation || '').toLowerCase().trim();
     const toCity = (dropLocation || '').toLowerCase().trim();
-    if (!fromCity || !toCity) return [];
+    if (!fromCity || !toCity) {
+      logger.warn('Distance fares lookup skipped: empty pickup/drop location', { shopId, pickupLocation, dropLocation });
+      return [];
+    }
 
     const cacheKey = `distance:${shopId}:${fromCity}:${toCity}`;
     let oneWayDistanceKm = null;
@@ -97,6 +103,7 @@ const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocat
     if (oneWayDistanceKm === null) {
       oneWayDistanceKm = await distanceMatrixService.getDistanceKm(pickupLocation, dropLocation);
       if (oneWayDistanceKm === null) {
+        logger.warn('Distance fares lookup skipped: distance lookup failed', { shopId, fromCity, toCity });
         return [];
       }
       try {
@@ -119,6 +126,7 @@ const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocat
   }
 
   if (vehicles.length === 0) {
+    logger.warn('Distance fares lookup skipped: no active/priced vehicles found', { shopId });
     return [];
   }
 
@@ -126,7 +134,7 @@ const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocat
     ? shop.roundTripDriverDaAmount * days
     : 0;
 
-  return vehicles.map((vehicle, idx) => {
+  const options = vehicles.map((vehicle, idx) => {
     const baseFare = Math.round((distanceKm * vehicle.perKmRate) / 10) * 10;
     const option = {
       index: idx,
@@ -146,6 +154,9 @@ const findDistanceBasedVehicleOptions = async (shopId, pickupLocation, dropLocat
     }
     return option;
   });
+
+  logger.info('Distance-based fares computed', { shopId, fromCity: pickupLocation, toCity: dropLocation, distanceKm, vehicleCount: vehicles.length });
+  return options;
 };
 
 /**
@@ -238,18 +249,24 @@ const getCarouselOptionsForSession = async (shopId, session) => {
       // No RentalPackage configured for this shop — skip pricing entirely
       // and let the generic vehicleType list field stand, same as the
       // "no route fare exists" case.
+      logger.info('Carousel options resolved', { shopId, tripType: mappedTripType, branch: 'local_rental_unconfigured', optionCount: 0 });
       return [];
     }
     const packageKey = session.rentalPackageKeyByLabel && session.rentalPackageKeyByLabel[session.collected.rentalPackage];
-    return packageKey ? findRentalVehicleCarouselOptions(shopId, packageKey) : [];
+    const result = packageKey ? await findRentalVehicleCarouselOptions(shopId, packageKey) : [];
+    logger.info('Carousel options resolved', { shopId, tripType: mappedTripType, branch: 'local_rental', optionCount: result.length });
+    return result;
   }
-  return findBestVehicleCarouselOptions(
+  const result = await findBestVehicleCarouselOptions(
     shopId,
     session.collected.pickupLocation,
     session.collected.dropLocation,
     session.collected.tripType,
     session.collected.numberOfDays
   );
+  const branch = result.length > 0 ? result[0].source : 'none';
+  logger.info('Carousel options resolved', { shopId, tripType: mappedTripType, branch, optionCount: result.length });
+  return result;
 };
 
 /**
