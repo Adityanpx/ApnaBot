@@ -16,6 +16,8 @@ const tripTypeMap = { 'One Way': 'oneway', 'Round Trip': 'round_trip', 'Local Re
 
 const BOOKING_SESSION_TTL = 1800; // 30 minutes in seconds
 
+const FREE_MONTHLY_PREVIEW_CREDITS = 20;
+
 /**
  * Find active route-fare based vehicle options for a pickup/drop pair.
  * @returns {Promise<Array>} Populated RouteFare docs (vehicleId + catalogId populated), or [] if none/invalid input
@@ -759,6 +761,69 @@ const getVehicleCarouselPreview = async (shopId, pickupLocation, dropLocation, t
   return findBestVehicleCarouselOptions(shopId, pickupLocation, dropLocation, tripType);
 };
 
+/**
+ * First-of-next-month, local midnight, relative to the given date.
+ */
+const getNextMonthStart = (from) => {
+  return new Date(from.getFullYear(), from.getMonth() + 1, 1, 0, 0, 0, 0);
+};
+
+/**
+ * Read-only preview-credit status for a shop (remaining count + next reset
+ * date), for display on GET /shop. Mirrors the lazy-reset math in
+ * checkAndConsumeManualPreviewCredit but never mutates/persists, so it's
+ * safe to call on every GET.
+ * @param {Object} shop - a Shop doc/object with previewCreditsUsed, previewCreditsResetAt, previewCreditsPurchased
+ * @returns {{ remaining: number, resetAt: Date }}
+ */
+const getPreviewCreditsStatus = (shop) => {
+  const now = new Date();
+  const isDue = !shop.previewCreditsResetAt || now >= shop.previewCreditsResetAt;
+  const used = isDue ? 0 : shop.previewCreditsUsed;
+  const resetAt = isDue ? getNextMonthStart(now) : shop.previewCreditsResetAt;
+  const remaining = Math.max(0, FREE_MONTHLY_PREVIEW_CREDITS - used) + (shop.previewCreditsPurchased || 0);
+  return { remaining, resetAt };
+};
+
+/**
+ * Gate + consume one manual preview credit for the dashboard's Fleet page
+ * "Preview as customer" button. Free monthly quota (FREE_MONTHLY_PREVIEW_CREDITS)
+ * lazily resets on the first call past previewCreditsResetAt; purchased
+ * credits (previewCreditsPurchased) only start decrementing once the free
+ * quota for the month is exhausted. Self-contained: loads and saves the shop
+ * itself, so callers can invoke it directly.
+ * @param {string} shopId
+ * @returns {Promise<{ allowed: boolean, remaining: number }>}
+ */
+const checkAndConsumeManualPreviewCredit = async (shopId) => {
+  const shop = await Shop.findById(shopId).select('previewCreditsUsed previewCreditsResetAt previewCreditsPurchased');
+  if (!shop) {
+    throw new Error('Shop not found');
+  }
+
+  const now = new Date();
+  if (!shop.previewCreditsResetAt || now >= shop.previewCreditsResetAt) {
+    shop.previewCreditsUsed = 0;
+    shop.previewCreditsResetAt = getNextMonthStart(now);
+  }
+
+  const remaining = Math.max(0, FREE_MONTHLY_PREVIEW_CREDITS - shop.previewCreditsUsed) + shop.previewCreditsPurchased;
+
+  if (remaining <= 0) {
+    await shop.save();
+    return { allowed: false, remaining: 0 };
+  }
+
+  if (shop.previewCreditsUsed < FREE_MONTHLY_PREVIEW_CREDITS) {
+    shop.previewCreditsUsed += 1;
+  } else {
+    shop.previewCreditsPurchased -= 1;
+  }
+
+  await shop.save();
+  return { allowed: true, remaining: remaining - 1 };
+};
+
 module.exports = {
   getBookingSession,
   saveBookingSession,
@@ -767,5 +832,7 @@ module.exports = {
   processBookingStep,
   findMatchingVehicleOptions,
   getBookingFieldsPreview,
-  getVehicleCarouselPreview
+  getVehicleCarouselPreview,
+  getPreviewCreditsStatus,
+  checkAndConsumeManualPreviewCredit
 };

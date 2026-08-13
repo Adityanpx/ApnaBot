@@ -96,6 +96,18 @@ const shopSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  previewCreditsUsed: {
+    type: Number,
+    default: 0
+  },
+  previewCreditsResetAt: {
+    type: Date,
+    default: null
+  },
+  previewCreditsPurchased: {
+    type: Number,
+    default: 0
+  },
   menuItems: {
     type: [{
       number: { type: Number, required: true },

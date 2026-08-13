@@ -2,6 +2,7 @@ const axios = require('axios');
 const shopService = require('../services/shop.service');
 const tenantService = require('../services/tenant.service');
 const subscriptionService = require('../services/subscription.service');
+const bookingService = require('../services/booking.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { generateTokens, saveTokenToRedis } = require('../services/auth.service');
 const logger = require('../utils/logger');
@@ -54,6 +55,10 @@ const getShop = async (req, res, next) => {
     // Remove accessToken from response (never expose it)
     const shopData = shop.toObject();
     delete shopData.accessToken;
+
+    const { remaining, resetAt } = bookingService.getPreviewCreditsStatus(shop);
+    shopData.previewCreditsRemaining = remaining;
+    shopData.previewCreditsResetAt = resetAt;
 
     return successResponse(res, 200, shopData);
   } catch (error) {

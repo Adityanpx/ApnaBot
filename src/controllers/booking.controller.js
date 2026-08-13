@@ -195,11 +195,25 @@ const getBookingFieldsPreview = async (req, res, next) => {
 const getVehicleCarouselPreview = async (req, res, next) => {
   try {
     const shopId = req.user.shopId;
-    const { pickupLocation, dropLocation, tripType } = req.query;
+    const { pickupLocation, dropLocation, tripType, source } = req.query;
+
+    let previewCreditsRemaining;
+    if (source === 'manual_preview') {
+      const credit = await bookingService.checkAndConsumeManualPreviewCredit(shopId);
+      if (!credit.allowed) {
+        return errorResponse(res, 402, "You've used all your free previews this month.", { previewCreditsRemaining: 0 });
+      }
+      previewCreditsRemaining = credit.remaining;
+    }
 
     const options = await bookingService.getVehicleCarouselPreview(shopId, pickupLocation, dropLocation, tripType);
 
-    return successResponse(res, 200, { options });
+    const data = { options };
+    if (previewCreditsRemaining !== undefined) {
+      data.previewCreditsRemaining = previewCreditsRemaining;
+    }
+
+    return successResponse(res, 200, data);
   } catch (error) {
     logger.error('Error fetching vehicle carousel preview:', error);
     next(error);
