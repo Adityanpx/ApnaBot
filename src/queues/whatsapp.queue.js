@@ -29,11 +29,15 @@ const whatsappQueue = new Queue('whatsapp-outbound', {
 let whatsappQueueEventsReady = null;
 const getQueueEvents = () => {
   if (!whatsappQueueEventsReady) {
+    const startedAt = Date.now();
     const queueEvents = new QueueEvents('whatsapp-outbound', { connection });
     queueEvents.on('error', (err) => {
       logger.error('WhatsApp QueueEvents connection error', { error: err.message });
     });
-    whatsappQueueEventsReady = queueEvents.waitUntilReady().then(() => queueEvents);
+    whatsappQueueEventsReady = queueEvents.waitUntilReady().then(() => {
+      logger.info('QueueEvents ready for whatsapp-outbound', { readyMs: Date.now() - startedAt });
+      return queueEvents;
+    });
   }
   return whatsappQueueEventsReady;
 };
@@ -71,20 +75,30 @@ const addToWhatsappQueue = async (jobData) => {
 // rather than hang or throw - the worker will still send it, we just lose
 // the ordering guarantee for that one message.
 const addToWhatsappQueueAndWait = async (jobData) => {
-  const job = await whatsappQueue.add('send-message', jobData);
+  let queueEvents = null;
   try {
-    const queueEvents = await withTimeout(
+    queueEvents = await withTimeout(
       getQueueEvents(),
       20000,
       'Timed out waiting for WhatsApp QueueEvents connection to become ready'
     );
-    await job.waitUntilFinished(queueEvents, 20000);
   } catch (err) {
-    logger.warn('Timed out waiting for WhatsApp job to finish; continuing without ordering guarantee', {
-      jobId: job.id,
-      reason: err.message
-    });
+    logger.warn('QueueEvents not ready; enqueueing without ordering guarantee', { reason: err.message });
   }
+
+  const job = await whatsappQueue.add('send-message', jobData);
+
+  if (queueEvents) {
+    try {
+      await job.waitUntilFinished(queueEvents, 20000);
+    } catch (err) {
+      logger.warn('Timed out waiting for WhatsApp job to finish; continuing without ordering guarantee', {
+        jobId: job.id,
+        reason: err.message
+      });
+    }
+  }
+
   return job;
 };
 
