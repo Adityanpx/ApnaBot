@@ -4,17 +4,6 @@ const logger = require('../utils/logger');
 
 const META_API_BASE = 'https://graph.facebook.com/v18.0';
 
-// TEMPORARY diagnostic logging to trace token corruption between encrypt-time
-// (scripts/restoreSgTravelsWhatsapp.js) and decrypt-time (here). Remove once resolved.
-const logTokenDecrypt = (fnName, encryptedAccessToken, accessToken) => {
-  logger.info('[DEBUG] token decrypt', {
-    fn: fnName,
-    encryptedLength: encryptedAccessToken ? encryptedAccessToken.length : null,
-    decryptedLength: accessToken ? accessToken.length : null,
-    decryptedPreview: accessToken ? `${accessToken.slice(0, 6)}...${accessToken.slice(-6)}` : null
-  });
-};
-
 /**
  * Send a text message via WhatsApp
  * @param {string} phoneNumberId - The WhatsApp phone number ID
@@ -26,7 +15,6 @@ const logTokenDecrypt = (fnName, encryptedAccessToken, accessToken) => {
 const sendTextMessage = async (phoneNumberId, encryptedAccessToken, to, message) => {
   try {
     const accessToken = decrypt(encryptedAccessToken);
-    logTokenDecrypt('sendTextMessage', encryptedAccessToken, accessToken);
 
     const response = await axios.post(
       `${META_API_BASE}/${phoneNumberId}/messages`,
@@ -68,7 +56,6 @@ const sendTextMessage = async (phoneNumberId, encryptedAccessToken, to, message)
 const sendImageMessage = async (phoneNumberId, encryptedAccessToken, to, imageUrl, caption) => {
   try {
     const accessToken = decrypt(encryptedAccessToken);
-    logTokenDecrypt('sendImageMessage', encryptedAccessToken, accessToken);
     const response = await axios.post(
       `${META_API_BASE}/${phoneNumberId}/messages`,
       {
@@ -102,7 +89,6 @@ const sendImageMessage = async (phoneNumberId, encryptedAccessToken, to, imageUr
 const sendInteractiveButtons = async (phoneNumberId, encryptedAccessToken, to, bodyText, buttons, imageUrl) => {
   try {
     const accessToken = decrypt(encryptedAccessToken);
-    logTokenDecrypt('sendInteractiveButtons', encryptedAccessToken, accessToken);
     const interactive = {
       type: 'button',
       body: { text: (bodyText || '').slice(0, 1024) },
@@ -143,7 +129,6 @@ const sendInteractiveButtons = async (phoneNumberId, encryptedAccessToken, to, b
 const sendListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText, buttonLabel, options) => {
   try {
     const accessToken = decrypt(encryptedAccessToken);
-    logTokenDecrypt('sendListMessage', encryptedAccessToken, accessToken);
     const interactive = {
       type: 'list',
       body: { text: (bodyText || '').slice(0, 1024) },
@@ -188,7 +173,6 @@ const sendListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText
 const sendRuleListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText, buttonLabel, options) => {
   try {
     const accessToken = decrypt(encryptedAccessToken);
-    logTokenDecrypt('sendRuleListMessage', encryptedAccessToken, accessToken);
     const interactive = {
       type: 'list',
       body: { text: (bodyText || '').slice(0, 1024) },
@@ -237,7 +221,6 @@ const sendTemplateMessage = async (
 ) => {
   try {
     const accessToken = decrypt(encryptedAccessToken);
-    logTokenDecrypt('sendTemplateMessage', encryptedAccessToken, accessToken);
 
     const response = await axios.post(
       `${META_API_BASE}/${phoneNumberId}/messages`,
@@ -280,7 +263,6 @@ const sendTemplateMessage = async (
 const markMessageAsRead = async (phoneNumberId, encryptedAccessToken, metaMessageId) => {
   try {
     const accessToken = decrypt(encryptedAccessToken);
-    logTokenDecrypt('markMessageAsRead', encryptedAccessToken, accessToken);
 
     await axios.post(
       `${META_API_BASE}/${phoneNumberId}/messages`,

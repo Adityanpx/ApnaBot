@@ -10,16 +10,16 @@
  *
  * Usage:
  *   $env:MONGODB_URI = 'your-connection-string'
- *   $env:NEW_ACCESS_TOKEN = 'the-new-system-user-token'
+ *   Create ./temp_token.txt containing the new system-user token
  *   node scripts/restoreSgTravelsWhatsapp.js
  */
 require('dotenv').config();
+const fs = require('fs');
 const mongoose = require('mongoose');
 const Shop = require('../src/models/Shop');
 const { encrypt } = require('../src/utils/crypto');
 
 const MONGODB_URI = process.env.MONGODB_URI;
-const rawToken = process.env.NEW_ACCESS_TOKEN;
 
 const PHONE_NUMBER_ID = '1296101703578157';
 const WABA_ID = '1604422161284563';
@@ -29,16 +29,17 @@ if (!MONGODB_URI) {
   process.exit(1);
 }
 
-if (!rawToken || !rawToken.trim()) {
-  console.error('Missing NEW_ACCESS_TOKEN env var. Aborting without touching the database.');
+const tokenPath = './temp_token.txt';
+if (!fs.existsSync(tokenPath)) {
+  console.error(`Token file not found at ${tokenPath}. Create it with the token, then re-run.`);
   process.exit(1);
 }
-
+const rawToken = fs.readFileSync(tokenPath, 'utf8');
 const token = rawToken.trim();
-
-console.log(
-  `[DEBUG] raw token: length=${token.length}, preview=${token.slice(0, 6)}...${token.slice(-6)}`
-);
+if (!token) {
+  console.error('Token file is empty. Aborting without touching the database.');
+  process.exit(1);
+}
 
 async function main() {
   await mongoose.connect(MONGODB_URI);
@@ -53,7 +54,6 @@ async function main() {
   }
 
   shop.accessToken = encrypt(token);
-  console.log(`[DEBUG] encrypted token: length=${shop.accessToken.length}`);
   shop.wabaId = WABA_ID;
   shop.isWhatsappConnected = true;
 
@@ -66,6 +66,10 @@ async function main() {
   console.log('  accessToken updated');
 
   await mongoose.disconnect();
+
+  fs.unlinkSync(tokenPath);
+  console.log(`Deleted ${tokenPath}.`);
+
   console.log('Done.');
 }
 
