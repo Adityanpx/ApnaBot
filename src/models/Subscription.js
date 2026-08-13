@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const subscriptionSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   planId: {
@@ -40,7 +40,7 @@ const subscriptionSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-subscriptionSchema.index({ shopId: 1 });
+subscriptionSchema.index({ businessId: 1 });
 subscriptionSchema.index({ status: 1 });
 subscriptionSchema.index({ endDate: 1 });
 

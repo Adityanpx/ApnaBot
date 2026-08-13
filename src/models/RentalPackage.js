@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const rentalPackageSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   vehicleId: {
@@ -39,7 +39,7 @@ const rentalPackageSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-rentalPackageSchema.index({ shopId: 1 });
-rentalPackageSchema.index({ shopId: 1, vehicleId: 1, packageKey: 1 });
+rentalPackageSchema.index({ businessId: 1 });
+rentalPackageSchema.index({ businessId: 1, vehicleId: 1, packageKey: 1 });
 
 module.exports = mongoose.model('RentalPackage', rentalPackageSchema);

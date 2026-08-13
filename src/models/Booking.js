@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const bookingSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   customerId: {
@@ -61,9 +61,9 @@ const bookingSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-bookingSchema.index({ shopId: 1 });
-bookingSchema.index({ shopId: 1, status: 1 });
-bookingSchema.index({ shopId: 1, createdAt: -1 });
+bookingSchema.index({ businessId: 1 });
+bookingSchema.index({ businessId: 1, status: 1 });
+bookingSchema.index({ businessId: 1, createdAt: -1 });
 bookingSchema.index({ customerId: 1 });
 
 module.exports = mongoose.model('Booking', bookingSchema);

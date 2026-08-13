@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const routeFareSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   fromCity: {
@@ -39,9 +39,9 @@ const routeFareSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-routeFareSchema.index({ shopId: 1 });
+routeFareSchema.index({ businessId: 1 });
 routeFareSchema.index(
-  { shopId: 1, fromCity: 1, toCity: 1, tripType: 1, vehicleId: 1 },
+  { businessId: 1, fromCity: 1, toCity: 1, tripType: 1, vehicleId: 1 },
   { unique: true }
 );
 

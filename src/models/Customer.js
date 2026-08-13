@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const customerSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   whatsappNumber: {
@@ -41,7 +41,7 @@ const customerSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-customerSchema.index({ shopId: 1, whatsappNumber: 1 }, { unique: true });
-customerSchema.index({ shopId: 1 });
+customerSchema.index({ businessId: 1, whatsappNumber: 1 }, { unique: true });
+customerSchema.index({ businessId: 1 });
 
 module.exports = mongoose.model('Customer', customerSchema);

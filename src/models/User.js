@@ -27,9 +27,9 @@ const userSchema = new mongoose.Schema({
     required: true,
     enum: ['superadmin', 'owner', 'staff']
   },
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     default: null
   },
   permissions: {
@@ -51,7 +51,7 @@ const userSchema = new mongoose.Schema({
 
 // Indexes
 // Note: email already has unique:true in schema definition
-userSchema.index({ shopId: 1 });
+userSchema.index({ businessId: 1 });
 
 // Pre-save hook to hash password
 userSchema.pre('save', async function() {

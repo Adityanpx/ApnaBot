@@ -1,5 +1,5 @@
 const User = require('./User');
-const Shop = require('./Shop');
+const Business = require('./Business');
 const Plan = require('./Plan');
 const Subscription = require('./Subscription');
 const Rule = require('./Rule');
@@ -14,7 +14,7 @@ const RouteFare = require('./RouteFare');
 
 module.exports = {
   User,
-  Shop,
+  Business,
   Plan,
   Subscription,
   Rule,

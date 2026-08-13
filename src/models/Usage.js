@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const usageSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   month: {
@@ -33,6 +33,6 @@ const usageSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-usageSchema.index({ shopId: 1, month: 1 }, { unique: true });
+usageSchema.index({ businessId: 1, month: 1 }, { unique: true });
 
 module.exports = mongoose.model('Usage', usageSchema);

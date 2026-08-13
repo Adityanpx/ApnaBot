@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   customerId: {
@@ -55,8 +55,8 @@ const messageSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-messageSchema.index({ shopId: 1, customerId: 1 });
-messageSchema.index({ shopId: 1, createdAt: -1 });
+messageSchema.index({ businessId: 1, customerId: 1 });
+messageSchema.index({ businessId: 1, createdAt: -1 });
 messageSchema.index({ metaMessageId: 1 }, { sparse: true });
 
 module.exports = mongoose.model('Message', messageSchema);

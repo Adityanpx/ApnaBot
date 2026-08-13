@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const vehicleSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   ownerId: {
@@ -39,7 +39,7 @@ const vehicleSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-vehicleSchema.index({ shopId: 1 });
-vehicleSchema.index({ shopId: 1, isActive: 1 });
+vehicleSchema.index({ businessId: 1 });
+vehicleSchema.index({ businessId: 1, isActive: 1 });
 
 module.exports = mongoose.model('Vehicle', vehicleSchema);

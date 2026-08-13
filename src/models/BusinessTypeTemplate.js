@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const businessTypeTemplateSchema = new mongoose.Schema({
-  businessType: {
+  businessCategory: {
     type: String,
     required: true,
     unique: true,
@@ -64,6 +64,6 @@ const businessTypeTemplateSchema = new mongoose.Schema({
   ]
 }, { timestamps: true });
 
-// Note: businessType already has unique:true in schema definition
+// Note: businessCategory already has unique:true in schema definition
 
 module.exports = mongoose.model('BusinessTypeTemplate', businessTypeTemplateSchema);

@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const ruleSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   keyword: {
@@ -70,7 +70,7 @@ const ruleSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-ruleSchema.index({ shopId: 1 });
-ruleSchema.index({ shopId: 1, keyword: 1 });
+ruleSchema.index({ businessId: 1 });
+ruleSchema.index({ businessId: 1, keyword: 1 });
 
 module.exports = mongoose.model('Rule', ruleSchema);

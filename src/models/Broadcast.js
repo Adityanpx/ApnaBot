@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const broadcastSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   templateId: {
@@ -57,7 +57,7 @@ const broadcastSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-broadcastSchema.index({ shopId: 1 });
-broadcastSchema.index({ shopId: 1, status: 1 });
+broadcastSchema.index({ businessId: 1 });
+broadcastSchema.index({ businessId: 1, status: 1 });
 
 module.exports = mongoose.model('Broadcast', broadcastSchema);

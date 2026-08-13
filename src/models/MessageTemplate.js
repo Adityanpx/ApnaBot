@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const messageTemplateSchema = new mongoose.Schema({
-  shopId: {
+  businessId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Shop',
+    ref: 'Business',
     required: true
   },
   name: {
@@ -52,7 +52,7 @@ const messageTemplateSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes
-messageTemplateSchema.index({ shopId: 1 });
-messageTemplateSchema.index({ shopId: 1, status: 1 });
+messageTemplateSchema.index({ businessId: 1 });
+messageTemplateSchema.index({ businessId: 1, status: 1 });
 
 module.exports = mongoose.model('MessageTemplate', messageTemplateSchema);
