@@ -17,6 +17,12 @@ const logger = require('../utils/logger');
 // Kept as exact matches (not substring) so real rule keywords still win.
 const GREETING_KEYWORDS = new Set(['hi', 'hello', 'hey', 'hii', 'hlo', 'namaste', 'start', 'menu']);
 
+// Exact-match escape keywords that let a customer bail out of an active
+// booking session instead of being stuck until the session TTL expires.
+// Only checked against plain text (see the buttonReplyId/listReplyId guard
+// at the call site) so an interactive tap can never coincidentally match.
+const ESCAPE_KEYWORDS = new Set(['menu', 'cancel', 'exit', 'restart', 'stop']);
+
 /**
  * Build the numbered-menu list options for a shop's enabled menu, in the
  * {label, nextKeyword} shape sendRuleListMessage expects. Shared by the
@@ -219,6 +225,102 @@ const receiveWebhook = async (req, res) => {
     const activeSession = await bookingService.getBookingSession(tenant.shopId, customerNumber);
     if (activeSession) {
       logger.info(`Active booking session for ${customerNumber}`);
+
+      // Escape hatch: let the customer cancel out of the booking flow with a
+      // plain-text keyword instead of being stuck answering booking questions
+      // until the session TTL expires. Only plain text is checked — a tapped
+      // button/list reply id (e.g. an index like "2") could coincidentally
+      // match one of these words, so interactive taps skip this entirely.
+      const isPlainTextMessage = !buttonReplyId && !listReplyId;
+      const normalizedEscapeText = isPlainTextMessage ? (message.text?.body || '').trim().toLowerCase() : '';
+      if (ESCAPE_KEYWORDS.has(normalizedEscapeText)) {
+        await bookingService.deleteBookingSession(tenant.shopId, customerNumber);
+
+        const escapeShopDoc = await Shop.findById(tenant.shopId)
+          .select('welcomeMessage isMenuEnabled menuItems')
+          .lean();
+        const escapeHasMenu = !!(escapeShopDoc?.isMenuEnabled && escapeShopDoc.menuItems?.length > 0);
+
+        // Cancellation confirmation message
+        const cancelText = escapeHasMenu
+          ? 'Booking cancelled.'
+          : "Booking cancelled. Type 'hi' to see what I can help with.";
+        const cancelMsg = await Message.create({
+          shopId: tenant.shopId,
+          customerId: customer._id,
+          customerNumber,
+          direction: 'outbound',
+          type: 'text',
+          content: cancelText,
+          status: 'sent',
+          isRead: true
+        });
+        await addToWhatsappQueue({
+          shopId: tenant.shopId,
+          phoneNumberId: tenant.phoneNumberId,
+          encryptedAccessToken: tenant.accessToken,
+          to: customerNumber,
+          message: cancelText,
+          type: 'text',
+          messageId: cancelMsg._id
+        });
+        usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+          logger.error('Error incrementing outbound usage:', err)
+        );
+        try {
+          socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+            customer,
+            message: cancelMsg,
+            customerNumber
+          });
+        } catch (socketError) {
+          logger.error('Error emitting socket event:', socketError);
+        }
+
+        // If the shop has a menu, follow up with the same welcome/menu send
+        // Step 12.5 does for a greeting.
+        if (escapeHasMenu) {
+          const menuListOptions = await buildMenuListOptions(escapeShopDoc.menuItems);
+          const menuReplyText = escapeShopDoc.welcomeMessage || 'How can we help you today?';
+
+          const menuOutboundMsg = await Message.create({
+            shopId: tenant.shopId,
+            customerId: customer._id,
+            customerNumber,
+            direction: 'outbound',
+            type: 'text',
+            content: menuReplyText,
+            status: 'sent',
+            isRead: true
+          });
+          await addToWhatsappQueue({
+            shopId: tenant.shopId,
+            phoneNumberId: tenant.phoneNumberId,
+            encryptedAccessToken: tenant.accessToken,
+            to: customerNumber,
+            message: menuReplyText,
+            type: 'text',
+            listOptions: menuListOptions,
+            listButtonLabel: 'Menu',
+            messageId: menuOutboundMsg._id
+          });
+          usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
+            logger.error('Error incrementing outbound usage:', err)
+          );
+          try {
+            socketService.emitToShop(tenant.shopId.toString(), 'new_message', {
+              customer,
+              message: menuOutboundMsg,
+              customerNumber
+            });
+          } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+          }
+        }
+
+        logger.info(`Booking session cancelled via escape keyword for ${customerNumber}`);
+        return; // Do not process booking step, greeting, or rule matching
+      }
 
       // If the customer tapped a button/list row for the current choice
       // field, resolve its id (a stringified option index — see
