@@ -1,24 +1,24 @@
 // src/services/subscription.service.js — CREATE THIS FILE
 
 const Subscription = require('../models/Subscription');
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const redis = require('../config/redis');
 const logger = require('../utils/logger');
 
-const CACHE_KEY = (shopId) => `subscription:${shopId}`;
+const CACHE_KEY = (businessId) => `subscription:${businessId}`;
 const CACHE_TTL = 300; // 5 minutes
 
 /**
- * Get active subscription for shop with plan details.
+ * Get active subscription for business with plan details.
  * Redis-first, falls back to MongoDB.
  */
-const getActiveSubscription = async (shopId) => {
+const getActiveSubscription = async (businessId) => {
   try {
-    const cacheKey = CACHE_KEY(shopId);
+    const cacheKey = CACHE_KEY(businessId);
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
-    const sub = await Subscription.findOne({ shopId, status: 'active' })
+    const sub = await Subscription.findOne({ businessId, status: 'active' })
       .populate('planId')
       .lean();
 
@@ -33,10 +33,10 @@ const getActiveSubscription = async (shopId) => {
 /**
  * Invalidate subscription cache — call after any subscription change
  */
-const invalidateSubscriptionCache = async (shopId) => {
+const invalidateSubscriptionCache = async (businessId) => {
   try {
-    await redis.del(CACHE_KEY(shopId));
-    logger.info(`Subscription cache cleared for shop ${shopId}`);
+    await redis.del(CACHE_KEY(businessId));
+    logger.info(`Subscription cache cleared for business ${businessId}`);
   } catch (error) {
     logger.error('Error clearing subscription cache:', error);
   }
@@ -46,11 +46,11 @@ const invalidateSubscriptionCache = async (shopId) => {
  * Create a new subscription (trial or paid).
  * Cancels any existing active subscription first.
  */
-const createSubscription = async (shopId, planId, options = {}) => {
+const createSubscription = async (businessId, planId, options = {}) => {
   try {
     // Cancel existing active subscriptions
     await Subscription.updateMany(
-      { shopId, status: 'active' },
+      { businessId, status: 'active' },
       { status: 'cancelled' }
     );
 
@@ -59,7 +59,7 @@ const createSubscription = async (shopId, planId, options = {}) => {
     endDate.setMonth(endDate.getMonth() + 1); // 1 month validity
 
     const sub = await Subscription.create({
-      shopId,
+      businessId,
       planId,
       status: options.status || 'active',
       startDate,
@@ -69,12 +69,12 @@ const createSubscription = async (shopId, planId, options = {}) => {
       autoRenew: options.autoRenew !== undefined ? options.autoRenew : true
     });
 
-    // Activate shop on subscription creation
-    await Shop.findByIdAndUpdate(shopId, { isActive: true });
+    // Activate business on subscription creation
+    await Business.findByIdAndUpdate(businessId, { isActive: true });
 
-    await invalidateSubscriptionCache(shopId);
+    await invalidateSubscriptionCache(businessId);
 
-    logger.info(`Subscription created for shop ${shopId}, plan ${planId}`);
+    logger.info(`Subscription created for business ${businessId}, plan ${planId}`);
     return sub;
   } catch (error) {
     logger.error('Error in createSubscription:', error);
@@ -84,7 +84,7 @@ const createSubscription = async (shopId, planId, options = {}) => {
 
 /**
  * Daily expiry check — called by cron job in server.js
- * Expires subscriptions past endDate, deactivates shops
+ * Expires subscriptions past endDate, deactivates businesses
  */
 const runExpiryCheck = async () => {
   try {
@@ -103,16 +103,16 @@ const runExpiryCheck = async () => {
         sub.status = 'expired';
         await sub.save();
 
-        await Shop.findByIdAndUpdate(sub.shopId, { isActive: false });
+        await Business.findByIdAndUpdate(sub.businessId, { isActive: false });
 
         // Clear Redis caches
-        await redis.del(CACHE_KEY(sub.shopId));
-        const shop = await Shop.findById(sub.shopId).select('phoneNumberId');
-        if (shop?.phoneNumberId) {
-          await redis.del(`tenant:${shop.phoneNumberId}`);
+        await redis.del(CACHE_KEY(sub.businessId));
+        const business = await Business.findById(sub.businessId).select('phoneNumberId');
+        if (business?.phoneNumberId) {
+          await redis.del(`tenant:${business.phoneNumberId}`);
         }
 
-        logger.info(`Subscription expired for shop ${sub.shopId}`);
+        logger.info(`Subscription expired for business ${sub.businessId}`);
       } catch (err) {
         logger.error(`Error processing expiry for sub ${sub._id}:`, err);
       }

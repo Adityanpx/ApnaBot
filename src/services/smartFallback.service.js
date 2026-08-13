@@ -1,6 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const chatbotService = require('./chatbot.service');
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const logger = require('../utils/logger');
 
 const MODEL = 'claude-sonnet-4-6';
@@ -19,23 +19,23 @@ const getClient = () => {
  * Generate an AI-assisted fallback reply when no rule matched the customer's
  * message. Either points the customer at the closest matching rule keyword,
  * or gives a brief, generic, non-committal acknowledgment. Never invents
- * prices, policies, or facts that aren't in the shop's own rule list.
+ * prices, policies, or facts that aren't in the business's own rule list.
  *
- * @param {string} shopId
+ * @param {string} businessId
  * @param {string} customerMessage
  * @returns {Promise<string|null>} generated reply, or null on any failure
  */
-const getSmartFallbackReply = async (shopId, customerMessage) => {
+const getSmartFallbackReply = async (businessId, customerMessage) => {
   try {
     const anthropic = getClient();
     if (!anthropic) return null;
 
-    const [rules, shop] = await Promise.all([
-      chatbotService.getRulesFromCache(shopId),
-      Shop.findById(shopId).select('name businessType fallbackReply')
+    const [rules, business] = await Promise.all([
+      chatbotService.getRulesFromCache(businessId),
+      Business.findById(businessId).select('name businessCategory fallbackReply')
     ]);
 
-    if (!shop) return null;
+    if (!business) return null;
 
     const activeRules = (rules || []).filter(rule => rule.isActive);
     const ruleSummaries = activeRules.map(rule => {
@@ -49,8 +49,8 @@ const getSmartFallbackReply = async (shopId, customerMessage) => {
 
     const systemPrompt = `You are helping a WhatsApp chatbot for a small Indian business reply to a customer whose message didn't match any of the business's configured keyword rules.
 
-Business name: ${shop.name}
-Business type: ${shop.businessType}
+Business name: ${business.name}
+Business type: ${business.businessCategory}
 
 The ONLY facts you may reference are these keyword rules (keyword: short label of what replying with that keyword gets the customer):
 ${rulesBlock}

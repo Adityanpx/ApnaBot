@@ -36,7 +36,7 @@ const initialize = (httpServer) => {
       // Attach user info to socket
       socket.user = {
         userId: decoded.userId,
-        shopId: decoded.shopId,
+        businessId: decoded.businessId,
         role: decoded.role
       };
 
@@ -49,14 +49,14 @@ const initialize = (httpServer) => {
 
   // Handle socket connections
   io.on('connection', (socket) => {
-    const { userId, shopId, role } = socket.user;
+    const { userId, businessId, role } = socket.user;
 
     if (role === 'superadmin') {
       socket.join('admin');
       logger.info(`Super admin ${userId} connected to socket`);
-    } else if (shopId) {
-      socket.join(`shop:${shopId}`);
-      logger.info(`Shop ${shopId} connected to socket`);
+    } else if (businessId) {
+      socket.join(`business:${businessId}`);
+      logger.info(`Business ${businessId} connected to socket`);
     }
 
     socket.on('disconnect', () => {
@@ -69,17 +69,17 @@ const initialize = (httpServer) => {
 };
 
 /**
- * Emit an event to a specific shop's room
- * @param {string} shopId - The shop ID
+ * Emit an event to a specific business's room
+ * @param {string} businessId - The business ID
  * @param {string} event - The event name
  * @param {any} data - The data to emit
  */
-const emitToShop = (shopId, event, data) => {
+const emitToBusiness = (businessId, event, data) => {
   if (!io) {
-    logger.warn('Socket.io not initialized, cannot emit to shop');
+    logger.warn('Socket.io not initialized, cannot emit to business');
     return;
   }
-  io.to(`shop:${shopId}`).emit(event, data);
+  io.to(`business:${businessId}`).emit(event, data);
 };
 
 /**
@@ -105,7 +105,7 @@ const getIO = () => {
 
 module.exports = {
   initialize,
-  emitToShop,
+  emitToBusiness,
   emitToAdmin,
   getIO
 };

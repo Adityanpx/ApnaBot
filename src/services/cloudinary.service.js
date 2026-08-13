@@ -11,7 +11,7 @@ cloudinary.config({
 /**
  * Upload image to Cloudinary
  * @param {Buffer} fileBuffer - The file buffer to upload
- * @param {string} folder - The folder in Cloudinary (e.g., 'shop-profiles')
+ * @param {string} folder - The folder in Cloudinary (e.g., 'business-profiles')
  * @param {string} publicId - The public ID for the image
  * @returns {Promise<Object>}
  */

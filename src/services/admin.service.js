@@ -1,6 +1,6 @@
 // src/services/admin.service.js — CREATE THIS FILE
 
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const User = require('../models/User');
 const Subscription = require('../models/Subscription');
 const Plan = require('../models/Plan');
@@ -19,16 +19,16 @@ const getPlatformStats = async () => {
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
     const [
-      totalShops,
-      activeShops,
+      totalBusinesses,
+      activeBusinesses,
       totalUsers,
       activeSubscriptions,
       totalMessagesThisMonth,
       totalBookingsThisMonth,
       revenueThisMonth
     ] = await Promise.all([
-      Shop.countDocuments(),
-      Shop.countDocuments({ isActive: true }),
+      Business.countDocuments(),
+      Business.countDocuments({ isActive: true }),
       User.countDocuments({ role: { $in: ['owner', 'staff'] } }),
       Subscription.countDocuments({ status: 'active' }),
       Message.countDocuments({ createdAt: { $gte: startOfMonth } }),
@@ -42,9 +42,9 @@ const getPlatformStats = async () => {
     ]);
 
     return {
-      totalShops,
-      activeShops,
-      inactiveShops: totalShops - activeShops,
+      totalBusinesses,
+      activeBusinesses,
+      inactiveBusinesses: totalBusinesses - activeBusinesses,
       totalUsers,
       activeSubscriptions,
       totalMessagesThisMonth,

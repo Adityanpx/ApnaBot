@@ -240,7 +240,7 @@ const sendPaymentLinkToCustomer = async (bookingId, customerPhone, paymentLink, 
     await addToWhatsappQueue({
       to: customerPhone,
       message: message,
-      shopId: null // Will be extracted from booking
+      businessId: null // Will be extracted from booking
     });
 
     logger.info('Payment link sent to customer:', customerPhone);

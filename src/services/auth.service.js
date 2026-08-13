@@ -39,7 +39,7 @@ const verifyRefreshToken = (token) => {
 
 /**
  * Generate both access and refresh tokens in one call
- * Called by shop.controller.js after shop creation
+ * Called by business.controller.js after business creation
  */
 const generateTokens = (payload) => {
   const accessToken = generateAccessToken(payload);
@@ -48,7 +48,7 @@ const generateTokens = (payload) => {
 };
 
 /**
- * Save refresh token to Redis — wrapper used by shop.controller.js
+ * Save refresh token to Redis — wrapper used by business.controller.js
  */
 const saveTokenToRedis = async (userId, token) => {
   await saveRefreshToken(userId, token);

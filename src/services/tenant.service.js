@@ -1,14 +1,14 @@
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const Subscription = require('../models/Subscription');
 const redis = require('../config/redis');
 const logger = require('../utils/logger');
 
 /**
- * Resolve shop by phone number ID (used by webhook tenant resolution)
+ * Resolve business by phone number ID (used by webhook tenant resolution)
  * @param {string} phoneNumberId - The WhatsApp phone number ID
  * @returns {Promise<Object|null>}
  */
-const resolveShopByPhoneNumberId = async (phoneNumberId) => {
+const resolveBusinessByPhoneNumberId = async (phoneNumberId) => {
   try {
     const cacheKey = `tenant:${phoneNumberId}`;
 
@@ -20,32 +20,32 @@ const resolveShopByPhoneNumberId = async (phoneNumberId) => {
     }
 
     // Step 2: Cache miss - query DB
-    const shop = await Shop.findOne({ 
-      phoneNumberId, 
-      isActive: true 
+    const business = await Business.findOne({
+      phoneNumberId,
+      isActive: true
     }).populate('ownerUserId', 'name email');
 
-    if (!shop) {
-      logger.warn(`No shop found for phoneNumberId: ${phoneNumberId}`);
+    if (!business) {
+      logger.warn(`No business found for phoneNumberId: ${phoneNumberId}`);
       return null;
     }
 
-    // Step 3: Load active subscription for shop
-    const subscription = await Subscription.findOne({ 
-      shopId: shop._id, 
-      status: 'active' 
+    // Step 3: Load active subscription for business
+    const subscription = await Subscription.findOne({
+      businessId: business._id,
+      status: 'active'
     }).populate('planId');
 
     // Step 4: Build tenant object
     const tenant = {
-      shopId: shop._id,
-      shopName: shop.name,
-      phoneNumberId: shop.phoneNumberId,
-      accessToken: shop.accessToken, // Still encrypted here
-      fallbackReply: shop.fallbackReply,
-      enableSmartFallback: shop.enableSmartFallback,
-      businessType: shop.businessType,
-      isActive: shop.isActive,
+      businessId: business._id,
+      businessName: business.name,
+      phoneNumberId: business.phoneNumberId,
+      accessToken: business.accessToken, // Still encrypted here
+      fallbackReply: business.fallbackReply,
+      enableSmartFallback: business.enableSmartFallback,
+      businessCategory: business.businessCategory,
+      isActive: business.isActive,
       subscription: subscription || null,
       plan: subscription ? subscription.planId : null
     };
@@ -56,13 +56,13 @@ const resolveShopByPhoneNumberId = async (phoneNumberId) => {
 
     return tenant;
   } catch (error) {
-    logger.error('Error in resolveShopByPhoneNumberId:', error);
+    logger.error('Error in resolveBusinessByPhoneNumberId:', error);
     throw error;
   }
 };
 
 /**
- * Invalidate tenant cache when shop WhatsApp connection changes
+ * Invalidate tenant cache when business WhatsApp connection changes
  * @param {string} phoneNumberId - The WhatsApp phone number ID
  */
 const invalidateTenantCache = async (phoneNumberId) => {
@@ -77,6 +77,6 @@ const invalidateTenantCache = async (phoneNumberId) => {
 };
 
 module.exports = {
-  resolveShopByPhoneNumberId,
+  resolveBusinessByPhoneNumberId,
   invalidateTenantCache
 };

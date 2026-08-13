@@ -92,19 +92,19 @@ const sendVerificationEmail = async (toEmail, otp, userName) => {
 /**
  * Send subscription expiry warning email
  * @param {string} toEmail
- * @param {string} shopName
+ * @param {string} businessName
  * @param {Date} expiryDate
  */
-const sendExpiryWarningEmail = async (toEmail, shopName, expiryDate) => {
+const sendExpiryWarningEmail = async (toEmail, businessName, expiryDate) => {
   try {
     await sendEmail({
       to: toEmail,
-      subject: `Your ApnaBot subscription for ${shopName} is expiring soon`,
+      subject: `Your ApnaBot subscription for ${businessName} is expiring soon`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #1a1a2e;">Subscription Expiring Soon</h2>
           <p>Hi,</p>
-          <p>Your ApnaBot subscription for <strong>${shopName}</strong> will expire on
+          <p>Your ApnaBot subscription for <strong>${businessName}</strong> will expire on
              <strong>${expiryDate.toDateString()}</strong>.</p>
           <p>Renew now to keep your WhatsApp chatbot running without interruption.</p>
           <a href="${process.env.FRONTEND_URL}/billing"
@@ -117,7 +117,7 @@ const sendExpiryWarningEmail = async (toEmail, shopName, expiryDate) => {
       `
     });
 
-    logger.info(`Expiry warning email sent to ${toEmail} for shop ${shopName}`);
+    logger.info(`Expiry warning email sent to ${toEmail} for business ${businessName}`);
   } catch (error) {
     logger.error('Error sending expiry warning email:', error);
     // Don't throw — email failure should not crash the app

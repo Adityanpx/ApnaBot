@@ -13,7 +13,7 @@ const r2 = new S3Client({
 /**
  * Upload a file buffer to R2
  * @param {Buffer} fileBuffer - file buffer (e.g. from multer memoryStorage)
- * @param {string} folder - e.g. 'shop-profiles'
+ * @param {string} folder - e.g. 'business-profiles'
  * @param {string} publicId - filename without extension
  * @param {string} mimetype - e.g. 'image/png'
  * @returns {Promise<{ url: string, key: string }>}

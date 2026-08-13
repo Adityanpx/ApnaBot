@@ -1,4 +1,4 @@
-const Shop = require('../models/Shop');
+const Business = require('../models/Business');
 const User = require('../models/User');
 const Rule = require('../models/Rule');
 const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
@@ -7,64 +7,64 @@ const { encrypt } = require('../utils/crypto');
 const logger = require('../utils/logger');
 
 /**
- * Get shop by owner user ID
+ * Get business by owner user ID
  * @param {string} ownerUserId - The owner's user ID
- * @returns {Promise<Shop|null>}
+ * @returns {Promise<Business|null>}
  */
-const getShopByOwnerId = async (ownerUserId) => {
+const getBusinessByOwnerId = async (ownerUserId) => {
   try {
-    return await Shop.findOne({ ownerUserId });
+    return await Business.findOne({ ownerUserId });
   } catch (error) {
-    logger.error('Error in getShopByOwnerId:', error);
+    logger.error('Error in getBusinessByOwnerId:', error);
     throw error;
   }
 };
 
 /**
- * Get shop by ID
- * @param {string} shopId - The shop ID
- * @returns {Promise<Shop|null>}
+ * Get business by ID
+ * @param {string} businessId - The business ID
+ * @returns {Promise<Business|null>}
  */
-const getShopById = async (shopId) => {
+const getBusinessById = async (businessId) => {
   try {
-    return await Shop.findById(shopId);
+    return await Business.findById(businessId);
   } catch (error) {
-    logger.error('Error in getShopById:', error);
+    logger.error('Error in getBusinessById:', error);
     throw error;
   }
 };
 
 /**
- * Get shop by phone number ID (used by webhook tenant resolution)
+ * Get business by phone number ID (used by webhook tenant resolution)
  * @param {string} phoneNumberId - The WhatsApp phone number ID
- * @returns {Promise<Shop|null>}
+ * @returns {Promise<Business|null>}
  */
-const getShopByPhoneNumberId = async (phoneNumberId) => {
+const getBusinessByPhoneNumberId = async (phoneNumberId) => {
   try {
-    return await Shop.findOne({ phoneNumberId });
+    return await Business.findOne({ phoneNumberId });
   } catch (error) {
-    logger.error('Error in getShopByPhoneNumberId:', error);
+    logger.error('Error in getBusinessByPhoneNumberId:', error);
     throw error;
   }
 };
 
 /**
- * Create a new shop
+ * Create a new business
  * @param {string} ownerUserId - The owner's user ID
- * @param {Object} data - Shop data
- * @returns {Promise<Shop>}
+ * @param {Object} data - Business data
+ * @returns {Promise<Business>}
  */
-const createShop = async (ownerUserId, data) => {
+const createBusiness = async (ownerUserId, data) => {
   try {
-    const { name, businessType, address, city, displayName } = data;
+    const { name, businessCategory, address, city, displayName } = data;
 
     // Generate webhook verify token
     const webhookVerifyToken = generateWebhookToken();
 
-    // Create shop document
-    const shop = await Shop.create({
+    // Create business document
+    const business = await Business.create({
       name,
-      businessType,
+      businessCategory,
       address,
       city,
       displayName: displayName || name,
@@ -74,14 +74,14 @@ const createShop = async (ownerUserId, data) => {
       isWhatsappConnected: false
     });
 
-    // Update owner user with shopId
-    await User.findByIdAndUpdate(ownerUserId, { shopId: shop._id });
+    // Update owner user with businessId
+    await User.findByIdAndUpdate(ownerUserId, { businessId: business._id });
 
     // Copy default rules from BusinessTypeTemplate
-    const template = await BusinessTypeTemplate.findOne({ businessType });
+    const template = await BusinessTypeTemplate.findOne({ businessCategory });
     if (template && template.defaultRules && template.defaultRules.length > 0) {
       const rulesToCreate = template.defaultRules.map(rule => ({
-        shopId: shop._id,
+        businessId: business._id,
         keyword: rule.keyword,
         matchType: rule.matchType || 'contains',
         reply: rule.reply || rule.response || '',
@@ -90,29 +90,29 @@ const createShop = async (ownerUserId, data) => {
         isActive: true,
         triggerCount: 0
       }));
-      
+
       await Rule.insertMany(rulesToCreate);
-      logger.info(`Created ${rulesToCreate.length} default rules for shop ${shop._id}`);
+      logger.info(`Created ${rulesToCreate.length} default rules for business ${business._id}`);
     }
 
-    return shop;
+    return business;
   } catch (error) {
-    logger.error('Error in createShop:', error);
+    logger.error('Error in createBusiness:', error);
     throw error;
   }
 };
 
 /**
- * Update shop profile
- * @param {string} shopId - The shop ID
+ * Update business profile
+ * @param {string} businessId - The business ID
  * @param {Object} data - Fields to update
- * @returns {Promise<Shop>}
+ * @returns {Promise<Business>}
  */
-const updateShop = async (shopId, data) => {
+const updateBusiness = async (businessId, data) => {
   try {
     const allowedFields = ['name', 'displayName', 'address', 'city', 'profileImage', 'upiId', 'fallbackReply', 'welcomeMessage', 'isMenuEnabled', 'menuItems', 'enableDistanceFares', 'enableSmartFallback', 'roundTripPerDayKm', 'roundTripDriverDaEnabled', 'roundTripDriverDaAmount'];
     const updateData = {};
-    
+
     // Only allow updating specific fields
     for (const field of allowedFields) {
       if (data[field] !== undefined) {
@@ -120,26 +120,26 @@ const updateShop = async (shopId, data) => {
       }
     }
 
-    const shop = await Shop.findByIdAndUpdate(
-      shopId,
+    const business = await Business.findByIdAndUpdate(
+      businessId,
       updateData,
       { new: true }
     );
 
-    return shop;
+    return business;
   } catch (error) {
-    logger.error('Error in updateShop:', error);
+    logger.error('Error in updateBusiness:', error);
     throw error;
   }
 };
 
 /**
- * Connect WhatsApp to shop
- * @param {string} shopId - The shop ID
+ * Connect WhatsApp to business
+ * @param {string} businessId - The business ID
  * @param {Object} data - WhatsApp connection data
- * @returns {Promise<Shop>}
+ * @returns {Promise<Business>}
  */
-const connectWhatsapp = async (shopId, data) => {
+const connectWhatsapp = async (businessId, data) => {
   try {
     const { phoneNumberId, wabaId, whatsappNumber, accessToken, displayName } = data;
 
@@ -158,13 +158,13 @@ const connectWhatsapp = async (shopId, data) => {
       updateData.displayName = displayName;
     }
 
-    const shop = await Shop.findByIdAndUpdate(
-      shopId,
+    const business = await Business.findByIdAndUpdate(
+      businessId,
       updateData,
       { new: true }
     );
 
-    return shop;
+    return business;
   } catch (error) {
     logger.error('Error in connectWhatsapp:', error);
     throw error;
@@ -172,14 +172,14 @@ const connectWhatsapp = async (shopId, data) => {
 };
 
 /**
- * Disconnect WhatsApp from shop
- * @param {string} shopId - The shop ID
- * @returns {Promise<Shop>}
+ * Disconnect WhatsApp from business
+ * @param {string} businessId - The business ID
+ * @returns {Promise<Business>}
  */
-const disconnectWhatsapp = async (shopId) => {
+const disconnectWhatsapp = async (businessId) => {
   try {
-    const shop = await Shop.findByIdAndUpdate(
-      shopId,
+    const business = await Business.findByIdAndUpdate(
+      businessId,
       {
         phoneNumberId: null,
         wabaId: null,
@@ -190,7 +190,7 @@ const disconnectWhatsapp = async (shopId) => {
       { new: true }
     );
 
-    return shop;
+    return business;
   } catch (error) {
     logger.error('Error in disconnectWhatsapp:', error);
     throw error;
@@ -198,11 +198,11 @@ const disconnectWhatsapp = async (shopId) => {
 };
 
 /**
- * Get dashboard statistics for a shop
- * @param {string} shopId - The shop ID
+ * Get dashboard statistics for a business
+ * @param {string} businessId - The business ID
  * @returns {Promise<Object>}
  */
-const getDashboardStats = async (shopId) => {
+const getDashboardStats = async (businessId) => {
   try {
     // Get start of today
     const startOfToday = new Date();
@@ -224,35 +224,35 @@ const getDashboardStats = async (shopId) => {
     ] = await Promise.all([
       // todayMessageCount
       require('../models/Message').countDocuments({
-        shopId,
+        businessId,
         createdAt: { $gte: startOfToday }
       }),
       // todayInboundCount
       require('../models/Message').countDocuments({
-        shopId,
+        businessId,
         direction: 'inbound',
         createdAt: { $gte: startOfToday }
       }),
       // todayBookingCount
       require('../models/Booking').countDocuments({
-        shopId,
+        businessId,
         createdAt: { $gte: startOfToday }
       }),
       // totalCustomers
-      require('../models/Customer').countDocuments({ shopId }),
+      require('../models/Customer').countDocuments({ businessId }),
       // newCustomersToday
       require('../models/Customer').countDocuments({
-        shopId,
+        businessId,
         firstSeenAt: { $gte: startOfToday }
       }),
       // pendingBookings
       require('../models/Booking').countDocuments({
-        shopId,
+        businessId,
         status: 'pending'
       }),
       // currentMonthUsage
       require('../models/Usage').findOne({
-        shopId,
+        businessId,
         month: currentMonth
       })
     ]);
@@ -273,11 +273,11 @@ const getDashboardStats = async (shopId) => {
 };
 
 module.exports = {
-  getShopByOwnerId,
-  getShopById,
-  getShopByPhoneNumberId,
-  createShop,
-  updateShop,
+  getBusinessByOwnerId,
+  getBusinessById,
+  getBusinessByPhoneNumberId,
+  createBusiness,
+  updateBusiness,
   connectWhatsapp,
   disconnectWhatsapp,
   getDashboardStats

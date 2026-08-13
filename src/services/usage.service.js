@@ -12,22 +12,22 @@ const getCurrentMonthKey = () => {
 
 /**
  * Build Redis key for usage
- * @param {string} shopId 
+ * @param {string} businessId
  * @returns {string}
  */
-const getUsageKey = (shopId) => {
+const getUsageKey = (businessId) => {
   const month = getCurrentMonthKey();
-  return `usage:${shopId}:${month}`;
+  return `usage:${businessId}:${month}`;
 };
 
 /**
- * Increment usage counter for a shop
- * @param {string} shopId - The shop ID
+ * Increment usage counter for a business
+ * @param {string} businessId - The business ID
  * @param {string} type - Type: 'inbound', 'outbound', 'booking', 'paymentLink'
  * @returns {Promise<number>} - Current message count
  */
-const incrementUsage = async (shopId, type) => {
-  const usageKey = getUsageKey(shopId);
+const incrementUsage = async (businessId, type) => {
+  const usageKey = getUsageKey(businessId);
   const month = getCurrentMonthKey();
 
   try {
@@ -51,7 +51,7 @@ const incrementUsage = async (shopId, type) => {
     // Every 10 increments, persist to MongoDB (fire and forget)
     if (msgCount % 10 === 0) {
       Usage.findOneAndUpdate(
-        { shopId, month },
+        { businessId, month },
         { $inc: { msgCount: 10, [`${type}Count`]: 1 } },
         { upsert: true, new: true }
       ).catch(err => logger.error('Error persisting usage to MongoDB:', err));
@@ -65,17 +65,17 @@ const incrementUsage = async (shopId, type) => {
 };
 
 /**
- * Check if shop has exceeded usage limit
- * @param {string} shopId - The shop ID
+ * Check if business has exceeded usage limit
+ * @param {string} businessId - The business ID
  * @param {number} planMsgLimit - Message limit from plan (-1 for unlimited)
  * @returns {Promise<Object>} - { allowed, current, limit }
  */
-const checkUsageLimit = async (shopId, planMsgLimit) => {
+const checkUsageLimit = async (businessId, planMsgLimit) => {
   if (planMsgLimit === -1) {
     return { allowed: true, current: 0, limit: -1 };
   }
 
-  const usageKey = getUsageKey(shopId);
+  const usageKey = getUsageKey(businessId);
   const month = getCurrentMonthKey();
 
   try {
@@ -84,7 +84,7 @@ const checkUsageLimit = async (shopId, planMsgLimit) => {
 
     if (!current) {
       // Fall back to MongoDB
-      const usageDoc = await Usage.findOne({ shopId, month });
+      const usageDoc = await Usage.findOne({ businessId, month });
       current = usageDoc ? usageDoc.msgCount : 0;
     }
 
@@ -103,12 +103,12 @@ const checkUsageLimit = async (shopId, planMsgLimit) => {
 };
 
 /**
- * Get usage for a shop
- * @param {string} shopId - The shop ID
+ * Get usage for a business
+ * @param {string} businessId - The business ID
  * @returns {Promise<Object>} - Usage stats
  */
-const getUsageForShop = async (shopId) => {
-  const usageKey = getUsageKey(shopId);
+const getUsageForBusiness = async (businessId) => {
+  const usageKey = getUsageKey(businessId);
   const month = getCurrentMonthKey();
 
   try {
@@ -127,8 +127,8 @@ const getUsageForShop = async (shopId) => {
     }
 
     // Fall back to MongoDB
-    const usageDoc = await Usage.findOne({ shopId, month });
-    
+    const usageDoc = await Usage.findOne({ businessId, month });
+
     return {
       msgCount: usageDoc ? usageDoc.msgCount : 0,
       inboundCount: usageDoc ? usageDoc.inboundCount : 0,
@@ -138,7 +138,7 @@ const getUsageForShop = async (shopId) => {
       month
     };
   } catch (error) {
-    logger.error('Error in getUsageForShop:', error);
+    logger.error('Error in getUsageForBusiness:', error);
     return {
       msgCount: 0,
       inboundCount: 0,
@@ -152,10 +152,10 @@ const getUsageForShop = async (shopId) => {
 
 /**
  * Force sync Redis counts to MongoDB
- * @param {string} shopId - The shop ID
+ * @param {string} businessId - The business ID
  */
-const syncUsageToMongoDB = async (shopId) => {
-  const usageKey = getUsageKey(shopId);
+const syncUsageToMongoDB = async (businessId) => {
+  const usageKey = getUsageKey(businessId);
   const month = getCurrentMonthKey();
 
   try {
@@ -163,7 +163,7 @@ const syncUsageToMongoDB = async (shopId) => {
 
     if (redisData && Object.keys(redisData).length > 0) {
       await Usage.findOneAndUpdate(
-        { shopId, month },
+        { businessId, month },
         {
           $set: {
             msgCount: parseInt(redisData.msgCount) || 0,
@@ -175,7 +175,7 @@ const syncUsageToMongoDB = async (shopId) => {
         },
         { upsert: true, new: true }
       );
-      logger.info(`Usage synced to MongoDB for shop ${shopId}`);
+      logger.info(`Usage synced to MongoDB for business ${businessId}`);
     }
   } catch (error) {
     logger.error('Error in syncUsageToMongoDB:', error);
@@ -186,7 +186,7 @@ const syncUsageToMongoDB = async (shopId) => {
 module.exports = {
   incrementUsage,
   checkUsageLimit,
-  getUsageForShop,
+  getUsageForBusiness,
   syncUsageToMongoDB,
   getCurrentMonthKey
 };
