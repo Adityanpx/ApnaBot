@@ -11,7 +11,12 @@
       "Read(//d/d/flutter_projects/**)",
       "Read(//d/flutter_projects/**)",
       "Read(//d/flutter_projects/apnabot/**)",
-      "Bash(find /d/flutter_projects -iname \"api.ts\" -not -path \"*/node_modules/*\" 2>/dev/null)"
+      "Bash(find /d/flutter_projects -iname \"api.ts\" -not -path \"*/node_modules/*\" 2>/dev/null)",
+      "Bash(sed -i -e 's/List all staff members in the shop/List all staff members in the business/' -e 's/Create a staff account under this shop\\\\./Create a staff account under this business./' -e 's/created for shop ${businessId}/created for business ${businessId}/' -e 's/removed from shop ${businessId}/removed from business ${businessId}/' -e 's/${action} for shop ${businessId}/${action} for business ${businessId}/' src/controllers/staff.controller.js)",
+      "Bash(sed -i -e 's/Get current plan + usage + expiry for the shop/Get current plan + usage + expiry for the business/' -e 's/created: ${order\\\\.id} for shop ${businessId}/created: ${order.id} for business ${businessId}/' -e 's/Razorpay order created: ${order\\\\.id} for shop ${businessId}/Razorpay order created: ${order.id} for business ${businessId}/' -e 's/Invalid payment signature for shop ${businessId}/Invalid payment signature for business ${businessId}/' -e 's/Subscription activated for shop ${businessId}/Subscription activated for business ${businessId}/' -e 's/Auto-renew cancelled for shop ${businessId}/Auto-renew cancelled for business ${businessId}/' src/controllers/subscription.controller.js)",
+      "Bash(node -e \"require\\('./src/app'\\); console.log\\('APP LOADED OK'\\);\")",
+      "Bash(git diff *)",
+      "Read(//tmp/**)"
     ]
   }
 }

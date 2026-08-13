@@ -45,7 +45,7 @@ const NEW_ORDER = {
 async function main() {
   await mongoose.connect(MONGODB_URI);
 
-  const template = await BusinessTypeTemplate.findOne({ businessType: 'travels' });
+  const template = await BusinessTypeTemplate.findOne({ businessCategory: 'travels' });
 
   if (!template) {
     console.error('No "travels" BusinessTypeTemplate found.');

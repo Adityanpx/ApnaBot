@@ -11,13 +11,13 @@ const Booking = require('../models/Booking');
 const logger = require('../utils/logger');
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const SHOP_ID = '69c0baefff5acc5c25caffd9';
+const BUSINESS_ID = '69c0baefff5acc5c25caffd9';
 const OWNER_USER_ID = '69c0b645572dbf0205e1cd0a';
 
 // ─── CUSTOMERS ───────────────────────────────────────────────────────────────
 const customers = [
   {
-    shopId: SHOP_ID,
+    businessId: BUSINESS_ID,
     whatsappNumber: '919822111001',
     name: 'Amit Kumar',
     firstSeenAt: new Date('2026-03-20T10:00:00Z'),
@@ -28,7 +28,7 @@ const customers = [
     isBlocked: false
   },
   {
-    shopId: SHOP_ID,
+    businessId: BUSINESS_ID,
     whatsappNumber: '919822111002',
     name: 'Priya Sharma',
     firstSeenAt: new Date('2026-03-21T11:00:00Z'),
@@ -39,7 +39,7 @@ const customers = [
     isBlocked: false
   },
   {
-    shopId: SHOP_ID,
+    businessId: BUSINESS_ID,
     whatsappNumber: '919822111003',
     name: 'Ravi Patil',
     firstSeenAt: new Date('2026-03-22T09:00:00Z'),
@@ -50,7 +50,7 @@ const customers = [
     isBlocked: false
   },
   {
-    shopId: SHOP_ID,
+    businessId: BUSINESS_ID,
     whatsappNumber: '919822111004',
     name: 'Sunita Desai',
     firstSeenAt: new Date('2026-03-22T14:00:00Z'),
@@ -61,7 +61,7 @@ const customers = [
     isBlocked: false
   },
   {
-    shopId: SHOP_ID,
+    businessId: BUSINESS_ID,
     whatsappNumber: '919822111005',
     name: 'Blocked Customer',
     firstSeenAt: new Date('2026-03-19T10:00:00Z'),
@@ -80,10 +80,10 @@ const seedTestData = async () => {
     logger.info('Connected to DB. Starting test data seed...');
 
     // ── Clean existing test data ──────────────────────────────────────────────
-    logger.info('Cleaning existing test data for this shop...');
-    await Customer.deleteMany({ shopId: SHOP_ID });
-    await Message.deleteMany({ shopId: SHOP_ID });
-    await Booking.deleteMany({ shopId: SHOP_ID });
+    logger.info('Cleaning existing test data for this business...');
+    await Customer.deleteMany({ businessId: BUSINESS_ID });
+    await Message.deleteMany({ businessId: BUSINESS_ID });
+    await Booking.deleteMany({ businessId: BUSINESS_ID });
     logger.info('Existing test data cleaned.');
 
     // ── Create Customers ──────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ const seedTestData = async () => {
 
       // ── Amit Kumar conversation ──
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c1._id,
         customerNumber: c1.whatsappNumber,
         direction: 'inbound',
@@ -115,7 +115,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T08:00:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c1._id,
         customerNumber: c1.whatsappNumber,
         direction: 'outbound',
@@ -126,7 +126,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T08:00:05Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c1._id,
         customerNumber: c1.whatsappNumber,
         direction: 'inbound',
@@ -138,7 +138,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T08:01:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c1._id,
         customerNumber: c1.whatsappNumber,
         direction: 'outbound',
@@ -149,7 +149,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T08:01:05Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c1._id,
         customerNumber: c1.whatsappNumber,
         direction: 'inbound',
@@ -161,7 +161,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T08:05:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c1._id,
         customerNumber: c1.whatsappNumber,
         direction: 'outbound',
@@ -174,7 +174,7 @@ const seedTestData = async () => {
 
       // ── Priya Sharma conversation ──
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c2._id,
         customerNumber: c2.whatsappNumber,
         direction: 'inbound',
@@ -186,7 +186,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T09:00:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c2._id,
         customerNumber: c2.whatsappNumber,
         direction: 'outbound',
@@ -197,7 +197,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T09:00:05Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c2._id,
         customerNumber: c2.whatsappNumber,
         direction: 'inbound',
@@ -209,7 +209,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T09:05:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c2._id,
         customerNumber: c2.whatsappNumber,
         direction: 'outbound',
@@ -222,7 +222,7 @@ const seedTestData = async () => {
 
       // ── Ravi Patil conversation ──
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c3._id,
         customerNumber: c3.whatsappNumber,
         direction: 'inbound',
@@ -234,7 +234,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-22T09:00:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c3._id,
         customerNumber: c3.whatsappNumber,
         direction: 'outbound',
@@ -247,7 +247,7 @@ const seedTestData = async () => {
 
       // ── Sunita Desai conversation ──
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c4._id,
         customerNumber: c4.whatsappNumber,
         direction: 'inbound',
@@ -259,7 +259,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T07:00:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c4._id,
         customerNumber: c4.whatsappNumber,
         direction: 'outbound',
@@ -270,7 +270,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T07:00:10Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c4._id,
         customerNumber: c4.whatsappNumber,
         direction: 'inbound',
@@ -291,7 +291,7 @@ const seedTestData = async () => {
 
     const bookings = [
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c1._id,
         customerNumber: c1.whatsappNumber,
         status: 'pending',
@@ -305,7 +305,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-23T08:10:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c2._id,
         customerNumber: c2.whatsappNumber,
         status: 'confirmed',
@@ -319,7 +319,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-22T11:00:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c4._id,
         customerNumber: c4.whatsappNumber,
         status: 'completed',
@@ -334,7 +334,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-15T10:00:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c3._id,
         customerNumber: c3.whatsappNumber,
         status: 'cancelled',
@@ -348,7 +348,7 @@ const seedTestData = async () => {
         createdAt: new Date('2026-03-21T09:00:00Z')
       },
       {
-        shopId: SHOP_ID,
+        businessId: BUSINESS_ID,
         customerId: c1._id,
         customerNumber: c1.whatsappNumber,
         status: 'pending',

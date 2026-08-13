@@ -1,11 +1,11 @@
 /**
  * scripts/rotateEncryptionKey.js
  *
- * One-time migration to rotate ENCRYPTION_KEY. Every shop's `accessToken`
+ * One-time migration to rotate ENCRYPTION_KEY. Every business's `accessToken`
  * is decrypted with the OLD key and re-encrypted with the NEW key, using
  * the exact AES-256-CBC scheme in utils/crypto.js. Each write is verified
  * immediately (decrypt-with-new-key and compare) before moving to the next
- * shop, so a bad key never gets silently written.
+ * business, so a bad key never gets silently written.
  *
  * This does NOT touch Render's ENCRYPTION_KEY env var — that's a manual
  * step you do only after this script reports 100% success (see below).
@@ -25,9 +25,9 @@
  * 3. If the dry run reports 0 failures, run it for real:
  *      node scripts/rotateEncryptionKey.js
  *
- * 4. Only after step 3 says "All shops migrated successfully" — update
+ * 4. Only after step 3 says "All businesses migrated successfully" — update
  *    ENCRYPTION_KEY on Render to the NEW_ENCRYPTION_KEY value and let it
- *    redeploy. Every shop's token is now readable with the new key; the
+ *    redeploy. Every business's token is now readable with the new key; the
  *    old key is no longer used anywhere.
  */
 require('dotenv').config();
@@ -80,17 +80,17 @@ async function main() {
   await mongoose.connect(MONGODB_URI);
   console.log('Connected to MongoDB.');
 
-  const Shop = mongoose.connection.collection('shops');
-  const shops = await Shop.find({ accessToken: { $exists: true, $ne: null } }).toArray();
-  console.log(`Found ${shops.length} shop(s) with a stored accessToken.\n`);
+  const Business = mongoose.connection.collection('businesses');
+  const businesses = await Business.find({ accessToken: { $exists: true, $ne: null } }).toArray();
+  console.log(`Found ${businesses.length} business(es) with a stored accessToken.\n`);
 
   let succeeded = 0;
   const failures = [];
 
-  for (const shop of shops) {
-    const label = `${shop.name || 'Unnamed shop'} (${shop._id})`;
+  for (const business of businesses) {
+    const label = `${business.name || 'Unnamed business'} (${business._id})`;
     try {
-      const plainToken = decryptWith(OLD_KEY, shop.accessToken);
+      const plainToken = decryptWith(OLD_KEY, business.accessToken);
       const reEncrypted = encryptWith(NEW_KEY, plainToken);
 
       // Verify before writing anything: decrypting the new ciphertext with
@@ -101,28 +101,28 @@ async function main() {
       }
 
       if (!DRY_RUN) {
-        await Shop.updateOne({ _id: shop._id }, { $set: { accessToken: reEncrypted } });
+        await Business.updateOne({ _id: business._id }, { $set: { accessToken: reEncrypted } });
       }
 
       console.log(`✔ ${label}`);
       succeeded++;
     } catch (err) {
       console.error(`✘ ${label} — ${err.message}`);
-      failures.push({ id: shop._id, name: shop.name, error: err.message });
+      failures.push({ id: business._id, name: business.name, error: err.message });
     }
   }
 
-  console.log(`\n${succeeded}/${shops.length} shop(s) migrated successfully.`);
+  console.log(`\n${succeeded}/${businesses.length} business(es) migrated successfully.`);
 
   if (failures.length > 0) {
-    console.error(`\n${failures.length} shop(s) FAILED — do not rotate ENCRYPTION_KEY on Render yet.`);
-    console.error('Likely cause: that shop\'s accessToken was already encrypted with a different key, or is corrupted.');
+    console.error(`\n${failures.length} business(es) FAILED — do not rotate ENCRYPTION_KEY on Render yet.`);
+    console.error('Likely cause: that business\'s accessToken was already encrypted with a different key, or is corrupted.');
     console.error(JSON.stringify(failures, null, 2));
     process.exitCode = 1;
   } else if (DRY_RUN) {
     console.log('\nDry run clean. Re-run without --dry-run to apply for real.');
   } else {
-    console.log('\nAll shops migrated successfully. You can now update ENCRYPTION_KEY on Render to NEW_ENCRYPTION_KEY\'s value and redeploy.');
+    console.log('\nAll businesses migrated successfully. You can now update ENCRYPTION_KEY on Render to NEW_ENCRYPTION_KEY\'s value and redeploy.');
   }
 
   await mongoose.disconnect();

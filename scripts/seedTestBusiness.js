@@ -1,7 +1,7 @@
 /**
- * seedTestShop.js
+ * seedTestBusiness.js
  * -----------------------------------------------------------------------------
- * Wires the WhatsApp "API Setup" TEST number to a fully-active test shop so the
+ * Wires the WhatsApp "API Setup" TEST number to a fully-active test business so the
  * inbound -> rule-match -> auto-reply flow works end to end in Development Mode.
  *
  * Use this to (a) confirm the new app's credentials and (b) produce the
@@ -9,9 +9,9 @@
  *
  * It creates/updates (idempotent — safe to re-run):
  *   - a Plan  (unlimited, so usage limits never block the test)
- *   - a User  (the shop owner)
- *   - a Shop  bound to your test phoneNumberId, with the access token ENCRYPTED
- *   - an active Subscription for that shop
+ *   - a User  (the business owner)
+ *   - a Business  bound to your test phoneNumberId, with the access token ENCRYPTED
+ *   - an active Subscription for that business
  *   - one keyword Rule that triggers a text auto-reply
  *
  * -----------------------------------------------------------------------------
@@ -28,13 +28,13 @@
  *                           or use a System User token for a long-lived one)
  *
  * OPTIONAL env vars:
- *   TEST_WHATSAPP_NUMBER   display number, e.g. 15550001234 (default placeholder)
- *   TEST_BUSINESS_TYPE     default 'general'
- *   TEST_KEYWORD           default 'hi'
- *   TEST_REPLY             default a friendly confirmation message
- *   OWNER_EMAIL            default 'test-owner@apnabot.local'
- *   REDIS_URL              if set, the stale tenant cache for this phoneNumberId
- *                          is cleared (optional; ignored if it fails)
+ *   TEST_WHATSAPP_NUMBER    display number, e.g. 15550001234 (default placeholder)
+ *   TEST_BUSINESS_CATEGORY  default 'general'
+ *   TEST_KEYWORD            default 'hi'
+ *   TEST_REPLY              default a friendly confirmation message
+ *   OWNER_EMAIL             default 'test-owner@apnabot.local'
+ *   REDIS_URL               if set, the stale tenant cache for this phoneNumberId
+ *                           is cleared (optional; ignored if it fails)
  *
  * -----------------------------------------------------------------------------
  * Run (PowerShell):
@@ -42,11 +42,11 @@
  *   $env:ENCRYPTION_KEY="<same-32-char-key-as-render>";
  *   $env:TEST_PHONE_NUMBER_ID="<from api setup>";
  *   $env:TEST_ACCESS_TOKEN="<from api setup>";
- *   node scripts/seedTestShop.js
+ *   node scripts/seedTestBusiness.js
  *
  * Run (bash):
  *   MONGODB_URI="..." ENCRYPTION_KEY="..." TEST_PHONE_NUMBER_ID="..." \
- *   TEST_ACCESS_TOKEN="..." node scripts/seedTestShop.js
+ *   TEST_ACCESS_TOKEN="..." node scripts/seedTestBusiness.js
  * -----------------------------------------------------------------------------
  */
 
@@ -54,7 +54,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 
 // Models (these only pull in mongoose, not your env config)
-const Shop = require('../src/models/Shop');
+const Business = require('../src/models/Business');
 const User = require('../src/models/User');
 const Plan = require('../src/models/Plan');
 const Subscription = require('../src/models/Subscription');
@@ -67,7 +67,7 @@ const {
   TEST_PHONE_NUMBER_ID,
   TEST_ACCESS_TOKEN,
   TEST_WHATSAPP_NUMBER = '15550000000',
-  TEST_BUSINESS_TYPE = 'general',
+  TEST_BUSINESS_CATEGORY = 'general',
   TEST_KEYWORD = 'hi',
   TEST_REPLY = 'Hello! 👋 Thanks for messaging ApnaBot. This is an automated test reply — everything is working.',
   OWNER_EMAIL = 'test-owner@apnabot.local',
@@ -166,15 +166,15 @@ async function main() {
     console.log(`👤 Owner reused: ${owner.email} (${owner._id})`);
   }
 
-  // 3) Shop — bound to the test phoneNumberId, token ENCRYPTED
+  // 3) Business — bound to the test phoneNumberId, token ENCRYPTED
   const encryptedToken = assertRoundTrip(TEST_ACCESS_TOKEN);
-  const shop = await Shop.findOneAndUpdate(
+  const business = await Business.findOneAndUpdate(
     { phoneNumberId: TEST_PHONE_NUMBER_ID },
     {
       $set: {
-        name: 'ApnaBot Test Shop',
+        name: 'ApnaBot Test Business',
         ownerUserId: owner._id,
-        businessType: TEST_BUSINESS_TYPE,
+        businessCategory: TEST_BUSINESS_CATEGORY,
         whatsappNumber: TEST_WHATSAPP_NUMBER,
         phoneNumberId: TEST_PHONE_NUMBER_ID,
         accessToken: encryptedToken,
@@ -185,13 +185,13 @@ async function main() {
     },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
-  console.log(`🏪 Shop ready: ${shop.name} (${shop._id})`);
-  console.log(`   • phoneNumberId: ${shop.phoneNumberId}`);
+  console.log(`🏪 Business ready: ${business.name} (${business._id})`);
+  console.log(`   • phoneNumberId: ${business.phoneNumberId}`);
   console.log(`   • accessToken:   stored ENCRYPTED (decryptable by Render)`);
 
-  // Link owner -> shop
-  if (String(owner.shopId) !== String(shop._id)) {
-    owner.shopId = shop._id;
+  // Link owner -> business
+  if (String(owner.businessId) !== String(business._id)) {
+    owner.businessId = business._id;
     await owner.save();
   }
 
@@ -199,10 +199,10 @@ async function main() {
   const now = new Date();
   const oneYear = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
   const sub = await Subscription.findOneAndUpdate(
-    { shopId: shop._id },
+    { businessId: business._id },
     {
       $set: {
-        shopId: shop._id,
+        businessId: business._id,
         planId: plan._id,
         status: 'active',
         startDate: now,
@@ -216,10 +216,10 @@ async function main() {
 
   // 5) Keyword rule -> text reply
   const rule = await Rule.findOneAndUpdate(
-    { shopId: shop._id, keyword: TEST_KEYWORD.toLowerCase() },
+    { businessId: business._id, keyword: TEST_KEYWORD.toLowerCase() },
     {
       $set: {
-        shopId: shop._id,
+        businessId: business._id,
         keyword: TEST_KEYWORD.toLowerCase(),
         matchType: 'contains',
         reply: TEST_REPLY,

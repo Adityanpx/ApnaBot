@@ -30,7 +30,7 @@ async function main() {
   await mongoose.connect(MONGODB_URI);
   console.log('   ✓ connected');
 
-  const result = await BusinessTypeTemplate.deleteOne({ businessType: 'travels' });
+  const result = await BusinessTypeTemplate.deleteOne({ businessCategory: 'travels' });
 
   if (result.deletedCount > 0) {
     console.log('\n🗑️  Deleted stale "travels" BusinessTypeTemplate.');

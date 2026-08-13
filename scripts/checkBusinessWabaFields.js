@@ -1,14 +1,14 @@
 /**
- * scripts/checkShopWabaFields.js
+ * scripts/checkBusinessWabaFields.js
  *
  * One-off diagnostic to check what WhatsApp-connection fields are actually
- * stored on the SG Travels Shop document (phoneNumberId '1296101703578157').
+ * stored on the SG Travels Business document (phoneNumberId '1296101703578157').
  *
  * Read-only. Does not modify any data.
  *
  * Usage:
  *   $env:MONGODB_URI = 'your-connection-string'
- *   node scripts/checkShopWabaFields.js
+ *   node scripts/checkBusinessWabaFields.js
  */
 require('dotenv').config();
 const mongoose = require('mongoose');
@@ -25,21 +25,21 @@ async function main() {
   await mongoose.connect(MONGODB_URI);
   console.log('Connected to MongoDB.');
 
-  const Shop = mongoose.connection.collection('shops');
+  const Business = mongoose.connection.collection('businesses');
 
-  const shop = await Shop.findOne({ phoneNumberId: PHONE_NUMBER_ID });
+  const business = await Business.findOne({ phoneNumberId: PHONE_NUMBER_ID });
 
-  if (!shop) {
-    console.error(`No shop found with phoneNumberId "${PHONE_NUMBER_ID}".`);
+  if (!business) {
+    console.error(`No business found with phoneNumberId "${PHONE_NUMBER_ID}".`);
     await mongoose.disconnect();
     process.exit(1);
   }
 
-  console.log(`name: "${shop.name}"`);
-  console.log(`phoneNumberId: "${shop.phoneNumberId}"`);
-  console.log(`wabaId: "${shop.wabaId}"`);
-  console.log(`accessToken: ${shop.accessToken ? 'present' : 'missing'}`);
-  console.log(`isWhatsappConnected: "${shop.isWhatsappConnected}"`);
+  console.log(`name: "${business.name}"`);
+  console.log(`phoneNumberId: "${business.phoneNumberId}"`);
+  console.log(`wabaId: "${business.wabaId}"`);
+  console.log(`accessToken: ${business.accessToken ? 'present' : 'missing'}`);
+  console.log(`isWhatsappConnected: "${business.isWhatsappConnected}"`);
 
   await mongoose.disconnect();
   console.log('Done.');

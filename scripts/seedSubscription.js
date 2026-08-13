@@ -2,7 +2,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 
 const MONGODB_URI = process.env.MONGODB_URI;
-const SHOP_ID = process.env.SHOP_ID || '6a75860c2d1149c0d6cf195f';
+const BUSINESS_ID = process.env.BUSINESS_ID || '6a75860c2d1149c0d6cf195f';
 
 async function main() {
   await mongoose.connect(MONGODB_URI);
@@ -36,12 +36,12 @@ async function main() {
     console.log(`Using existing plan "${plan.displayName}" (${plan._id}).`);
   }
 
-  // 2. Upsert an active subscription for the shop
+  // 2. Upsert an active subscription for the business
   const now = new Date();
   const oneYear = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
 
   await Subscription.updateOne(
-    { shopId: new mongoose.Types.ObjectId(SHOP_ID) },
+    { businessId: new mongoose.Types.ObjectId(BUSINESS_ID) },
     {
       $set: {
         planId: plan._id,
@@ -52,7 +52,7 @@ async function main() {
         updatedAt: now,
       },
       $setOnInsert: {
-        shopId: new mongoose.Types.ObjectId(SHOP_ID),
+        businessId: new mongoose.Types.ObjectId(BUSINESS_ID),
         razorpaySubscriptionId: null,
         razorpayPaymentId: null,
         createdAt: now,
@@ -61,7 +61,7 @@ async function main() {
     { upsert: true }
   );
 
-  console.log(`Active subscription set for shop ${SHOP_ID}, expires ${oneYear.toISOString()}.`);
+  console.log(`Active subscription set for business ${BUSINESS_ID}, expires ${oneYear.toISOString()}.`);
   await mongoose.disconnect();
 }
 

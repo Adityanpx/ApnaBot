@@ -1,7 +1,7 @@
 /**
  * scripts/updateAccessToken.js
  *
- * Rotates the stored WhatsApp access token for a shop, using the same
+ * Rotates the stored WhatsApp access token for a business, using the same
  * AES-256-CBC scheme as utils/crypto.js. Idempotent — safe to re-run.
  *
  * Usage (PowerShell):
@@ -41,18 +41,18 @@ async function main() {
   await mongoose.connect(MONGODB_URI);
   console.log('Connected to MongoDB.');
 
-  const Shop = mongoose.connection.collection('shops');
-  const shop = await Shop.findOne({ phoneNumberId: PHONE_NUMBER_ID });
+  const Business = mongoose.connection.collection('businesses');
+  const business = await Business.findOne({ phoneNumberId: PHONE_NUMBER_ID });
 
-  if (!shop) {
-    console.error(`No shop found with phoneNumberId ${PHONE_NUMBER_ID}`);
+  if (!business) {
+    console.error(`No business found with phoneNumberId ${PHONE_NUMBER_ID}`);
     process.exit(1);
   }
 
   const encryptedToken = encrypt(TEST_ACCESS_TOKEN);
-  await Shop.updateOne({ _id: shop._id }, { $set: { accessToken: encryptedToken } });
+  await Business.updateOne({ _id: business._id }, { $set: { accessToken: encryptedToken } });
 
-  console.log(`Updated accessToken for shop "${shop.name}" (${shop._id}).`);
+  console.log(`Updated accessToken for business "${business.name}" (${business._id}).`);
 
   await mongoose.disconnect();
 }

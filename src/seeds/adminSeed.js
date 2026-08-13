@@ -17,7 +17,7 @@ const seedAdmin = async () => {
       email: process.env.ADMIN_EMAIL || 'admin@apnabot.com',
       passwordHash: process.env.ADMIN_PASSWORD || 'admin123456',
       role: 'superadmin',
-      shopId: null,
+      businessId: null,
       permissions: {
         canViewChats: true,
         canManageRules: true,

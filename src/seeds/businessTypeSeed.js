@@ -5,7 +5,7 @@ const logger = require('../utils/logger');
 
 const templates = [
   {
-    businessType: 'tailor',
+    businessCategory: 'tailor',
     defaultRules: [
       { keyword: 'price', matchType: 'contains', reply: 'Our stitching prices start from ₹200 for shirts and ₹300 for suits. Send your measurements and we will give you an exact quote!', replyType: 'text' },
       { keyword: 'timing', matchType: 'contains', reply: 'We are open Monday to Saturday, 10am to 8pm. Sunday by appointment only.', replyType: 'text' },
@@ -20,7 +20,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'salon',
+    businessCategory: 'salon',
     defaultRules: [
       { keyword: 'price', matchType: 'contains', reply: 'Haircut starts at ₹150, facial from ₹299, full package from ₹799. DM for full price list!', replyType: 'text' },
       { keyword: 'timing', matchType: 'contains', reply: 'We are open every day from 9am to 9pm including Sundays!', replyType: 'text' },
@@ -34,7 +34,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'garage',
+    businessCategory: 'garage',
     defaultRules: [
       { keyword: 'price', matchType: 'contains', reply: 'Service charges: General service ₹799, AC service ₹499, Denting/Painting quote on inspection. Call us for more details!', replyType: 'text' },
       { keyword: 'timing', matchType: 'contains', reply: 'We are open Monday to Saturday 8am to 7pm. Emergency breakdown service available.', replyType: 'text' },
@@ -48,7 +48,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'cab',
+    businessCategory: 'cab',
     defaultRules: [
       { keyword: 'price', matchType: 'contains', reply: 'Local rates: ₹12/km. Outstation: ₹14/km. Airport drop flat ₹499. Share pickup and drop for exact fare!', replyType: 'text' },
       { keyword: 'available', matchType: 'contains', reply: 'Yes we have cabs available! Share your pickup location and time for booking.', replyType: 'text' },
@@ -63,7 +63,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'coaching',
+    businessCategory: 'coaching',
     defaultRules: [
       { keyword: 'fee', matchType: 'contains', reply: 'Monthly fees: Class 9-10: ₹1500/month, Class 11-12: ₹2000/month. Includes study material!', replyType: 'text' },
       { keyword: 'schedule', matchType: 'contains', reply: 'Morning batch: 7am-9am. Evening batch: 5pm-7pm. Weekend special batch also available.', replyType: 'text' },
@@ -78,7 +78,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'gym',
+    businessCategory: 'gym',
     defaultRules: [
       { keyword: 'price', matchType: 'contains', reply: 'Membership plans: Monthly ₹799, Quarterly ₹2099, Half-yearly ₹3599, Annual ₹5999. Personal trainer available!', replyType: 'text' },
       { keyword: 'timing', matchType: 'contains', reply: 'We are open 5am to 11pm all 7 days. No holiday closures!', replyType: 'text' },
@@ -92,7 +92,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'medical',
+    businessCategory: 'medical',
     defaultRules: [
       { keyword: 'timing', matchType: 'contains', reply: 'We are open 8am to 10pm all days. 24-hour emergency medicines also available.', replyType: 'text' },
       { keyword: 'available', matchType: 'contains', reply: 'Please share the medicine name and we will check stock and get back to you shortly.', replyType: 'text' },
@@ -105,7 +105,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'general',
+    businessCategory: 'general',
     defaultRules: [
       { keyword: 'price', matchType: 'contains', reply: 'Please share the product name and we will send you the latest price!', replyType: 'text' },
       { keyword: 'timing', matchType: 'contains', reply: 'We are open Monday to Saturday 10am to 8pm.', replyType: 'text' },
@@ -119,7 +119,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'boutique',
+    businessCategory: 'boutique',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'Here\'s our latest collection! Check out our photos/catalog below. Reply with an item name or code and we\'ll confirm size & price for you.', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'We are open Monday to Saturday, 10am to 8pm.', replyType: 'text' },
@@ -128,7 +128,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'photographer',
+    businessCategory: 'photographer',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'Our packages start from ₹15,000 for events and ₹5,000 for portrait sessions. Reply for a detailed quote!', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'Let\'s check availability for your date!', replyType: 'booking_trigger' },
@@ -143,7 +143,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'caterer',
+    businessCategory: 'caterer',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'Our packages range from ₹250-₹800 per plate depending on menu. Reply for our full menu list!', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'Let\'s get your event booked!', replyType: 'booking_trigger' },
@@ -158,7 +158,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'tutor',
+    businessCategory: 'tutor',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'We teach [subjects] for classes [X-Y]. Fees start from ₹1500/month. Reply for detailed fee structure!', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'Let\'s schedule your free trial class!', replyType: 'booking_trigger' },
@@ -173,7 +173,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'jeweller',
+    businessCategory: 'jeweller',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'We have gold, silver, and diamond collections. Reply to see our latest designs!', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'We are open Monday to Saturday, 10:30am to 8:30pm.', replyType: 'text' },
@@ -187,7 +187,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'grocery',
+    businessCategory: 'grocery',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'Check out today\'s fresh offers and discounts! Reply \'list\' for the full offer list.', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'We deliver in [area] within 1 hour. Open 7am to 10pm daily.', replyType: 'text' },
@@ -201,7 +201,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'bakery',
+    businessCategory: 'bakery',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'Our menu includes cakes, pastries, and fresh bakes. Reply for prices!', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'Let\'s get your custom cake order started!', replyType: 'booking_trigger' },
@@ -215,7 +215,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'electronics_repair',
+    businessCategory: 'electronics_repair',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'We repair phones, laptops, and ACs. Reply with your device and issue for a price estimate!', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'Let\'s book your repair!', replyType: 'booking_trigger' },
@@ -229,7 +229,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'real_estate',
+    businessCategory: 'real_estate',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'We have properties available for rent and sale. Reply with your budget and preferred area!', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'Let\'s schedule a site visit!', replyType: 'booking_trigger' },
@@ -243,7 +243,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'driving_school',
+    businessCategory: 'driving_school',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: 'Two-wheeler course: ₹2000, Four-wheeler course: ₹5000. Reply for full details!', replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: 'Let\'s book your first driving slot!', replyType: 'booking_trigger' },
@@ -257,7 +257,7 @@ const templates = [
     ]
   },
   {
-    businessType: 'travels',
+    businessCategory: 'travels',
     defaultRules: [
       { keyword: '1', matchType: 'exact', reply: "We offer One Way, Round Trip, and Local Rental packages to all major cities. Reply '2' to get a quote for your trip!", replyType: 'text' },
       { keyword: '2', matchType: 'exact', reply: "Let's get your trip details!", replyType: 'booking_trigger' },
@@ -286,12 +286,12 @@ const templates = [
 const seedBusinessTypes = async () => {
   try {
     for (const template of templates) {
-      const existing = await BusinessTypeTemplate.findOne({ businessType: template.businessType });
+      const existing = await BusinessTypeTemplate.findOne({ businessCategory: template.businessCategory });
       if (!existing) {
         await BusinessTypeTemplate.create(template);
-        logger.info(`Business type template created: ${template.businessType}`);
+        logger.info(`Business type template created: ${template.businessCategory}`);
       } else {
-        logger.info(`Business type template already exists: ${template.businessType}`);
+        logger.info(`Business type template already exists: ${template.businessCategory}`);
       }
     }
     logger.info('Business type seeding complete');

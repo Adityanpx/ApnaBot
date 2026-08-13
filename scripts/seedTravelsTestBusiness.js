@@ -1,39 +1,39 @@
 /**
- * seedTravelsTestShop.js
+ * seedTravelsTestBusiness.js
  * -----------------------------------------------------------------------------
- * Converts your existing test shop into a 'travels' business so you can test
+ * Converts your existing test business into a 'travels' business so you can test
  * yesterday's trip-fare rules and 9-question booking flow end to end.
  *
  * What it does (idempotent — safe to re-run):
  *   1. Ensures a BusinessTypeTemplate for 'travels' exists in Mongo
  *      (creates it from the canonical seed data if missing).
- *   2. Sets the existing test shop's businessType -> 'travels'.
- *   3. Replaces that shop's Rule documents with the 4 numbered travels rules
+ *   2. Sets the existing test business's businessCategory -> 'travels'.
+ *   3. Replaces that business's Rule documents with the 4 numbered travels rules
  *      (1 = packages info, 2 = start booking, 3 = availability, 4 = routes).
- *   4. Clears the Redis rules cache (`rules:{shopId}`) AND tenant cache
- *      (`tenant:{phoneNumberId}`) for this shop, so the change is picked up
+ *   4. Clears the Redis rules cache (`rules:{businessId}`) AND tenant cache
+ *      (`tenant:{phoneNumberId}`) for this business, so the change is picked up
  *      on the very next message — not after the 1-hour TTL.
  *
  * Does NOT touch the BusinessTypeTemplate's bookingFields (the 9-question
- * flow) — those are read live by businessType at booking time, so once the
- * template exists, they just work for any shop of that type.
+ * flow) — those are read live by businessCategory at booking time, so once the
+ * template exists, they just work for any business of that category.
  *
  * -----------------------------------------------------------------------------
- * REQUIRED env vars (same as seedTestShop.js):
+ * REQUIRED env vars (same as seedTestBusiness.js):
  *   MONGODB_URI
- *   TEST_PHONE_NUMBER_ID   (the shop is looked up by this, must already exist —
- *                            run seedTestShop.js first if you haven't)
+ *   TEST_PHONE_NUMBER_ID   (the business is looked up by this, must already exist —
+ *                            run seedTestBusiness.js first if you haven't)
  * OPTIONAL:
  *   REDIS_URL              (clears stale caches; strongly recommended)
  *
  * Run (PowerShell):
  *   $env:MONGODB_URI="..."; $env:TEST_PHONE_NUMBER_ID="1296101703578157";
- *   $env:REDIS_URL="..."; node scripts/seedTravelsTestShop.js
+ *   $env:REDIS_URL="..."; node scripts/seedTravelsTestBusiness.js
  * -----------------------------------------------------------------------------
  */
 
 const mongoose = require('mongoose');
-const Shop = require('../src/models/Shop');
+const Business = require('../src/models/Business');
 const Rule = require('../src/models/Rule');
 const BusinessTypeTemplate = require('../src/models/BusinessTypeTemplate');
 
@@ -49,7 +49,7 @@ if (!TEST_PHONE_NUMBER_ID) fail('TEST_PHONE_NUMBER_ID is required.');
 
 // Canonical travels template — matches src/seeds/businessTypeSeed.js exactly.
 const TRAVELS_TEMPLATE = {
-  businessType: 'travels',
+  businessCategory: 'travels',
   defaultRules: [
     { keyword: '1', matchType: 'exact', reply: "We offer One Way, Round Trip, and Local Rental packages to all major cities. Reply '2' to get a quote for your trip!", replyType: 'text' },
     { keyword: '2', matchType: 'exact', reply: "Let's get your trip details!", replyType: 'booking_trigger' },
@@ -69,7 +69,7 @@ const TRAVELS_TEMPLATE = {
   ]
 };
 
-async function clearCaches(shopId, phoneNumberId) {
+async function clearCaches(businessId, phoneNumberId) {
   if (!REDIS_URL) {
     console.log('   • (REDIS_URL not set — skipping cache clear; caches self-expire after 1h)');
     return;
@@ -77,10 +77,10 @@ async function clearCaches(shopId, phoneNumberId) {
   try {
     const IORedis = require('ioredis');
     const r = new IORedis(REDIS_URL);
-    await r.del(`rules:${shopId}`);
+    await r.del(`rules:${businessId}`);
     await r.del(`tenant:${phoneNumberId}`);
     await r.quit();
-    console.log(`   • cleared Redis rules cache for shop ${shopId}`);
+    console.log(`   • cleared Redis rules cache for business ${businessId}`);
     console.log(`   • cleared Redis tenant cache for ${phoneNumberId}`);
   } catch (e) {
     console.log(`   • (skipped Redis cache clear: ${e.message})`);
@@ -93,7 +93,7 @@ async function main() {
   console.log('   ✓ connected');
 
   // 1) Ensure the travels template exists
-  let template = await BusinessTypeTemplate.findOne({ businessType: 'travels' });
+  let template = await BusinessTypeTemplate.findOne({ businessCategory: 'travels' });
   if (!template) {
     template = await BusinessTypeTemplate.create(TRAVELS_TEMPLATE);
     console.log(`\n📋 BusinessTypeTemplate 'travels' CREATED (${template._id})`);
@@ -102,21 +102,21 @@ async function main() {
   }
   console.log(`   • ${template.defaultRules.length} default rules, ${template.bookingFields.length} booking questions`);
 
-  // 2) Find the existing test shop and switch it to 'travels'
-  const shop = await Shop.findOneAndUpdate(
+  // 2) Find the existing test business and switch it to 'travels'
+  const business = await Business.findOneAndUpdate(
     { phoneNumberId: TEST_PHONE_NUMBER_ID },
-    { $set: { businessType: 'travels' } },
+    { $set: { businessCategory: 'travels' } },
     { new: true }
   );
-  if (!shop) {
-    fail(`No shop found for phoneNumberId ${TEST_PHONE_NUMBER_ID}. Run seedTestShop.js first.`);
+  if (!business) {
+    fail(`No business found for phoneNumberId ${TEST_PHONE_NUMBER_ID}. Run seedTestBusiness.js first.`);
   }
-  console.log(`\n🚕 Shop "${shop.name}" (${shop._id}) businessType -> travels`);
+  console.log(`\n🚕 Business "${business.name}" (${business._id}) businessCategory -> travels`);
 
-  // 3) Replace this shop's rules with the 4 travels rules
-  await Rule.deleteMany({ shopId: shop._id });
+  // 3) Replace this business's rules with the 4 travels rules
+  await Rule.deleteMany({ businessId: business._id });
   const rulesToCreate = TRAVELS_TEMPLATE.defaultRules.map((rule) => ({
-    shopId: shop._id,
+    businessId: business._id,
     keyword: rule.keyword,
     matchType: rule.matchType,
     reply: rule.reply,
@@ -124,11 +124,11 @@ async function main() {
     isActive: true
   }));
   await Rule.insertMany(rulesToCreate);
-  console.log(`💬 Seeded ${rulesToCreate.length} travels rules for this shop:`);
+  console.log(`💬 Seeded ${rulesToCreate.length} travels rules for this business:`);
   rulesToCreate.forEach(r => console.log(`   • "${r.keyword}" (${r.matchType}) -> ${r.replyType}`));
 
   // 4) Clear stale caches so this takes effect on the very next message
-  await clearCaches(shop._id.toString(), TEST_PHONE_NUMBER_ID);
+  await clearCaches(business._id.toString(), TEST_PHONE_NUMBER_ID);
 
   console.log('\n✅ Done. Test it on WhatsApp (send to +1 555 672-4377):');
   console.log('   1  -> package info + prompt to reply 2');

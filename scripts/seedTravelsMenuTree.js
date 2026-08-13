@@ -2,19 +2,19 @@
  * scripts/seedTravelsMenuTree.js
  *
  * Creates (or updates, if already present) the full travels Main Menu tree
- * for one shop, using the listOptions chaining added in the 5 backend
- * prompts. Upserts by {shopId, keyword}, so it's safe to re-run.
+ * for one business, using the listOptions chaining added in the 5 backend
+ * prompts. Upserts by {businessId, keyword}, so it's safe to re-run.
  *
  * Usage (PowerShell):
  *   $env:MONGODB_URI = 'your-connection-string'
- *   $env:SHOP_PHONE_NUMBER_ID = '1296101703578157'   # optional, this is the default
+ *   $env:BUSINESS_PHONE_NUMBER_ID = '1296101703578157'   # optional, this is the default
  *   node scripts/seedTravelsMenuTree.js
  */
 require('dotenv').config();
 const mongoose = require('mongoose');
 
 const MONGODB_URI = process.env.MONGODB_URI;
-const PHONE_NUMBER_ID = process.env.SHOP_PHONE_NUMBER_ID || '1296101703578157';
+const PHONE_NUMBER_ID = process.env.BUSINESS_PHONE_NUMBER_ID || '1296101703578157';
 
 if (!MONGODB_URI) {
   console.error('Missing MONGODB_URI env var.');
@@ -22,13 +22,13 @@ if (!MONGODB_URI) {
 }
 
 // Each entry: keyword, matchType, reply, replyType, listOptions (label/description/nextKeyword)
-function buildTree(shopName) {
+function buildTree(businessName) {
   return [
     // Entry points — all three lead to the same Main Menu
     ...['hi', 'hello', 'menu'].map((keyword) => ({
       keyword,
       matchType: 'exact',
-      reply: `Hi there! 👋 Welcome to ${shopName}.\n\nPlease choose what you'd like to do 👇`,
+      reply: `Hi there! 👋 Welcome to ${businessName}.\n\nPlease choose what you'd like to do 👇`,
       replyType: 'text',
       listOptions: [
         { label: 'Book a Trip', description: 'One way, round trip, outstation & local', nextKeyword: 'menu_trip_type' },
@@ -135,26 +135,26 @@ async function main() {
   await mongoose.connect(MONGODB_URI);
   console.log('Connected to MongoDB.');
 
-  const Shop = mongoose.connection.collection('shops');
+  const Business = mongoose.connection.collection('businesses');
   const Rule = mongoose.connection.collection('rules');
 
-  const shop = await Shop.findOne({ phoneNumberId: PHONE_NUMBER_ID });
-  if (!shop) {
-    console.error(`No shop found with phoneNumberId ${PHONE_NUMBER_ID}`);
+  const business = await Business.findOne({ phoneNumberId: PHONE_NUMBER_ID });
+  if (!business) {
+    console.error(`No business found with phoneNumberId ${PHONE_NUMBER_ID}`);
     process.exit(1);
   }
 
-  const shopName = shop.displayName || shop.name || 'our shop';
-  const tree = buildTree(shopName);
+  const businessName = business.displayName || business.name || 'our business';
+  const tree = buildTree(businessName);
 
-  console.log(`Seeding ${tree.length} rule(s) for shop "${shop.name}" (${shop._id})...\n`);
+  console.log(`Seeding ${tree.length} rule(s) for business "${business.name}" (${business._id})...\n`);
 
   for (const rule of tree) {
     await Rule.updateOne(
-      { shopId: shop._id, keyword: rule.keyword },
+      { businessId: business._id, keyword: rule.keyword },
       {
         $set: {
-          shopId: shop._id,
+          businessId: business._id,
           keyword: rule.keyword,
           matchType: rule.matchType,
           reply: rule.reply,
