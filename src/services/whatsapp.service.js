@@ -144,13 +144,11 @@ const sendListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText
         ]
       }
     };
-    logger.info('[DEBUG] sendListMessage interactive payload:', { phoneNumberId, to, interactive: JSON.stringify(interactive) });
     const response = await axios.post(
       `${META_API_BASE}/${phoneNumberId}/messages`,
       { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive', interactive },
       { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
     );
-    logger.info('[DEBUG] sendListMessage response:', { phoneNumberId, to, data: JSON.stringify(response.data) });
     return response.data;
   } catch (error) {
     logger.error('Error sending list message:', { phoneNumberId, to, error: error.response?.data || error.message });
