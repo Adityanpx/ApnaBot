@@ -372,6 +372,7 @@ const receiveWebhook = async (req, res) => {
         }
 
         if (carouselOptions) {
+          let sentCount = 0;
           try {
             // Intro message (question text or the stale-vehicle re-prompt)
             const introText = nextField ? nextField.label : stepResult;
@@ -408,7 +409,12 @@ const receiveWebhook = async (req, res) => {
                 messageId: introMsg._id
               });
             } catch (sendError) {
-              logger.error('Error sending carousel intro message:', sendError);
+              logger.error('Error sending carousel intro message', {
+                shopId: tenant.shopId,
+                customerNumber,
+                message: sendError.message,
+                stack: sendError.stack
+              });
             }
 
             usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
@@ -426,7 +432,7 @@ const receiveWebhook = async (req, res) => {
             }
 
             // One message per vehicle option: image + caption + "Book this" button
-            logger.info('Sending vehicle carousel', { customerNumber, optionCount: carouselOptions.length });
+            logger.info('Sending vehicle carousel', { shopId: tenant.shopId, customerNumber, optionCount: carouselOptions.length });
             for (const option of carouselOptions) {
               const captionParts = [option.name];
               if (option.seats) captionParts.push(`${option.seats} seats`);
@@ -448,7 +454,14 @@ const receiveWebhook = async (req, res) => {
               try {
                 vehicleMsg = await Message.create(vehicleMsgShape);
               } catch (createError) {
-                logger.error(`Error creating carousel vehicle message record for option index ${option.index}:`, { message: createError.message, stack: createError.stack });
+                logger.error('Error creating carousel vehicle message record', {
+                  shopId: tenant.shopId,
+                  customerNumber,
+                  optionIndex: option.index,
+                  optionName: option.name,
+                  message: createError.message,
+                  stack: createError.stack
+                });
                 vehicleMsg = vehicleMsgShape;
               }
 
@@ -466,8 +479,16 @@ const receiveWebhook = async (req, res) => {
                   buttons: [{ title: 'Book this', nextKeyword: `vehicle_${option.index}` }],
                   messageId: vehicleMsg._id
                 });
+                sentCount++;
               } catch (sendError) {
-                logger.error('Error sending carousel vehicle message:', sendError);
+                logger.error('Error sending carousel vehicle message', {
+                  shopId: tenant.shopId,
+                  customerNumber,
+                  optionIndex: option.index,
+                  optionName: option.name,
+                  message: sendError.message,
+                  stack: sendError.stack
+                });
               }
 
               usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
@@ -484,6 +505,13 @@ const receiveWebhook = async (req, res) => {
                 logger.error('Error emitting socket event:', socketError);
               }
             }
+
+            logger.info('Vehicle carousel send complete', {
+              shopId: tenant.shopId,
+              customerNumber,
+              totalOptions: carouselOptions.length,
+              sentCount
+            });
 
             // Escape hatch: let the customer opt out of the carousel if their
             // preferred vehicle isn't listed.
@@ -521,7 +549,12 @@ const receiveWebhook = async (req, res) => {
                 messageId: otherOptionsMsg._id
               });
             } catch (sendError) {
-              logger.error('Error sending carousel "other options" message:', sendError);
+              logger.error('Error sending carousel "other options" message', {
+                shopId: tenant.shopId,
+                customerNumber,
+                message: sendError.message,
+                stack: sendError.stack
+              });
             }
 
             usageService.incrementUsage(tenant.shopId, 'outbound').catch(err =>
@@ -538,7 +571,12 @@ const receiveWebhook = async (req, res) => {
               logger.error('Error emitting socket event:', socketError);
             }
           } catch (error) {
-            logger.error('Error in vehicle carousel send block:', { message: error.message, stack: error.stack });
+            logger.error('Fatal error in vehicle carousel send block', {
+              shopId: tenant.shopId,
+              customerNumber,
+              message: error.message,
+              stack: error.stack
+            });
           }
 
           return; // Do not run rule matching
