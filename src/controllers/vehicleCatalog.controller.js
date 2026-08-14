@@ -23,7 +23,7 @@ const getVehicleCatalog = async (req, res, next) => {
  */
 const createVehicleCatalogEntry = async (req, res, next) => {
   try {
-    const { name, type = 'sedan', seats = null, order = 0 } = req.body;
+    const { name, type = 'sedan', photoUrl = null, seats = null, order = 0 } = req.body;
 
     if (!name) {
       return errorResponse(res, 400, 'name is required');
@@ -32,6 +32,7 @@ const createVehicleCatalogEntry = async (req, res, next) => {
     const entry = await VehicleTypeCatalog.create({
       name: name.trim(),
       type,
+      photoUrl,
       seats,
       order,
       isActive: true
