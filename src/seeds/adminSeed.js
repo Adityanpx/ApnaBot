@@ -18,6 +18,7 @@ const seedAdmin = async () => {
       passwordHash: process.env.ADMIN_PASSWORD || 'admin123456',
       role: 'superadmin',
       businessId: null,
+      isVerified: true, // seeded from trusted env vars, not self-registration — email-OTP verification doesn't apply
       permissions: {
         canViewChats: true,
         canManageRules: true,
