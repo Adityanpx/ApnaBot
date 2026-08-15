@@ -793,6 +793,30 @@ const getBookingFieldsPreview = async (businessId) => {
 };
 
 /**
+ * Full, UNfiltered booking field sequence for a business's category — includes
+ * fields currently in disabledBookingFields, unlike getBookingFieldsPreview.
+ * Powers the dashboard's Booking Flow settings page, where the owner needs to
+ * see (and toggle) every field the template defines, not just the active ones.
+ * @param {string} businessId
+ * @returns {Promise<Object>} { fields: [...] } - the ordered bookingFields, unfiltered
+ */
+const getAllBookingFields = async (businessId) => {
+  const business = await Business.findById(businessId).select('businessCategory');
+  if (!business) {
+    throw new Error('Business not found');
+  }
+
+  const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
+  if (!template || !template.bookingFields || template.bookingFields.length === 0) {
+    throw new Error('No booking fields configured for this business type');
+  }
+
+  const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
+
+  return { fields: sortedFields };
+};
+
+/**
  * Read-only preview of the vehicle carousel a customer would see for a given
  * pickup/drop/tripType, for the dashboard's Conversation Preview. Delegates
  * straight to the real fare-lookup logic (route fares first, then distance
@@ -878,6 +902,7 @@ module.exports = {
   processBookingStep,
   findMatchingVehicleOptions,
   getBookingFieldsPreview,
+  getAllBookingFields,
   getVehicleCarouselPreview,
   getPreviewCreditsStatus,
   checkAndConsumeManualPreviewCredit

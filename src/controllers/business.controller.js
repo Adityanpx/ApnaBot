@@ -174,6 +174,30 @@ const updateBusiness = async (req, res, next) => {
 };
 
 /**
+ * GET /api/business/booking-fields
+ * Full (unfiltered) booking field sequence for the owner's business category,
+ * including fields currently in disabledBookingFields — powers the dashboard's
+ * Booking Flow page, where the owner needs to see and toggle every field, not
+ * just the active ones (unlike GET /bookings/preview-fields).
+ */
+const getBookingFields = async (req, res, next) => {
+  try {
+    const businessId = req.user.businessId;
+
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
+    }
+
+    const { fields } = await bookingService.getAllBookingFields(businessId);
+
+    return successResponse(res, 200, { fields });
+  } catch (error) {
+    logger.error('Error in getBookingFields:', error);
+    next(error);
+  }
+};
+
+/**
  * POST /api/business/connect-whatsapp
  * Connect WhatsApp Business number to business
  */
@@ -355,6 +379,7 @@ module.exports = {
   getBusiness,
   createBusiness,
   updateBusiness,
+  getBookingFields,
   connectWhatsapp,
   disconnectWhatsapp,
   getDashboardStats,

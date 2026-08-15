@@ -8,6 +8,7 @@ const { uploadSingle } = require('../middleware/upload.middleware');
 // GET    /                   → protect, requireBusiness, business.controller.getBusiness
 // POST   /                   → protect, business.controller.createBusiness
 // PUT    /                   → protect, requireBusiness, business.controller.updateBusiness
+// GET    /booking-fields     → protect, requireBusiness, business.controller.getBookingFields
 // POST   /connect-whatsapp   → protect, requireBusiness, requireRole('owner'), business.controller.connectWhatsapp
 // DELETE /disconnect-whatsapp → protect, requireBusiness, requireRole('owner'), business.controller.disconnectWhatsapp
 // GET    /dashboard-stats     → protect, requireBusiness, business.controller.getDashboardStats
@@ -21,6 +22,10 @@ router.post('/', protect, businessController.createBusiness);
 
 // PUT / - Update business profile
 router.put('/', protect, requireBusiness, businessController.updateBusiness);
+
+// GET /booking-fields - Full unfiltered booking field sequence for the owner's
+// business category (includes currently-disabled fields), for the Booking Flow page
+router.get('/booking-fields', protect, requireBusiness, businessController.getBookingFields);
 
 // POST /connect-whatsapp - Connect WhatsApp Business
 // Body: { code, wabaId, phoneNumberId } - `code` is the OAuth authorization
