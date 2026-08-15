@@ -110,7 +110,7 @@ const createBusiness = async (ownerUserId, data) => {
  */
 const updateBusiness = async (businessId, data) => {
   try {
-    const allowedFields = ['name', 'displayName', 'address', 'city', 'profileImage', 'upiId', 'fallbackReply', 'welcomeMessage', 'isMenuEnabled', 'menuItems', 'enableDistanceFares', 'enableSmartFallback', 'roundTripPerDayKm', 'roundTripDriverDaEnabled', 'roundTripDriverDaAmount'];
+    const allowedFields = ['name', 'displayName', 'address', 'city', 'profileImage', 'upiId', 'fallbackReply', 'welcomeMessage', 'isMenuEnabled', 'menuItems', 'enableDistanceFares', 'enableSmartFallback', 'roundTripPerDayKm', 'roundTripDriverDaEnabled', 'roundTripDriverDaAmount', 'disabledBookingFields'];
     const updateData = {};
 
     // Only allow updating specific fields

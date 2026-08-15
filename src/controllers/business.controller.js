@@ -3,6 +3,7 @@ const businessService = require('../services/business.service');
 const tenantService = require('../services/tenant.service');
 const subscriptionService = require('../services/subscription.service');
 const bookingService = require('../services/booking.service');
+const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const { successResponse, errorResponse } = require('../utils/response');
 const { generateTokens, saveTokenToRedis } = require('../services/auth.service');
 const logger = require('../utils/logger');
@@ -142,6 +143,21 @@ const updateBusiness = async (req, res, next) => {
 
     if (!businessId) {
       return errorResponse(res, 404, 'No business found');
+    }
+
+    if (req.body.disabledBookingFields !== undefined) {
+      const currentBusiness = await businessService.getBusinessById(businessId);
+      const template = await BusinessTypeTemplate.findOne({ businessCategory: currentBusiness.businessCategory });
+      const templateFieldsByKey = new Map((template?.bookingFields || []).map(field => [field.fieldKey, field]));
+
+      const invalidFieldKeys = req.body.disabledBookingFields.filter(fieldKey => {
+        const templateField = templateFieldsByKey.get(fieldKey);
+        return !templateField || templateField.required === true;
+      });
+
+      if (invalidFieldKeys.length > 0) {
+        return errorResponse(res, 400, `Cannot disable field(s): ${invalidFieldKeys.join(', ')}. Each must be an optional field defined in the ${currentBusiness.businessCategory} booking template.`);
+      }
     }
 
     const business = await businessService.updateBusiness(businessId, req.body);

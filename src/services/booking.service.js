@@ -361,6 +361,29 @@ const deleteBookingSession = async (businessId, customerNumber) => {
 };
 
 /**
+ * Drop fields the business has opted to skip. Required fields can never be
+ * disabled (enforced server-side on PUT /api/business), so this is a
+ * defensive check, not the primary guard — if one somehow slips through,
+ * keep it in the sequence rather than silently dropping a required answer.
+ * @param {Array} sortedFields
+ * @param {Array<string>} disabledFieldKeys
+ * @param {string} businessId - only used for the warn log below
+ * @returns {Array}
+ */
+const filterActiveBookingFields = (sortedFields, disabledFieldKeys, businessId) => {
+  return sortedFields.filter(field => {
+    if (!disabledFieldKeys.includes(field.fieldKey)) {
+      return true;
+    }
+    if (field.required === true) {
+      logger.warn('Ignoring disabledBookingFields entry for a required field', { businessId, fieldKey: field.fieldKey });
+      return true;
+    }
+    return false;
+  });
+};
+
+/**
  * Start a new booking session
  * @param {string} businessId
  * @param {string} customerNumber
@@ -370,7 +393,7 @@ const deleteBookingSession = async (businessId, customerNumber) => {
 const startBookingSession = async (businessId, customerNumber, ruleId) => {
   try {
     // Step 1: Load booking fields for business's businessCategory
-    const business = await Business.findById(businessId).select('businessCategory');
+    const business = await Business.findById(businessId).select('businessCategory disabledBookingFields');
     if (!business) {
       throw new Error('Business not found');
     }
@@ -383,10 +406,13 @@ const startBookingSession = async (businessId, customerNumber, ruleId) => {
     // Sort booking fields by order field
     const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
 
+    const disabledFieldKeys = business.disabledBookingFields || [];
+    const activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
+
     // Step 2: Create session object
     const sessionData = {
       step: 0,
-      fields: sortedFields,
+      fields: activeFields,
       collected: {},
       ruleId: ruleId,
       startedAt: new Date().toISOString()
@@ -396,7 +422,7 @@ const startBookingSession = async (businessId, customerNumber, ruleId) => {
     await saveBookingSession(businessId, customerNumber, sessionData);
 
     // Step 4: Return first question field
-    return sortedFields[0];
+    return activeFields[0];
   } catch (error) {
     logger.error('Error starting booking session:', error);
     throw error;
@@ -748,7 +774,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
  * @returns {Promise<Object>} { fields: [...] } - the ordered bookingFields
  */
 const getBookingFieldsPreview = async (businessId) => {
-  const business = await Business.findById(businessId).select('businessCategory');
+  const business = await Business.findById(businessId).select('businessCategory disabledBookingFields');
   if (!business) {
     throw new Error('Business not found');
   }
@@ -760,7 +786,10 @@ const getBookingFieldsPreview = async (businessId) => {
 
   const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
 
-  return { fields: sortedFields };
+  const disabledFieldKeys = business.disabledBookingFields || [];
+  const activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
+
+  return { fields: activeFields };
 };
 
 /**

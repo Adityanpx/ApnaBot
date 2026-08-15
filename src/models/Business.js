@@ -116,6 +116,10 @@ const businessSchema = new mongoose.Schema({
       order: { type: Number, required: true }
     }],
     default: []
+  },
+  disabledBookingFields: {
+    type: [String],
+    default: []
   }
 }, { timestamps: true, collection: 'businesses' });
 
