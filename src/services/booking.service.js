@@ -615,8 +615,8 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
             // untouched (dropLocation stays) so the rest of the flow falls
             // back to the same shape as One Way. The confirmation builder
             // checks this flag to show a "team will confirm pricing" note
-            // instead of a fare, and the carrierRequired-triggered carousel
-            // swap is skipped for local rental below (getCarouselOptionsForSession).
+            // instead of a fare, and the carousel swap (triggered right before
+            // vehicleType) is skipped for local rental below (getCarouselOptionsForSession).
             session.localRentalUnconfigured = true;
           } else {
             const packagesByKey = await groupRentalPackagesByKey(businessId);
@@ -640,12 +640,20 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
       }
     }
 
-    // Once carrierRequired is answered, pickup/drop/package are all known —
-    // try to find a priced carousel (route fare, distance estimate, or
-    // rental package, per trip type) and swap the generic vehicleType field
-    // for it. Businesses with no matching pricing are unaffected — session.fields
-    // is left untouched and the generic flow proceeds exactly as before.
-    if (currentField.fieldKey === 'carrierRequired') {
+    // Once the field right before vehicleType is answered, pickup/drop/package
+    // are all known — try to find a priced carousel (route fare, distance
+    // estimate, or rental package, per trip type) and swap the generic
+    // vehicleType field for it. Businesses with no matching pricing are
+    // unaffected — session.fields is left untouched and the generic flow
+    // proceeds exactly as before.
+    //
+    // Triggered dynamically off "is vehicleType the next field" rather than a
+    // fixed fieldKey, since businesses can disable optional fields (e.g.
+    // tollParkingIncluded) via disabledBookingFields, which removes them from
+    // session.fields entirely at session creation — a hardcoded fieldKey check
+    // would silently never match for those businesses.
+    const nextField = session.fields[session.step + 1];
+    if (nextField && nextField.fieldKey === 'vehicleType') {
       const carouselOptions = await getCarouselOptionsForSession(businessId, session);
 
       if (carouselOptions.length > 0) {

@@ -275,10 +275,10 @@ const templates = [
       { fieldKey: 'dropLocation', label: 'Drop location?', summaryLabel: 'Drop', required: true, order: 3 },
       { fieldKey: 'travelDate', label: 'What date do you need the vehicle? (DD/MM/YYYY)', summaryLabel: 'Date', required: true, order: 4 },
       { fieldKey: 'pickupTime', label: 'What time should we pick you up?', summaryLabel: 'Time', required: true, order: 5 },
-      { fieldKey: 'vehicleType', label: "Vehicle preference? Hatchback / Sedan / SUV / Luxury / Tempo / Mini Bus / Bus (or say 'any')", summaryLabel: 'Vehicle', required: true, order: 6, fieldType: 'list', options: ['Hatchback', 'Sedan', 'SUV', 'Luxury', 'Tempo', 'Mini Bus', 'Bus'] },
-      { fieldKey: 'acRequired', label: 'Do you need AC? Reply Yes or No', summaryLabel: 'AC', required: false, order: 7, fieldType: 'buttons', options: ['Yes', 'No'] },
-      { fieldKey: 'carrierRequired', label: 'Do you need a carrier for luggage? Reply Yes or No', summaryLabel: 'Luggage carrier', required: false, order: 8, fieldType: 'buttons', options: ['Yes', 'No'] },
-      { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', summaryLabel: 'Toll & parking included', required: false, order: 9, fieldType: 'buttons', options: ['Yes', 'No'] }
+      { fieldKey: 'acRequired', label: 'Do you need AC? Reply Yes or No', summaryLabel: 'AC', required: false, order: 6, fieldType: 'buttons', options: ['Yes', 'No'] },
+      { fieldKey: 'carrierRequired', label: 'Do you need a carrier for luggage? Reply Yes or No', summaryLabel: 'Luggage carrier', required: false, order: 7, fieldType: 'buttons', options: ['Yes', 'No'] },
+      { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', summaryLabel: 'Toll & parking included', required: false, order: 8, fieldType: 'buttons', options: ['Yes', 'No'] },
+      { fieldKey: 'vehicleType', label: "Vehicle preference? Hatchback / Sedan / SUV / Luxury / Tempo / Mini Bus / Bus (or say 'any')", summaryLabel: 'Vehicle', required: true, order: 9, fieldType: 'list', options: ['Hatchback', 'Sedan', 'SUV', 'Luxury', 'Tempo', 'Mini Bus', 'Bus'] }
     ]
   }
 ];
