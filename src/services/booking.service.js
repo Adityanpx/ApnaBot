@@ -14,6 +14,28 @@ const logger = require('../utils/logger');
 
 const tripTypeMap = { 'One Way': 'oneway', 'Round Trip': 'round_trip', 'Local Rental': 'local' };
 
+/**
+ * Format a Date as DD/MM/YYYY, matching the format customers are asked to
+ * type manually when they answer the travelDate question with free text.
+ */
+const formatDateDDMMYYYY = (date) => {
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${date.getFullYear()}`;
+};
+
+/**
+ * Resolve a travelDate quick-reply option ("Today"/"Tomorrow") to the actual
+ * calendar date, in the same DD/MM/YYYY format as manual entry.
+ */
+const resolveTravelDateOption = (option) => {
+  const date = new Date();
+  if (option === 'Tomorrow') {
+    date.setDate(date.getDate() + 1);
+  }
+  return formatDateDDMMYYYY(date);
+};
+
 const BOOKING_SESSION_TTL = 1800; // 30 minutes in seconds
 
 const FREE_MONTHLY_PREVIEW_CREDITS = 20;
@@ -579,7 +601,25 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         return 'Please choose one of: ' + options.join(', ');
       }
 
-      session.collected[currentField.fieldKey] = resolvedOption;
+      if (currentField.fieldKey === 'travelDate' && resolvedOption === 'Other date') {
+        // Customer wants to type their own date — swap this step's field for
+        // a plain-text sub-question in place, without advancing session.step,
+        // so their next reply is captured as free text (same pattern as
+        // fallbackToGenericVehicleField's vehicle_carousel "other" swap).
+        const otherDateField = {
+          ...currentField,
+          fieldType: 'text',
+          options: [],
+          label: 'Please enter the date (DD/MM/YYYY):'
+        };
+        session.fields[session.step] = otherDateField;
+        await saveBookingSession(businessId, customerNumber, session);
+        return otherDateField;
+      }
+
+      session.collected[currentField.fieldKey] = currentField.fieldKey === 'travelDate'
+        ? resolveTravelDateOption(resolvedOption)
+        : resolvedOption;
     } else {
       session.collected[currentField.fieldKey] = customerReply.trim();
     }
