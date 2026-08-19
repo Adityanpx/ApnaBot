@@ -40,6 +40,7 @@ const resolveBusinessByPhoneNumberId = async (phoneNumberId) => {
     const tenant = {
       businessId: business._id,
       businessName: business.name,
+      displayName: business.displayName,
       phoneNumberId: business.phoneNumberId,
       accessToken: business.accessToken, // Still encrypted here
       fallbackReply: business.fallbackReply,

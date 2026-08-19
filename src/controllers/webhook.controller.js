@@ -11,6 +11,7 @@ const Customer = require('../models/Customer');
 const Message = require('../models/Message');
 const Business = require('../models/Business');
 const Rule = require('../models/Rule');
+const { applyMessageTemplate } = require('../utils/messageTemplating');
 const logger = require('../utils/logger');
 
 // Exact-match greeting keywords that trigger the welcome message / menu.
@@ -281,7 +282,10 @@ const receiveWebhook = async (req, res) => {
         // Step 12.5 does for a greeting.
         if (escapeHasMenu) {
           const menuListOptions = await buildMenuListOptions(escapeBusinessDoc.menuItems);
-          const menuReplyText = escapeBusinessDoc.welcomeMessage || 'How can we help you today?';
+          const menuReplyText = applyMessageTemplate(
+            escapeBusinessDoc.welcomeMessage || 'How can we help you today?',
+            tenant
+          );
 
           const menuOutboundMsg = await Message.create({
             businessId: tenant.businessId,
@@ -657,6 +661,8 @@ const receiveWebhook = async (req, res) => {
           }
         }
 
+        greetingReplyText = applyMessageTemplate(greetingReplyText, tenant);
+
         // Save outbound message
         const greetingOutboundMsg = await Message.create({
           businessId: tenant.businessId,
@@ -718,7 +724,7 @@ const receiveWebhook = async (req, res) => {
 
       if (matchedRule.replyType === 'text') {
         // Simple text reply (may also carry an image and/or buttons).
-        replyText = matchedRule.reply;
+        replyText = applyMessageTemplate(matchedRule.reply, tenant);
 
       } else if (matchedRule.replyType === 'booking_trigger') {
         // Start booking flow — ask first question
@@ -731,7 +737,7 @@ const receiveWebhook = async (req, res) => {
         replyText = firstField.label;
 
       } else if (matchedRule.replyType === 'payment_trigger') {
-        replyText = matchedRule.reply || 'Please complete your payment.';
+        replyText = applyMessageTemplate(matchedRule.reply, tenant) || 'Please complete your payment.';
       }
     } else {
       // No rule matched — try an AI-generated fallback (opt-in per business),
@@ -749,7 +755,7 @@ const receiveWebhook = async (req, res) => {
         }
       }
 
-      replyText = smartReply || tenant.fallbackReply || 'Thank you for your message. We will get back to you soon.';
+      replyText = smartReply || applyMessageTemplate(tenant.fallbackReply, tenant) || 'Thank you for your message. We will get back to you soon.';
 
       // Attach the numbered menu (if the business has one enabled) regardless of
       // whether replyText above came from the AI smart fallback or the
