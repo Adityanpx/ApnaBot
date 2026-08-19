@@ -16,17 +16,20 @@ const connection = {
 const worker = new Worker('whatsapp-outbound', async (job) => {
   const { businessId, phoneNumberId, encryptedAccessToken, to, message, messageId,
           type = 'text', imageUrl = null, buttons = [], listOptions = [],
-          interactiveButtons = null, interactiveList = null, listButtonLabel = 'Choose' } = job.data;
+          interactiveButtons = null, interactiveList = null, listButtonLabel = 'Choose',
+          step = null } = job.data;
 
   try {
     if (Array.isArray(interactiveList) && interactiveList.length > 0) {
       // Booking-field choice question rendered as a tappable list (Part C/D/E).
-      await whatsappService.sendListMessage(phoneNumberId, encryptedAccessToken, to, message, listButtonLabel, interactiveList);
+      await whatsappService.sendListMessage(phoneNumberId, encryptedAccessToken, to, message, listButtonLabel, interactiveList, step);
     } else if (Array.isArray(interactiveButtons) && interactiveButtons.length > 0) {
-      // Booking-field choice question rendered as reply buttons. Reuses
-      // sendInteractiveButtons with ids set to the option's index, matching
-      // the id scheme resolved back in webhook.controller.js.
-      const mappedButtons = interactiveButtons.map((opt, index) => ({ title: opt, nextKeyword: String(index) }));
+      // Booking-field choice question rendered as reply buttons. Each id is
+      // "{step}:{index}" (not just the index) so a stale tap from an earlier
+      // question can't be silently misresolved against whatever booking
+      // field is currently active — see webhook.controller.js's inbound
+      // resolution.
+      const mappedButtons = interactiveButtons.map((opt, index) => ({ title: opt, nextKeyword: `${step}:${index}` }));
       await whatsappService.sendInteractiveButtons(phoneNumberId, encryptedAccessToken, to, message, mappedButtons, imageUrl);
     } else if (Array.isArray(buttons) && buttons.length > 0) {
       await whatsappService.sendInteractiveButtons(phoneNumberId, encryptedAccessToken, to, message, buttons, imageUrl);

@@ -327,10 +327,8 @@ const receiveWebhook = async (req, res) => {
       }
 
       // If the customer tapped a button/list row for the current choice
-      // field, resolve its id (a stringified option index — see
-      // sendInteractiveButtons/sendListMessage mapping in the worker) back
-      // to the option's text before handing off. Plain text answers pass
-      // through untouched.
+      // field, resolve its id back to the option's text before handing off.
+      // Plain text answers pass through untouched.
       let resolvedReply = messageText;
       const currentField = activeSession.fields[activeSession.step];
       const replyId = listReplyId !== null ? listReplyId : buttonReplyId;
@@ -339,10 +337,72 @@ const receiveWebhook = async (req, res) => {
         // 'vehicle_<index>'; pass the bare index straight through.
         resolvedReply = buttonReplyId.slice('vehicle_'.length);
       } else if (currentField && (currentField.fieldType === 'buttons' || currentField.fieldType === 'list') && replyId !== null) {
+        // id is "{step}:{index}" (see sendInteractiveButtons/sendListMessage
+        // mapping in the worker) — the step it was generated for, not just
+        // the option's index. Two different questions can have an option at
+        // the same index (e.g. travelDate's "Other date" and pickupTime's
+        // "Other time" are both index 2), so a bare index would let a stale
+        // tap from an earlier, already-answered question get misresolved
+        // against whatever field is currently active.
         const options = currentField.options || [];
-        const idx = parseInt(replyId, 10);
-        if (!Number.isNaN(idx) && options[idx] !== undefined) {
-          resolvedReply = options[idx];
+        const sepIdx = replyId.indexOf(':');
+        const tappedStep = sepIdx === -1 ? NaN : parseInt(replyId.slice(0, sepIdx), 10);
+        const tappedIndex = sepIdx === -1 ? NaN : parseInt(replyId.slice(sepIdx + 1), 10);
+
+        if (tappedStep !== activeSession.step) {
+          // Stale tap from an earlier question (or a malformed id) — don't
+          // resolve it as an answer to the current question. Silently ignore
+          // it and re-send the current question's prompt so the customer
+          // sees the bot is still waiting here, without advancing
+          // session.step or touching session.collected.
+          const resendMsg = await Message.create({
+            businessId: tenant.businessId,
+            customerId: customer._id,
+            customerNumber,
+            direction: 'outbound',
+            type: 'text',
+            content: currentField.label,
+            status: 'sent',
+            triggeredRuleId: activeSession.ruleId,
+            isRead: true
+          });
+          const resendJobData = {
+            businessId: tenant.businessId,
+            phoneNumberId: tenant.phoneNumberId,
+            encryptedAccessToken: tenant.accessToken,
+            to: customerNumber,
+            message: currentField.label,
+            type: 'text',
+            step: activeSession.step,
+            messageId: resendMsg._id
+          };
+          if (currentField.fieldType === 'buttons') {
+            resendJobData.interactiveButtons = options;
+          } else {
+            resendJobData.interactiveList = options;
+            resendJobData.listButtonLabel = 'Choose';
+          }
+          await addToWhatsappQueue(resendJobData);
+
+          usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+            logger.error('Error incrementing outbound usage:', err)
+          );
+          try {
+            socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+              customer,
+              message: resendMsg,
+              customerNumber
+            });
+          } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+          }
+
+          logger.info(`Ignored stale button/list tap for ${customerNumber} (tapped step ${tappedStep}, current step ${activeSession.step})`);
+          return; // Do not advance the session or run rule matching
+        }
+
+        if (!Number.isNaN(tappedIndex) && options[tappedIndex] !== undefined) {
+          resolvedReply = options[tappedIndex];
         }
       }
 
@@ -611,11 +671,21 @@ const receiveWebhook = async (req, res) => {
           type: 'text',
           messageId: outboundMsg._id
         };
-        if (nextField && nextField.fieldType === 'buttons') {
-          outboundJobData.interactiveButtons = nextField.options || [];
-        } else if (nextField && nextField.fieldType === 'list') {
-          outboundJobData.interactiveList = nextField.options || [];
-          outboundJobData.listButtonLabel = 'Choose';
+        if (nextField && (nextField.fieldType === 'buttons' || nextField.fieldType === 'list')) {
+          // nextField's step isn't always activeSession.step + 1 — bailing
+          // out of the vehicle carousel to the generic vehicleType list
+          // reuses the SAME step instead of advancing. Re-fetch the session
+          // (already saved by processBookingStep) to get the step this
+          // question truly lives at, so outbound ids line up with what
+          // inbound resolution will later compare against session.step.
+          const stepSession = await bookingService.getBookingSession(tenant.businessId, customerNumber);
+          outboundJobData.step = stepSession ? stepSession.step : activeSession.step;
+          if (nextField.fieldType === 'buttons') {
+            outboundJobData.interactiveButtons = nextField.options || [];
+          } else {
+            outboundJobData.interactiveList = nextField.options || [];
+            outboundJobData.listButtonLabel = 'Choose';
+          }
         }
         await addToWhatsappQueue(outboundJobData);
 
@@ -800,11 +870,15 @@ const receiveWebhook = async (req, res) => {
     if (fallbackMenuListOptions) {
       outboundJobData.listButtonLabel = 'Menu';
     }
-    if (bookingField && bookingField.fieldType === 'buttons') {
-      outboundJobData.interactiveButtons = bookingField.options || [];
-    } else if (bookingField && bookingField.fieldType === 'list') {
-      outboundJobData.interactiveList = bookingField.options || [];
-      outboundJobData.listButtonLabel = 'Choose';
+    if (bookingField && (bookingField.fieldType === 'buttons' || bookingField.fieldType === 'list')) {
+      // startBookingSession always creates the session at step 0.
+      outboundJobData.step = 0;
+      if (bookingField.fieldType === 'buttons') {
+        outboundJobData.interactiveButtons = bookingField.options || [];
+      } else {
+        outboundJobData.interactiveList = bookingField.options || [];
+        outboundJobData.listButtonLabel = 'Choose';
+      }
     }
     await addToWhatsappQueue(outboundJobData);
 

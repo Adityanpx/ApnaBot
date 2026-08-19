@@ -116,17 +116,21 @@ const sendInteractiveButtons = async (phoneNumberId, encryptedAccessToken, to, b
 
 /**
  * Send an interactive list message (single section, tappable rows).
- * Each option becomes a row whose id is its index (as a string) and whose
- * title is the option text, modeled on sendInteractiveButtons.
+ * Each option becomes a row whose id is "{step}:{index}" — the booking-
+ * session step this list was generated for, plus the option's index — so
+ * a stale tap from an earlier, already-answered question can be detected
+ * on the inbound side instead of being silently misresolved against
+ * whatever field is currently active.
  * @param {string} phoneNumberId - The WhatsApp phone number ID
  * @param {string} encryptedAccessToken - Encrypted Meta access token
  * @param {string} to - Recipient phone number
  * @param {string} bodyText - Message body text
  * @param {string} buttonLabel - Text on the list-opening button
  * @param {Array<string>} options - Option labels, one per row
+ * @param {number} step - The booking session step these options belong to
  * @returns {Promise<Object>}
  */
-const sendListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText, buttonLabel, options) => {
+const sendListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText, buttonLabel, options, step) => {
   try {
     const accessToken = decrypt(encryptedAccessToken);
     const interactive = {
@@ -137,7 +141,7 @@ const sendListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText
         sections: [
           {
             rows: options.map((opt, index) => ({
-              id: String(index),
+              id: `${step}:${index}`,
               title: (opt || '').slice(0, 24)
             }))
           }
