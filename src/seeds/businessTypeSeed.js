@@ -274,7 +274,7 @@ const templates = [
       { fieldKey: 'pickupLocation', label: 'Pickup location?', summaryLabel: 'Pick Up Location', required: true, order: 2 },
       { fieldKey: 'dropLocation', label: 'Drop location?', summaryLabel: 'Drop Location', required: true, order: 3 },
       { fieldKey: 'travelDate', label: 'When do you need the vehicle?', summaryLabel: 'Date', required: true, order: 4, fieldType: 'buttons', options: ['Today', 'Tomorrow', 'Other date'] },
-      { fieldKey: 'pickupTime', label: 'What time should we pick you up?', summaryLabel: 'Time', required: true, order: 5 },
+      { fieldKey: 'pickupTime', label: 'What time should we pick you up?', summaryLabel: 'Time', required: true, order: 5, fieldType: 'buttons', options: ['Morning (8-11 AM)', 'Afternoon (12-4 PM)', 'Other time'] },
       { fieldKey: 'acRequired', label: 'Do you need AC? Reply Yes or No', summaryLabel: 'AC', required: false, order: 6, fieldType: 'buttons', options: ['Yes', 'No'] },
       { fieldKey: 'carrierRequired', label: 'Do you need a carrier for luggage? Reply Yes or No', summaryLabel: 'Carrier', required: false, order: 7, fieldType: 'buttons', options: ['Yes', 'No'] },
       { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', summaryLabel: 'Toll & Parking', required: false, order: 8, fieldType: 'buttons', options: ['Yes', 'No'] },

@@ -661,11 +661,29 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         const otherLocationField = {
           ...currentField,
           fieldType: 'text',
-          options: []
+          options: [],
+          label: currentField.fieldKey === 'pickupLocation'
+            ? 'Please enter your full pickup address:'
+            : 'Please enter your full drop address:'
         };
         session.fields[session.step] = otherLocationField;
         await saveBookingSession(businessId, customerNumber, session);
         return otherLocationField;
+      }
+
+      if (currentField.fieldKey === 'pickupTime' && resolvedOption === 'Other time') {
+        // Customer wants to type their own time — swap this step's field for
+        // a plain-text sub-question in place, without advancing session.step
+        // (same pattern as the travelDate "Other date" swap above).
+        const otherTimeField = {
+          ...currentField,
+          fieldType: 'text',
+          options: [],
+          label: 'Please enter the pickup time:'
+        };
+        session.fields[session.step] = otherTimeField;
+        await saveBookingSession(businessId, customerNumber, session);
+        return otherTimeField;
       }
 
       session.collected[currentField.fieldKey] = currentField.fieldKey === 'travelDate'
