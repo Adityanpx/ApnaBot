@@ -197,6 +197,102 @@ const getBookingFields = async (req, res, next) => {
   }
 };
 
+// A WhatsApp list message allows at most 10 rows total (Meta limit). We
+// reserve one row for the always-appended "Other" option, so at most 9
+// business-entered cities are accepted.
+const MAX_SERVED_CITIES = 9;
+
+/**
+ * GET /api/business/served-cities
+ * Get the logged-in business's servedCities list
+ */
+const getServedCities = async (req, res, next) => {
+  try {
+    const businessId = req.user.businessId;
+
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
+    }
+
+    const servedCities = await businessService.getServedCities(businessId);
+
+    return successResponse(res, 200, { servedCities: servedCities || [] });
+  } catch (error) {
+    logger.error('Error in getServedCities:', error);
+    next(error);
+  }
+};
+
+/**
+ * PUT /api/business/served-cities
+ * Replace the business's servedCities list
+ * Body: { cities: string[] }
+ */
+const updateServedCities = async (req, res, next) => {
+  try {
+    const businessId = req.user.businessId;
+
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
+    }
+
+    const { cities } = req.body;
+    if (!Array.isArray(cities)) {
+      return errorResponse(res, 400, 'cities must be an array of strings');
+    }
+
+    // Trim, drop empties, and dedupe case-insensitively (keeping the first
+    // occurrence's casing) — stored casing is for display, matching
+    // elsewhere is case-insensitive.
+    const seen = new Set();
+    const sanitizedCities = [];
+    for (const city of cities) {
+      if (typeof city !== 'string') continue;
+      const trimmed = city.trim();
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      sanitizedCities.push(trimmed);
+    }
+
+    if (sanitizedCities.length > MAX_SERVED_CITIES) {
+      return errorResponse(res, 400, `A maximum of ${MAX_SERVED_CITIES} served cities is supported (WhatsApp list messages allow at most 10 options, including "Other").`);
+    }
+
+    const servedCities = await businessService.updateServedCities(businessId, sanitizedCities);
+
+    return successResponse(res, 200, { servedCities: servedCities || [] });
+  } catch (error) {
+    logger.error('Error in updateServedCities:', error);
+    next(error);
+  }
+};
+
+/**
+ * GET /api/business/served-cities/suggestions
+ * Suggested prefill list of cities, built from this business's active
+ * RouteFare routes. Read-only — never saves; the frontend's "prefill from my
+ * existing routes" button decides what (if anything) to submit to
+ * PUT /served-cities.
+ */
+const getServedCitySuggestions = async (req, res, next) => {
+  try {
+    const businessId = req.user.businessId;
+
+    if (!businessId) {
+      return errorResponse(res, 404, 'No business found');
+    }
+
+    const suggestions = await businessService.getServedCitySuggestions(businessId);
+
+    return successResponse(res, 200, { suggestions });
+  } catch (error) {
+    logger.error('Error in getServedCitySuggestions:', error);
+    next(error);
+  }
+};
+
 /**
  * POST /api/business/connect-whatsapp
  * Connect WhatsApp Business number to business
@@ -380,6 +476,9 @@ module.exports = {
   createBusiness,
   updateBusiness,
   getBookingFields,
+  getServedCities,
+  updateServedCities,
+  getServedCitySuggestions,
   connectWhatsapp,
   disconnectWhatsapp,
   getDashboardStats,

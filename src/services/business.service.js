@@ -2,6 +2,7 @@ const Business = require('../models/Business');
 const User = require('../models/User');
 const Rule = require('../models/Rule');
 const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
+const RouteFare = require('../models/RouteFare');
 const { generateWebhookToken } = require('../utils/crypto');
 const { encrypt } = require('../utils/crypto');
 const logger = require('../utils/logger');
@@ -129,6 +130,72 @@ const updateBusiness = async (businessId, data) => {
     return business;
   } catch (error) {
     logger.error('Error in updateBusiness:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get a business's servedCities list
+ * @param {string} businessId - The business ID
+ * @returns {Promise<Array<string>|null>}
+ */
+const getServedCities = async (businessId) => {
+  try {
+    const business = await Business.findById(businessId).select('servedCities');
+    return business ? (business.servedCities || []) : null;
+  } catch (error) {
+    logger.error('Error in getServedCities:', error);
+    throw error;
+  }
+};
+
+/**
+ * Replace a business's servedCities list
+ * @param {string} businessId - The business ID
+ * @param {Array<string>} cities - Sanitized city list (trimmed, deduped, capped by the caller)
+ * @returns {Promise<Array<string>|null>}
+ */
+const updateServedCities = async (businessId, cities) => {
+  try {
+    const business = await Business.findByIdAndUpdate(
+      businessId,
+      { servedCities: cities },
+      { new: true }
+    ).select('servedCities');
+    return business ? (business.servedCities || []) : null;
+  } catch (error) {
+    logger.error('Error in updateServedCities:', error);
+    throw error;
+  }
+};
+
+/**
+ * Title-case a lowercase city name for display (RouteFare stores fromCity/toCity lowercased).
+ */
+const toTitleCase = (str) => str.replace(/\w\S*/g, word => word.charAt(0).toUpperCase() + word.slice(1));
+
+/**
+ * Suggested servedCities prefill list, built from this business's active
+ * RouteFare routes (unique fromCity/toCity values, title-cased for display).
+ * Read-only — callers decide whether/what to save via updateServedCities.
+ * @param {string} businessId - The business ID
+ * @returns {Promise<Array<string>>}
+ */
+const getServedCitySuggestions = async (businessId) => {
+  try {
+    const routeFares = await RouteFare.find({ businessId, isActive: true }).select('fromCity toCity');
+    const seen = new Set();
+    const suggestions = [];
+    for (const rf of routeFares) {
+      for (const city of [rf.fromCity, rf.toCity]) {
+        if (!city || seen.has(city)) continue;
+        seen.add(city);
+        suggestions.push(toTitleCase(city));
+      }
+    }
+    return suggestions.sort((a, b) => a.localeCompare(b));
+  } catch (error) {
+    logger.error('Error in getServedCitySuggestions:', error);
     throw error;
   }
 };
@@ -278,6 +345,9 @@ module.exports = {
   getBusinessByPhoneNumberId,
   createBusiness,
   updateBusiness,
+  getServedCities,
+  updateServedCities,
+  getServedCitySuggestions,
   connectWhatsapp,
   disconnectWhatsapp,
   getDashboardStats

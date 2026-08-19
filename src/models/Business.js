@@ -120,6 +120,10 @@ const businessSchema = new mongoose.Schema({
   disabledBookingFields: {
     type: [String],
     default: []
+  },
+  servedCities: {
+    type: [String],
+    default: []
   }
 }, { timestamps: true, collection: 'businesses' });
 

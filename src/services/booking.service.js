@@ -406,6 +406,41 @@ const filterActiveBookingFields = (sortedFields, disabledFieldKeys, businessId) 
 };
 
 /**
+ * If the business has a non-empty servedCities list, turn pickupLocation and
+ * dropLocation into 'list' fields offering those cities (plus a trailing
+ * 'Other' escape hatch) instead of the template's default plain-text field.
+ * servedCities is per-business, not part of the shared BusinessTypeTemplate,
+ * so this has to run dynamically against session.fields rather than being
+ * baked into the static template — same idea as the tripType branching in
+ * processBookingStep, just sourced from Business.servedCities instead of an
+ * earlier answer. Businesses with no servedCities configured get back the
+ * exact same fields, unchanged, matching today's plain-text behavior.
+ * @param {Array} fields
+ * @param {Array<string>} servedCities
+ * @returns {Array}
+ */
+const applyServedCitiesFields = (fields, servedCities) => {
+  if (!servedCities || servedCities.length === 0) {
+    return fields;
+  }
+  const cityOptions = [...servedCities, 'Other'];
+  return fields.map(field => {
+    if (field.fieldKey !== 'pickupLocation' && field.fieldKey !== 'dropLocation') {
+      return field;
+    }
+    return {
+      fieldKey: field.fieldKey,
+      label: field.label,
+      summaryLabel: field.summaryLabel,
+      required: field.required,
+      order: field.order,
+      fieldType: 'list',
+      options: cityOptions
+    };
+  });
+};
+
+/**
  * Start a new booking session
  * @param {string} businessId
  * @param {string} customerNumber
@@ -415,7 +450,7 @@ const filterActiveBookingFields = (sortedFields, disabledFieldKeys, businessId) 
 const startBookingSession = async (businessId, customerNumber, ruleId) => {
   try {
     // Step 1: Load booking fields for business's businessCategory
-    const business = await Business.findById(businessId).select('businessCategory disabledBookingFields');
+    const business = await Business.findById(businessId).select('businessCategory disabledBookingFields servedCities');
     if (!business) {
       throw new Error('Business not found');
     }
@@ -429,7 +464,8 @@ const startBookingSession = async (businessId, customerNumber, ruleId) => {
     const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
 
     const disabledFieldKeys = business.disabledBookingFields || [];
-    const activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
+    let activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
+    activeFields = applyServedCitiesFields(activeFields, business.servedCities);
 
     // Step 2: Create session object
     const sessionData = {
@@ -615,6 +651,21 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         session.fields[session.step] = otherDateField;
         await saveBookingSession(businessId, customerNumber, session);
         return otherDateField;
+      }
+
+      if ((currentField.fieldKey === 'pickupLocation' || currentField.fieldKey === 'dropLocation') && resolvedOption === 'Other') {
+        // Customer's city isn't in the servedCities list — swap this step's
+        // field for a plain-text sub-question in place, without advancing
+        // session.step, so their next reply is captured as free text (same
+        // pattern as the travelDate "Other date" swap above).
+        const otherLocationField = {
+          ...currentField,
+          fieldType: 'text',
+          options: []
+        };
+        session.fields[session.step] = otherLocationField;
+        await saveBookingSession(businessId, customerNumber, session);
+        return otherLocationField;
       }
 
       session.collected[currentField.fieldKey] = currentField.fieldKey === 'travelDate'
@@ -822,7 +873,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
  * @returns {Promise<Object>} { fields: [...] } - the ordered bookingFields
  */
 const getBookingFieldsPreview = async (businessId) => {
-  const business = await Business.findById(businessId).select('businessCategory disabledBookingFields');
+  const business = await Business.findById(businessId).select('businessCategory disabledBookingFields servedCities');
   if (!business) {
     throw new Error('Business not found');
   }
@@ -835,7 +886,8 @@ const getBookingFieldsPreview = async (businessId) => {
   const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
 
   const disabledFieldKeys = business.disabledBookingFields || [];
-  const activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
+  let activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
+  activeFields = applyServedCitiesFields(activeFields, business.servedCities);
 
   return { fields: activeFields };
 };

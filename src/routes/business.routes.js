@@ -9,6 +9,9 @@ const { uploadSingle } = require('../middleware/upload.middleware');
 // POST   /                   → protect, business.controller.createBusiness
 // PUT    /                   → protect, requireBusiness, business.controller.updateBusiness
 // GET    /booking-fields     → protect, requireBusiness, business.controller.getBookingFields
+// GET    /served-cities       → protect, requireBusiness, business.controller.getServedCities
+// PUT    /served-cities       → protect, requireBusiness, business.controller.updateServedCities
+// GET    /served-cities/suggestions → protect, requireBusiness, business.controller.getServedCitySuggestions
 // POST   /connect-whatsapp   → protect, requireBusiness, requireRole('owner'), business.controller.connectWhatsapp
 // DELETE /disconnect-whatsapp → protect, requireBusiness, requireRole('owner'), business.controller.disconnectWhatsapp
 // GET    /dashboard-stats     → protect, requireBusiness, business.controller.getDashboardStats
@@ -26,6 +29,17 @@ router.put('/', protect, requireBusiness, businessController.updateBusiness);
 // GET /booking-fields - Full unfiltered booking field sequence for the owner's
 // business category (includes currently-disabled fields), for the Booking Flow page
 router.get('/booking-fields', protect, requireBusiness, businessController.getBookingFields);
+
+// GET /served-cities - Get the business's servedCities list
+router.get('/served-cities', protect, requireBusiness, businessController.getServedCities);
+
+// PUT /served-cities - Replace the business's servedCities list
+// Body: { cities: string[] }
+router.put('/served-cities', protect, requireBusiness, businessController.updateServedCities);
+
+// GET /served-cities/suggestions - Suggested prefill list from this business's
+// active RouteFare routes (read-only, does not save)
+router.get('/served-cities/suggestions', protect, requireBusiness, businessController.getServedCitySuggestions);
 
 // POST /connect-whatsapp - Connect WhatsApp Business
 // Body: { code, wabaId, phoneNumberId } - `code` is the OAuth authorization
