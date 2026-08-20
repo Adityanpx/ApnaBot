@@ -1,6 +1,5 @@
-const Vehicle = require('../models/Vehicle');
-const VehicleTypeCatalog = require('../models/VehicleTypeCatalog');
 const supabase = require('../config/supabase');
+const { toCamelCase } = require('../utils/caseConvert');
 const r2 = require('../services/r2.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
@@ -32,9 +31,23 @@ const getVehicles = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
-    const vehicles = await Vehicle.find({ businessId })
-      .populate('catalogId', 'name type photoUrl seats')
-      .sort({ order: 1 });
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('*, catalog:vehicle_type_catalog(id, name, type, photo_url, seats)')
+      .eq('business_id', businessId)
+      .order('order', { ascending: true });
+    if (error) throw error;
+
+    const vehicles = (data || []).map(({ catalog, ...vehicle }) => ({
+      ...toCamelCase(vehicle),
+      catalogId: catalog ? {
+        _id: catalog.id,
+        name: catalog.name,
+        type: catalog.type,
+        photoUrl: catalog.photo_url,
+        seats: catalog.seats
+      } : null
+    }));
 
     return successResponse(res, 200, { vehicles });
   } catch (error) {
@@ -56,22 +69,24 @@ const createVehicle = async (req, res, next) => {
       return errorResponse(res, 400, 'catalogId is required');
     }
 
-    const catalogEntry = await VehicleTypeCatalog.findById(catalogId);
+    const { data: catalogEntry } = await supabase
+      .from('vehicle_type_catalog').select('id').eq('id', catalogId).maybeSingle();
     if (!catalogEntry) {
       return errorResponse(res, 404, 'Vehicle catalog entry not found');
     }
 
-    const vehicle = await Vehicle.create({
-      businessId,
-      catalogId,
-      customName,
-      customPhotoUrl,
-      perKmRate,
+    const { data: vehicle, error } = await supabase.from('vehicles').insert({
+      business_id: businessId,
+      catalog_id: catalogId,
+      custom_name: customName,
+      custom_photo_url: customPhotoUrl,
+      per_km_rate: perKmRate,
       order,
-      isActive: true
-    });
+      is_active: true
+    }).select().single();
+    if (error) throw error;
 
-    return successResponse(res, 201, vehicle, 'Vehicle created successfully');
+    return successResponse(res, 201, toCamelCase(vehicle), 'Vehicle created successfully');
   } catch (error) {
     logger.error('Error in createVehicle:', error);
     next(error);
@@ -87,28 +102,35 @@ const updateVehicle = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const vehicle = await Vehicle.findOne({ _id: id, businessId });
-    if (!vehicle) {
+    const { data: existing, error: findErr } = await supabase
+      .from('vehicles').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
 
     if (req.body.catalogId !== undefined) {
-      const catalogEntry = await VehicleTypeCatalog.findById(req.body.catalogId);
+      const { data: catalogEntry } = await supabase
+        .from('vehicle_type_catalog').select('id').eq('id', req.body.catalogId).maybeSingle();
       if (!catalogEntry) {
         return errorResponse(res, 404, 'Vehicle catalog entry not found');
       }
     }
 
-    const allowedFields = ['catalogId', 'customName', 'customPhotoUrl', 'perKmRate', 'isActive', 'order'];
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        vehicle[field] = req.body[field];
-      }
+    const fieldMap = {
+      catalogId: 'catalog_id', customName: 'custom_name', customPhotoUrl: 'custom_photo_url',
+      perKmRate: 'per_km_rate', isActive: 'is_active', order: 'order'
+    };
+    const updates = {};
+    for (const [field, column] of Object.entries(fieldMap)) {
+      if (req.body[field] !== undefined) updates[column] = req.body[field];
     }
 
-    await vehicle.save();
+    const { data: vehicle, error } = await supabase
+      .from('vehicles').update(updates).eq('id', id).select().single();
+    if (error) throw error;
 
-    return successResponse(res, 200, vehicle, 'Vehicle updated successfully');
+    return successResponse(res, 200, toCamelCase(vehicle), 'Vehicle updated successfully');
   } catch (error) {
     logger.error('Error in updateVehicle:', error);
     next(error);
@@ -124,12 +146,15 @@ const deleteVehicle = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const vehicle = await Vehicle.findOne({ _id: id, businessId });
-    if (!vehicle) {
+    const { data: existing, error: findErr } = await supabase
+      .from('vehicles').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
 
-    await Vehicle.findByIdAndDelete(id);
+    const { error } = await supabase.from('vehicles').delete().eq('id', id);
+    if (error) throw error;
 
     return successResponse(res, 200, null, 'Vehicle deleted successfully');
   } catch (error) {
@@ -147,15 +172,18 @@ const toggleVehicle = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const vehicle = await Vehicle.findOne({ _id: id, businessId });
-    if (!vehicle) {
+    const { data: existing, error: findErr } = await supabase
+      .from('vehicles').select('is_active').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
 
-    vehicle.isActive = !vehicle.isActive;
-    await vehicle.save();
+    const { data: vehicle, error } = await supabase
+      .from('vehicles').update({ is_active: !existing.is_active }).eq('id', id).select().single();
+    if (error) throw error;
 
-    return successResponse(res, 200, vehicle);
+    return successResponse(res, 200, toCamelCase(vehicle));
   } catch (error) {
     logger.error('Error in toggleVehicle:', error);
     next(error);

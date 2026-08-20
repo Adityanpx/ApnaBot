@@ -1,7 +1,7 @@
-const Booking = require('../models/Booking');
-const Customer = require('../models/Customer');
+const supabase = require('../config/supabase');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
+const { toCamelCase } = require('../utils/caseConvert');
 const logger = require('../utils/logger');
 const socketService = require('../services/socket.service');
 const bookingService = require('../services/booking.service');
@@ -14,11 +14,16 @@ const getBookings = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, status, date, customerNumber } = req.query;
     const businessId = req.user.businessId;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
 
-    const filter = { businessId };
+    let query = supabase
+      .from('bookings')
+      .select('*, customer:customers(name, whatsapp_number)', { count: 'exact' })
+      .eq('business_id', businessId);
 
     if (status) {
-      filter.status = status;
+      query = query.eq('status', status);
     }
 
     if (date) {
@@ -26,25 +31,21 @@ const getBookings = async (req, res, next) => {
       startOfDay.setHours(0, 0, 0, 0);
       const endOfDay = new Date(date);
       endOfDay.setHours(23, 59, 59, 999);
-      filter.createdAt = { $gte: startOfDay, $lte: endOfDay };
+      query = query.gte('created_at', startOfDay.toISOString()).lte('created_at', endOfDay.toISOString());
     }
 
     if (customerNumber) {
-      filter.customerNumber = { $regex: customerNumber, $options: 'i' };
+      query = query.ilike('customer_number', `%${customerNumber}%`);
     }
 
-    const [total, bookings] = await Promise.all([
-      Booking.countDocuments(filter),
-      Booking.find(filter)
-        .populate('customerId', 'name whatsappNumber')
-        .sort({ createdAt: -1 })
-        .skip((parseInt(page) - 1) * parseInt(limit))
-        .limit(parseInt(limit))
-    ]);
+    const { data, error, count } = await query
+      .order('created_at', { ascending: false })
+      .range((pageNum - 1) * limitNum, pageNum * limitNum - 1);
+    if (error) throw error;
 
-    const pagination = getPagination(total, page, limit);
+    const pagination = getPagination(count, pageNum, limitNum);
 
-    return successResponse(res, 200, { bookings, pagination });
+    return successResponse(res, 200, { bookings: (data || []).map(toCamelCase), pagination });
   } catch (error) {
     logger.error('Error fetching bookings:', error);
     next(error);
@@ -60,13 +61,17 @@ const getBookingById = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const booking = await Booking.findOne({ _id: id, businessId }).populate('customerId');
+    const { data: booking, error } = await supabase
+      .from('bookings')
+      .select('*, customer:customers(*)')
+      .eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (error) throw error;
 
     if (!booking) {
       return errorResponse(res, 404, 'Booking not found');
     }
 
-    return successResponse(res, 200, booking);
+    return successResponse(res, 200, toCamelCase(booking));
   } catch (error) {
     logger.error('Error fetching booking:', error);
     next(error);
@@ -88,17 +93,19 @@ const updateBookingStatus = async (req, res, next) => {
       return errorResponse(res, 400, 'Invalid status. Must be one of: pending, confirmed, completed, cancelled');
     }
 
-    const booking = await Booking.findOne({ _id: id, businessId });
-
-    if (!booking) {
+    const { data: existing, error: findErr } = await supabase
+      .from('bookings').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Booking not found');
     }
 
-    booking.status = status;
-    await booking.save();
+    const { data: booking, error } = await supabase
+      .from('bookings').update({ status }).eq('id', id).select().single();
+    if (error) throw error;
 
     try {
-      socketService.emitToBusiness(businessId.toString(), 'booking_updated', {
+      socketService.emitToBusiness(businessId, 'booking_updated', {
         bookingId: id,
         status
       });
@@ -106,7 +113,7 @@ const updateBookingStatus = async (req, res, next) => {
       logger.error('Error emitting socket event:', socketError);
     }
 
-    return successResponse(res, 200, booking, 'Booking status updated');
+    return successResponse(res, 200, toCamelCase(booking), 'Booking status updated');
   } catch (error) {
     logger.error('Error updating booking status:', error);
     next(error);
@@ -127,18 +134,20 @@ const addBookingNotes = async (req, res, next) => {
       return errorResponse(res, 400, 'Notes is required');
     }
 
-    const booking = await Booking.findOne({ _id: id, businessId });
-
-    if (!booking) {
+    const { data: existing, error: findErr } = await supabase
+      .from('bookings').select('fields').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Booking not found');
     }
 
-    booking.fields = booking.fields || {};
-    booking.fields.internalNotes = notes;
-    booking.markModified('fields');
-    await booking.save();
+    const updatedFields = { ...(existing.fields || {}), internalNotes: notes };
 
-    return successResponse(res, 200, booking, 'Notes added successfully');
+    const { data: booking, error } = await supabase
+      .from('bookings').update({ fields: updatedFields }).eq('id', id).select().single();
+    if (error) throw error;
+
+    return successResponse(res, 200, toCamelCase(booking), 'Notes added successfully');
   } catch (error) {
     logger.error('Error adding booking notes:', error);
     next(error);
@@ -154,13 +163,15 @@ const deleteBooking = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const booking = await Booking.findOne({ _id: id, businessId });
-
-    if (!booking) {
+    const { data: existing, error: findErr } = await supabase
+      .from('bookings').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Booking not found');
     }
 
-    await Booking.deleteOne({ _id: id });
+    const { error } = await supabase.from('bookings').delete().eq('id', id);
+    if (error) throw error;
 
     return successResponse(res, 200, null, 'Booking deleted successfully');
   } catch (error) {

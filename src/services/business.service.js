@@ -1,5 +1,4 @@
 const supabase = require('../config/supabase');
-const RouteFare = require('../models/RouteFare');
 const { generateWebhookToken } = require('../utils/crypto');
 const { encrypt } = require('../utils/crypto');
 const { toCamelCase } = require('../utils/caseConvert');
@@ -198,20 +197,18 @@ const toTitleCase = (str) => str.replace(/\w\S*/g, word => word.charAt(0).toUppe
  * Suggested servedCities prefill list, built from this business's active
  * RouteFare routes (unique fromCity/toCity values, title-cased for display).
  * Read-only — callers decide whether/what to save via updateServedCities.
- *
- * BROKEN — RouteFare is still Mongoose, and businessId is now a Postgres
- * UUID, so this always fails and returns []. Fails soft (not critical path)
- * until RouteFare is migrated to Supabase.
  * @param {string} businessId - The business ID
  * @returns {Promise<Array<string>>}
  */
 const getServedCitySuggestions = async (businessId) => {
   try {
-    const routeFares = await RouteFare.find({ businessId, isActive: true }).select('fromCity toCity');
+    const { data, error } = await supabase
+      .from('route_fares').select('from_city, to_city').eq('business_id', businessId).eq('is_active', true);
+    if (error) throw error;
     const seen = new Set();
     const suggestions = [];
-    for (const rf of routeFares) {
-      for (const city of [rf.fromCity, rf.toCity]) {
+    for (const rf of data || []) {
+      for (const city of [rf.from_city, rf.to_city]) {
         if (!city || seen.has(city)) continue;
         seen.add(city);
         suggestions.push(toTitleCase(city));
@@ -219,7 +216,7 @@ const getServedCitySuggestions = async (businessId) => {
     }
     return suggestions.sort((a, b) => a.localeCompare(b));
   } catch (error) {
-    logger.error('Error in getServedCitySuggestions (RouteFare not yet migrated):', error);
+    logger.error('Error in getServedCitySuggestions:', error);
     return [];
   }
 };

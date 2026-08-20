@@ -1,10 +1,7 @@
 const redis = require('../config/redis');
 const supabase = require('../config/supabase');
+const { toCamelCase } = require('../utils/caseConvert');
 const businessService = require('./business.service');
-const Booking = require('../models/Booking');
-const RouteFare = require('../models/RouteFare');
-const RentalPackage = require('../models/RentalPackage');
-const Vehicle = require('../models/Vehicle');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const usageService = require('./usage.service');
 const socketService = require('./socket.service');
@@ -49,9 +46,13 @@ const findMatchingVehicleOptions = async (businessId, pickupLocation, dropLocati
   const toCity = (dropLocation || '').toLowerCase().trim();
   if (!fromCity || !toCity) return [];
   try {
-    const routeFares = await RouteFare.find({ businessId, fromCity, toCity, tripType: mappedTripType, isActive: true })
-      .populate({ path: 'vehicleId', match: { isActive: true }, populate: { path: 'catalogId', select: 'name photoUrl seats' } });
-    const result = routeFares.filter(rf => rf.vehicleId);
+    const { data, error } = await supabase
+      .from('route_fares')
+      .select('*, vehicle:vehicles(id, custom_name, custom_photo_url, is_active, catalog:vehicle_type_catalog(name, photo_url, seats))')
+      .eq('business_id', businessId).eq('from_city', fromCity).eq('to_city', toCity)
+      .eq('trip_type', mappedTripType).eq('is_active', true);
+    if (error) throw error;
+    const result = (data || []).filter(rf => rf.vehicle && rf.vehicle.is_active);
     logger.info('Route fare lookup', { businessId, fromCity, toCity, tripType: mappedTripType, matchCount: result.length });
     return result;
   } catch (error) {
@@ -61,15 +62,15 @@ const findMatchingVehicleOptions = async (businessId, pickupLocation, dropLocati
 };
 
 /**
- * Map populated RouteFare docs to the option shape stored on a vehicle_carousel field.
+ * Map joined route_fares rows to the option shape stored on a vehicle_carousel field.
  */
 const buildVehicleCarouselOptions = (routeFares) => routeFares.map((rf, idx) => ({
   index: idx,
-  routeFareId: rf._id.toString(),
-  vehicleId: rf.vehicleId._id.toString(),
-  name: rf.vehicleId.customName || rf.vehicleId.catalogId.name,
-  photoUrl: rf.vehicleId.customPhotoUrl || rf.vehicleId.catalogId.photoUrl || null,
-  seats: rf.vehicleId.catalogId.seats || null,
+  routeFareId: rf.id,
+  vehicleId: rf.vehicle.id,
+  name: rf.vehicle.custom_name || rf.vehicle.catalog.name,
+  photoUrl: rf.vehicle.custom_photo_url || rf.vehicle.catalog.photo_url || null,
+  seats: rf.vehicle.catalog.seats || null,
   fare: rf.fare,
   source: 'route_fare'
 }));
@@ -139,8 +140,12 @@ const findDistanceBasedVehicleOptions = async (businessId, pickupLocation, dropL
 
   let vehicles;
   try {
-    vehicles = await Vehicle.find({ businessId, isActive: true, perKmRate: { $ne: null } })
-      .populate({ path: 'catalogId', select: 'name photoUrl seats' });
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('*, catalog:vehicle_type_catalog(name, photo_url, seats)')
+      .eq('business_id', businessId).eq('is_active', true).not('per_km_rate', 'is', null);
+    if (error) throw error;
+    vehicles = data || [];
   } catch (error) {
     logger.error('Error finding distance-based vehicle options:', error);
     return [];
@@ -156,13 +161,13 @@ const findDistanceBasedVehicleOptions = async (businessId, pickupLocation, dropL
     : 0;
 
   const options = vehicles.map((vehicle, idx) => {
-    const baseFare = Math.round((distanceKm * vehicle.perKmRate) / 10) * 10;
+    const baseFare = Math.round((distanceKm * vehicle.per_km_rate) / 10) * 10;
     const option = {
       index: idx,
-      vehicleId: vehicle._id.toString(),
-      name: vehicle.customName || vehicle.catalogId.name,
-      photoUrl: vehicle.customPhotoUrl || vehicle.catalogId.photoUrl || null,
-      seats: vehicle.catalogId.seats || null,
+      vehicleId: vehicle.id,
+      name: vehicle.custom_name || vehicle.catalog.name,
+      photoUrl: vehicle.custom_photo_url || vehicle.catalog.photo_url || null,
+      seats: vehicle.catalog.seats || null,
       fare: baseFare + driverDaTotal,
       source: 'distance_estimate',
       distanceKm: Math.round(distanceKm * 10) / 10
@@ -203,10 +208,12 @@ const findBestVehicleCarouselOptions = async (businessId, pickupLocation, dropLo
 const groupRentalPackagesByKey = async (businessId) => {
   const byKey = new Map();
   try {
-    const packages = await RentalPackage.find({ businessId, isActive: true }).populate('vehicleId');
-    for (const pkg of packages) {
-      if (!byKey.has(pkg.packageKey)) {
-        byKey.set(pkg.packageKey, pkg.label || pkg.packageKey);
+    const { data, error } = await supabase
+      .from('rental_packages').select('package_key, label').eq('business_id', businessId).eq('is_active', true);
+    if (error) throw error;
+    for (const pkg of data || []) {
+      if (!byKey.has(pkg.package_key)) {
+        byKey.set(pkg.package_key, pkg.label || pkg.package_key);
       }
     }
   } catch (error) {
@@ -234,22 +241,25 @@ const findRentalPackageOptions = async (businessId) => {
  */
 const findRentalVehicleCarouselOptions = async (businessId, packageKey) => {
   try {
-    const rentalPackages = await RentalPackage.find({ businessId, packageKey, isActive: true })
-      .populate({ path: 'vehicleId', match: { isActive: true }, populate: { path: 'catalogId', select: 'name photoUrl seats' } });
+    const { data, error } = await supabase
+      .from('rental_packages')
+      .select('*, vehicle:vehicles(id, custom_name, custom_photo_url, is_active, catalog:vehicle_type_catalog(name, photo_url, seats))')
+      .eq('business_id', businessId).eq('package_key', packageKey).eq('is_active', true);
+    if (error) throw error;
 
-    return rentalPackages
-      .filter(rp => rp.vehicleId)
+    return (data || [])
+      .filter(rp => rp.vehicle && rp.vehicle.is_active)
       .map((rp, idx) => ({
         index: idx,
-        rentalPackageId: rp._id.toString(),
-        vehicleId: rp.vehicleId._id.toString(),
-        name: rp.vehicleId.customName || rp.vehicleId.catalogId.name,
-        photoUrl: rp.vehicleId.customPhotoUrl || rp.vehicleId.catalogId.photoUrl || null,
-        seats: rp.vehicleId.catalogId.seats || null,
+        rentalPackageId: rp.id,
+        vehicleId: rp.vehicle.id,
+        name: rp.vehicle.custom_name || rp.vehicle.catalog.name,
+        photoUrl: rp.vehicle.custom_photo_url || rp.vehicle.catalog.photo_url || null,
+        seats: rp.vehicle.catalog.seats || null,
         fare: rp.price,
         source: 'rental_package',
-        extraKmRate: rp.extraKmRate,
-        extraHrRate: rp.extraHrRate
+        extraKmRate: rp.extra_km_rate,
+        extraHrRate: rp.extra_hr_rate
       }));
   } catch (error) {
     logger.error('Error finding rental vehicle carousel options:', error);
@@ -544,11 +554,13 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
       // The two sources are re-verified independently (RouteFare lookup vs
       // Vehicle + cached-distance recompute) since they have nothing in common.
       if (tappedOption.source === 'distance_estimate') {
-        const freshVehicle = await Vehicle.findById(tappedOption.vehicleId)
-          .populate({ path: 'catalogId', select: 'name photoUrl seats' });
+        const { data: freshVehicle } = await supabase
+          .from('vehicles')
+          .select('*, catalog:vehicle_type_catalog(name, photo_url, seats)')
+          .eq('id', tappedOption.vehicleId).maybeSingle();
 
-        const isStale = !freshVehicle || !freshVehicle.isActive ||
-          freshVehicle.perKmRate === null || freshVehicle.perKmRate === undefined;
+        const isStale = !freshVehicle || !freshVehicle.is_active ||
+          freshVehicle.per_km_rate === null || freshVehicle.per_km_rate === undefined;
 
         if (isStale) {
           const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField);
@@ -562,9 +574,9 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         // customer's day count when the carousel was built, so it's carried
         // over from the cached option rather than recomputed here.
         const daTotal = tappedOption.driverDaIncluded ? tappedOption.driverDaTotal : 0;
-        session.collected.vehicleId = freshVehicle._id.toString();
-        session.collected.vehicleName = freshVehicle.customName || freshVehicle.catalogId.name;
-        session.collected.vehicleFare = Math.round((tappedOption.distanceKm * freshVehicle.perKmRate) / 10) * 10 + daTotal;
+        session.collected.vehicleId = freshVehicle.id;
+        session.collected.vehicleName = freshVehicle.custom_name || freshVehicle.catalog.name;
+        session.collected.vehicleFare = Math.round((tappedOption.distanceKm * freshVehicle.per_km_rate) / 10) * 10 + daTotal;
         session.collected.fareSource = 'distance_estimate';
         session.collected.distanceKm = Math.round(tappedOption.distanceKm * 10) / 10;
         if (daTotal > 0) {
@@ -574,11 +586,13 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         }
         session.collected[currentField.fieldKey] = session.collected.vehicleName;
       } else if (tappedOption.source === 'rental_package') {
-        const freshRentalPackage = await RentalPackage.findById(tappedOption.rentalPackageId)
-          .populate({ path: 'vehicleId', populate: { path: 'catalogId', select: 'name photoUrl seats' } });
+        const { data: freshRentalPackage } = await supabase
+          .from('rental_packages')
+          .select('*, vehicle:vehicles(id, custom_name, is_active, catalog:vehicle_type_catalog(name))')
+          .eq('id', tappedOption.rentalPackageId).maybeSingle();
 
-        const isStale = !freshRentalPackage || !freshRentalPackage.isActive ||
-          !freshRentalPackage.vehicleId || !freshRentalPackage.vehicleId.isActive;
+        const isStale = !freshRentalPackage || !freshRentalPackage.is_active ||
+          !freshRentalPackage.vehicle || !freshRentalPackage.vehicle.is_active;
 
         if (isStale) {
           const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField);
@@ -586,20 +600,22 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         }
 
         // Still valid — always trust the fresh read for fare/name, not the cache.
-        session.collected.vehicleId = freshRentalPackage.vehicleId._id.toString();
-        session.collected.vehicleName = freshRentalPackage.vehicleId.customName || freshRentalPackage.vehicleId.catalogId.name;
+        session.collected.vehicleId = freshRentalPackage.vehicle.id;
+        session.collected.vehicleName = freshRentalPackage.vehicle.custom_name || freshRentalPackage.vehicle.catalog.name;
         session.collected.vehicleFare = freshRentalPackage.price;
-        session.collected.rentalPackageId = freshRentalPackage._id.toString();
+        session.collected.rentalPackageId = freshRentalPackage.id;
         session.collected.fareSource = 'rental_package';
-        session.collected.extraKmRate = freshRentalPackage.extraKmRate;
-        session.collected.extraHrRate = freshRentalPackage.extraHrRate;
+        session.collected.extraKmRate = freshRentalPackage.extra_km_rate;
+        session.collected.extraHrRate = freshRentalPackage.extra_hr_rate;
         session.collected[currentField.fieldKey] = session.collected.vehicleName;
       } else {
-        const freshRouteFare = await RouteFare.findById(tappedOption.routeFareId)
-          .populate({ path: 'vehicleId', populate: { path: 'catalogId', select: 'name photoUrl seats' } });
+        const { data: freshRouteFare } = await supabase
+          .from('route_fares')
+          .select('*, vehicle:vehicles(id, custom_name, is_active, catalog:vehicle_type_catalog(name))')
+          .eq('id', tappedOption.routeFareId).maybeSingle();
 
-        const isStale = !freshRouteFare || !freshRouteFare.isActive ||
-          !freshRouteFare.vehicleId || !freshRouteFare.vehicleId.isActive;
+        const isStale = !freshRouteFare || !freshRouteFare.is_active ||
+          !freshRouteFare.vehicle || !freshRouteFare.vehicle.is_active;
 
         if (isStale) {
           const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField);
@@ -607,10 +623,10 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         }
 
         // Still valid — always trust the fresh read for fare/name, not the cache.
-        session.collected.vehicleId = freshRouteFare.vehicleId._id.toString();
-        session.collected.vehicleName = freshRouteFare.vehicleId.customName || freshRouteFare.vehicleId.catalogId.name;
+        session.collected.vehicleId = freshRouteFare.vehicle.id;
+        session.collected.vehicleName = freshRouteFare.vehicle.custom_name || freshRouteFare.vehicle.catalog.name;
         session.collected.vehicleFare = freshRouteFare.fare;
-        session.collected.routeFareId = freshRouteFare._id.toString();
+        session.collected.routeFareId = freshRouteFare.id;
         session.collected.fareSource = 'route_fare';
         session.collected[currentField.fieldKey] = session.collected.vehicleName;
       }
@@ -801,19 +817,17 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
 
     const bookingCode = 'CAB' + Math.floor(1000 + Math.random() * 9000);
 
-    // NOTE: Booking is still Mongoose with businessId/customerId typed as
-    // ObjectId — this throws a CastError below since businessId is now a
-    // Postgres UUID string. Pre-existing, unrelated to the Customer lookup
-    // above; Booking itself needs its own migration to Supabase.
-    const booking = await Booking.create({
-      businessId,
-      customerId: customer ? customer.id : null,
-      customerNumber,
+    const { data: bookingRow, error: bookingErr } = await supabase.from('bookings').insert({
+      business_id: businessId,
+      customer_id: customer ? customer.id : null,
+      customer_number: customerNumber,
       status: 'pending',
       fields: session.collected,
-      paymentStatus: 'not_required',
-      bookingCode
-    });
+      payment_status: 'not_required',
+      booking_code: bookingCode
+    }).select().single();
+    if (bookingErr) throw bookingErr;
+    const booking = toCamelCase(bookingRow);
 
     // Delete session from Redis
     await deleteBookingSession(businessId, customerNumber);

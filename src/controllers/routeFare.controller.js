@@ -1,5 +1,5 @@
-const RouteFare = require('../models/RouteFare');
-const Vehicle = require('../models/Vehicle');
+const supabase = require('../config/supabase');
+const { toCamelCase } = require('../utils/caseConvert');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -11,13 +11,22 @@ const getRouteFares = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
-    const routeFares = await RouteFare.find({ businessId })
-      .populate({
-        path: 'vehicleId',
-        select: 'customName catalogId',
-        populate: { path: 'catalogId', select: 'name' }
-      })
-      .sort({ fromCity: 1, toCity: 1 });
+    const { data, error } = await supabase
+      .from('route_fares')
+      .select('*, vehicle:vehicles(id, custom_name, catalog:vehicle_type_catalog(id, name))')
+      .eq('business_id', businessId)
+      .order('from_city', { ascending: true })
+      .order('to_city', { ascending: true });
+    if (error) throw error;
+
+    const routeFares = (data || []).map(({ vehicle, ...routeFare }) => ({
+      ...toCamelCase(routeFare),
+      vehicleId: vehicle ? {
+        _id: vehicle.id,
+        customName: vehicle.custom_name,
+        catalogId: vehicle.catalog ? { _id: vehicle.catalog.id, name: vehicle.catalog.name } : null
+      } : null
+    }));
 
     return successResponse(res, 200, { routeFares });
   } catch (error) {
@@ -39,7 +48,8 @@ const createRouteFare = async (req, res, next) => {
       return errorResponse(res, 400, 'fromCity, toCity, vehicleId, and fare are required');
     }
 
-    const vehicle = await Vehicle.findOne({ _id: vehicleId, businessId });
+    const { data: vehicle } = await supabase
+      .from('vehicles').select('id').eq('id', vehicleId).eq('business_id', businessId).maybeSingle();
     if (!vehicle) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
@@ -47,13 +57,22 @@ const createRouteFare = async (req, res, next) => {
     const normalizedFromCity = fromCity.toLowerCase().trim();
     const normalizedToCity = toCity.toLowerCase().trim();
 
-    const routeFare = await RouteFare.findOneAndUpdate(
-      { businessId, fromCity: normalizedFromCity, toCity: normalizedToCity, tripType, vehicleId },
-      { fare, isActive: true },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    const { data: routeFare, error } = await supabase
+      .from('route_fares')
+      .upsert({
+        business_id: businessId,
+        from_city: normalizedFromCity,
+        to_city: normalizedToCity,
+        trip_type: tripType,
+        vehicle_id: vehicleId,
+        fare,
+        is_active: true
+      }, { onConflict: 'business_id,from_city,to_city,trip_type,vehicle_id' })
+      .select()
+      .single();
+    if (error) throw error;
 
-    return successResponse(res, 201, routeFare, 'Route fare saved successfully');
+    return successResponse(res, 201, toCamelCase(routeFare), 'Route fare saved successfully');
   } catch (error) {
     logger.error('Error in createRouteFare:', error);
     next(error);
@@ -69,30 +88,36 @@ const updateRouteFare = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const routeFare = await RouteFare.findOne({ _id: id, businessId });
-    if (!routeFare) {
+    const { data: existing, error: findErr } = await supabase
+      .from('route_fares').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Route fare not found');
     }
 
     const { fromCity, toCity, tripType, vehicleId, fare, isActive } = req.body;
+    const updates = {};
 
     if (vehicleId !== undefined) {
-      const vehicle = await Vehicle.findOne({ _id: vehicleId, businessId });
+      const { data: vehicle } = await supabase
+        .from('vehicles').select('id').eq('id', vehicleId).eq('business_id', businessId).maybeSingle();
       if (!vehicle) {
         return errorResponse(res, 404, 'Vehicle not found');
       }
-      routeFare.vehicleId = vehicleId;
+      updates.vehicle_id = vehicleId;
     }
 
-    if (fromCity !== undefined) routeFare.fromCity = fromCity.toLowerCase().trim();
-    if (toCity !== undefined) routeFare.toCity = toCity.toLowerCase().trim();
-    if (tripType !== undefined) routeFare.tripType = tripType;
-    if (fare !== undefined) routeFare.fare = fare;
-    if (isActive !== undefined) routeFare.isActive = isActive;
+    if (fromCity !== undefined) updates.from_city = fromCity.toLowerCase().trim();
+    if (toCity !== undefined) updates.to_city = toCity.toLowerCase().trim();
+    if (tripType !== undefined) updates.trip_type = tripType;
+    if (fare !== undefined) updates.fare = fare;
+    if (isActive !== undefined) updates.is_active = isActive;
 
-    await routeFare.save();
+    const { data: routeFare, error } = await supabase
+      .from('route_fares').update(updates).eq('id', id).select().single();
+    if (error) throw error;
 
-    return successResponse(res, 200, routeFare, 'Route fare updated successfully');
+    return successResponse(res, 200, toCamelCase(routeFare), 'Route fare updated successfully');
   } catch (error) {
     logger.error('Error in updateRouteFare:', error);
     next(error);
@@ -108,12 +133,15 @@ const deleteRouteFare = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const routeFare = await RouteFare.findOne({ _id: id, businessId });
-    if (!routeFare) {
+    const { data: existing, error: findErr } = await supabase
+      .from('route_fares').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Route fare not found');
     }
 
-    await RouteFare.findByIdAndDelete(id);
+    const { error } = await supabase.from('route_fares').delete().eq('id', id);
+    if (error) throw error;
 
     return successResponse(res, 200, null, 'Route fare deleted successfully');
   } catch (error) {

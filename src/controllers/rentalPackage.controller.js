@@ -1,11 +1,11 @@
-const RentalPackage = require('../models/RentalPackage');
-const Vehicle = require('../models/Vehicle');
+const supabase = require('../config/supabase');
+const { toCamelCase } = require('../utils/caseConvert');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
 // apnabot-web sends/expects `package`; the model/internal booking flow uses `packageKey`.
-const serializeRentalPackage = (doc) => {
-  const obj = doc.toObject ? doc.toObject() : doc;
+const serializeRentalPackage = (row) => {
+  const obj = toCamelCase(row);
   return { ...obj, package: obj.packageKey };
 };
 
@@ -17,15 +17,24 @@ const getRentalPackages = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
-    const rentalPackages = await RentalPackage.find({ businessId })
-      .populate({
-        path: 'vehicleId',
-        select: 'customName catalogId',
-        populate: { path: 'catalogId', select: 'name' }
-      })
-      .sort({ packageKey: 1 });
+    const { data, error } = await supabase
+      .from('rental_packages')
+      .select('*, vehicle:vehicles(id, custom_name, catalog:vehicle_type_catalog(id, name))')
+      .eq('business_id', businessId)
+      .order('package_key', { ascending: true });
+    if (error) throw error;
 
-    return successResponse(res, 200, { rentalPackages: rentalPackages.map(serializeRentalPackage) });
+    const rentalPackages = (data || []).map(({ vehicle, ...rentalPackage }) => {
+      const serialized = serializeRentalPackage(rentalPackage);
+      serialized.vehicleId = vehicle ? {
+        _id: vehicle.id,
+        customName: vehicle.custom_name,
+        catalogId: vehicle.catalog ? { _id: vehicle.catalog.id, name: vehicle.catalog.name } : null
+      } : null;
+      return serialized;
+    });
+
+    return successResponse(res, 200, { rentalPackages });
   } catch (error) {
     logger.error('Error in getRentalPackages:', error);
     next(error);
@@ -46,20 +55,22 @@ const createRentalPackage = async (req, res, next) => {
       return errorResponse(res, 400, 'vehicleId, package, and price are required');
     }
 
-    const vehicle = await Vehicle.findOne({ _id: vehicleId, businessId });
+    const { data: vehicle } = await supabase
+      .from('vehicles').select('id').eq('id', vehicleId).eq('business_id', businessId).maybeSingle();
     if (!vehicle) {
       return errorResponse(res, 404, 'Vehicle not found');
     }
 
-    const rentalPackage = await RentalPackage.create({
-      businessId,
-      vehicleId,
-      packageKey,
+    const { data: rentalPackage, error } = await supabase.from('rental_packages').insert({
+      business_id: businessId,
+      vehicle_id: vehicleId,
+      package_key: packageKey,
       label,
       price,
-      extraKmRate,
-      extraHrRate
-    });
+      extra_km_rate: extraKmRate,
+      extra_hr_rate: extraHrRate
+    }).select().single();
+    if (error) throw error;
 
     return successResponse(res, 201, serializeRentalPackage(rentalPackage), 'Rental package saved successfully');
   } catch (error) {
@@ -77,30 +88,36 @@ const updateRentalPackage = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const rentalPackage = await RentalPackage.findOne({ _id: id, businessId });
-    if (!rentalPackage) {
+    const { data: existing, error: findErr } = await supabase
+      .from('rental_packages').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Rental package not found');
     }
 
     const { vehicleId, label, price, extraKmRate, extraHrRate, isActive } = req.body;
     const packageKey = req.body.packageKey !== undefined ? req.body.packageKey : req.body.package;
+    const updates = {};
 
     if (vehicleId !== undefined) {
-      const vehicle = await Vehicle.findOne({ _id: vehicleId, businessId });
+      const { data: vehicle } = await supabase
+        .from('vehicles').select('id').eq('id', vehicleId).eq('business_id', businessId).maybeSingle();
       if (!vehicle) {
         return errorResponse(res, 404, 'Vehicle not found');
       }
-      rentalPackage.vehicleId = vehicleId;
+      updates.vehicle_id = vehicleId;
     }
 
-    if (packageKey !== undefined) rentalPackage.packageKey = packageKey;
-    if (label !== undefined) rentalPackage.label = label;
-    if (price !== undefined) rentalPackage.price = price;
-    if (extraKmRate !== undefined) rentalPackage.extraKmRate = extraKmRate;
-    if (extraHrRate !== undefined) rentalPackage.extraHrRate = extraHrRate;
-    if (isActive !== undefined) rentalPackage.isActive = isActive;
+    if (packageKey !== undefined) updates.package_key = packageKey;
+    if (label !== undefined) updates.label = label;
+    if (price !== undefined) updates.price = price;
+    if (extraKmRate !== undefined) updates.extra_km_rate = extraKmRate;
+    if (extraHrRate !== undefined) updates.extra_hr_rate = extraHrRate;
+    if (isActive !== undefined) updates.is_active = isActive;
 
-    await rentalPackage.save();
+    const { data: rentalPackage, error } = await supabase
+      .from('rental_packages').update(updates).eq('id', id).select().single();
+    if (error) throw error;
 
     return successResponse(res, 200, serializeRentalPackage(rentalPackage), 'Rental package updated successfully');
   } catch (error) {
@@ -118,12 +135,15 @@ const deleteRentalPackage = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const rentalPackage = await RentalPackage.findOne({ _id: id, businessId });
-    if (!rentalPackage) {
+    const { data: existing, error: findErr } = await supabase
+      .from('rental_packages').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
       return errorResponse(res, 404, 'Rental package not found');
     }
 
-    await RentalPackage.findByIdAndDelete(id);
+    const { error } = await supabase.from('rental_packages').delete().eq('id', id);
+    if (error) throw error;
 
     return successResponse(res, 200, null, 'Rental package deleted successfully');
   } catch (error) {
