@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const vehicleCatalogController = require('../controllers/vehicleCatalog.controller');
+const vehicleCatalogController = require('../controllers/travel/vehicleCatalog.controller');
 const { protect } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/role.middleware');
 const { uploadSingle } = require('../middleware/upload.middleware');

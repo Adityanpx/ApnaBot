@@ -1,7 +1,7 @@
-const supabase = require('../config/supabase');
-const r2 = require('../services/r2.service');
-const { successResponse, errorResponse } = require('../utils/response');
-const logger = require('../utils/logger');
+const supabase = require('../../config/supabase');
+const r2 = require('../../services/r2.service');
+const { successResponse, errorResponse } = require('../../utils/response');
+const logger = require('../../utils/logger');
 
 /**
  * GET /api/admin/vehicle-catalog

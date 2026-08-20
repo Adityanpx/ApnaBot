@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const rentalPackageController = require('../controllers/rentalPackage.controller');
+const rentalPackageController = require('../controllers/travel/rentalPackage.controller');
 const { protect, requireBusiness } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/role.middleware');
 
