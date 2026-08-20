@@ -236,7 +236,9 @@ const getRevenueReport = async (req, res, next) => {
  */
 const getPlans = async (req, res, next) => {
   try {
-    const plans = await Plan.find().sort({ price: 1 });
+    const { data: plans, error } = await supabase
+      .from('plans').select('*').order('price', { ascending: true });
+    if (error) throw error;
     return successResponse(res, 200, { plans });
   } catch (error) {
     logger.error('Error in getPlans:', error);
@@ -260,22 +262,22 @@ const createPlan = async (req, res, next) => {
       return errorResponse(res, 400, 'name, displayName, and price are required');
     }
 
-    const existing = await Plan.findOne({ name });
+    const { data: existing } = await supabase
+      .from('plans').select('id').eq('name', name).maybeSingle();
     if (existing) return errorResponse(res, 409, 'A plan with this name already exists');
 
-    const plan = await Plan.create({
-      name,
-      displayName,
-      price,
-      msgLimit: msgLimit ?? 500,
-      ruleLimit: ruleLimit ?? 10,
-      customerLimit: customerLimit ?? 100,
-      bookingEnabled: bookingEnabled ?? true,
-      paymentLinkEnabled: paymentLinkEnabled ?? false,
-      staffEnabled: staffEnabled ?? false,
-      maxStaff: maxStaff ?? 0,
-      isActive: true
-    });
+    const { data: plan, error } = await supabase.from('plans').insert({
+      name, display_name: displayName, price,
+      msg_limit: msgLimit ?? 500,
+      rule_limit: ruleLimit ?? 10,
+      customer_limit: customerLimit ?? 100,
+      booking_enabled: bookingEnabled ?? true,
+      payment_link_enabled: paymentLinkEnabled ?? false,
+      staff_enabled: staffEnabled ?? false,
+      max_staff: maxStaff ?? 0,
+      is_active: true
+    }).select().single();
+    if (error) throw error;
 
     logger.info(`Plan ${plan.name} created by superadmin`);
     return successResponse(res, 201, plan, 'Plan created successfully');
@@ -293,21 +295,28 @@ const updatePlan = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const plan = await Plan.findById(id);
-    if (!plan) return errorResponse(res, 404, 'Plan not found');
+    const { data: existingPlan } = await supabase.from('plans').select('id').eq('id', id).maybeSingle();
+    if (!existingPlan) return errorResponse(res, 404, 'Plan not found');
 
     const allowedFields = [
       'displayName', 'price', 'msgLimit', 'ruleLimit', 'customerLimit',
       'bookingEnabled', 'paymentLinkEnabled', 'staffEnabled', 'maxStaff', 'isActive'
     ];
+    const fieldMap = {
+      displayName: 'display_name', msgLimit: 'msg_limit', ruleLimit: 'rule_limit',
+      customerLimit: 'customer_limit', bookingEnabled: 'booking_enabled',
+      paymentLinkEnabled: 'payment_link_enabled', staffEnabled: 'staff_enabled',
+      maxStaff: 'max_staff', isActive: 'is_active', price: 'price'
+    };
 
+    const updates = {};
     for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        plan[field] = req.body[field];
-      }
+      if (req.body[field] !== undefined) updates[fieldMap[field]] = req.body[field];
     }
 
-    await plan.save();
+    const { data: plan, error } = await supabase
+      .from('plans').update(updates).eq('id', id).select().single();
+    if (error) throw error;
 
     logger.info(`Plan ${id} updated by superadmin`);
     return successResponse(res, 200, plan, 'Plan updated successfully');
@@ -325,20 +334,24 @@ const deletePlan = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const plan = await Plan.findById(id);
+    const { data: plan } = await supabase.from('plans').select('id').eq('id', id).maybeSingle();
     if (!plan) return errorResponse(res, 404, 'Plan not found');
 
-    // Check if any active subscriptions use this plan
-    const activeCount = await Subscription.countDocuments({ planId: id, status: 'active' });
+    const { count: activeCount, error: countErr } = await supabase
+      .from('subscriptions')
+      .select('id', { count: 'exact', head: true })
+      .eq('plan_id', id).eq('status', 'active');
+    if (countErr) throw countErr;
+
     if (activeCount > 0) {
       return errorResponse(res, 400, `Cannot delete — ${activeCount} active subscriptions use this plan`);
     }
 
-    plan.isActive = false;
-    await plan.save();
+    const { error } = await supabase.from('plans').update({ is_active: false }).eq('id', id);
+    if (error) throw error;
 
     logger.info(`Plan ${id} deactivated by superadmin`);
-    return successResponse(res, 200, null, 'Plan deactivated successfully');
+    return successResponse(res, 200, null, 'Plan deactivated');
   } catch (error) {
     logger.error('Error in deletePlan:', error);
     next(error);

@@ -1,61 +1,44 @@
 // src/seeds/planSeed.js — REPLACE ENTIRE FILE
 
-const Plan = require('../models/Plan');
+const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 
 const plans = [
   {
-    name: 'basic',
-    displayName: 'Basic',
-    price: 199,
-    msgLimit: 500,
-    ruleLimit: 10,
-    customerLimit: 100,
-    bookingEnabled: true,
-    paymentLinkEnabled: false,
-    staffEnabled: false,
-    maxStaff: 0,
-    isActive: true
+    name: 'basic', display_name: 'Basic', price: 199,
+    msg_limit: 500, rule_limit: 10, customer_limit: 100,
+    booking_enabled: true, payment_link_enabled: false,
+    staff_enabled: false, max_staff: 0, is_active: true
   },
   {
-    name: 'pro',
-    displayName: 'Pro',
-    price: 399,
-    msgLimit: 2000,
-    ruleLimit: 50,
-    customerLimit: 500,
-    bookingEnabled: true,
-    paymentLinkEnabled: true,
-    staffEnabled: true,
-    maxStaff: 2,
-    isActive: true
+    name: 'pro', display_name: 'Pro', price: 399,
+    msg_limit: 2000, rule_limit: 50, customer_limit: 500,
+    booking_enabled: true, payment_link_enabled: true,
+    staff_enabled: true, max_staff: 2, is_active: true
   },
   {
-    name: 'business',
-    displayName: 'Business',
-    price: 699,
-    msgLimit: -1,       // unlimited
-    ruleLimit: -1,      // unlimited
-    customerLimit: -1,  // unlimited
-    bookingEnabled: true,
-    paymentLinkEnabled: true,
-    staffEnabled: true,
-    maxStaff: 5,
-    isActive: true
+    name: 'business', display_name: 'Business', price: 699,
+    msg_limit: -1, rule_limit: -1, customer_limit: -1,
+    booking_enabled: true, payment_link_enabled: true,
+    staff_enabled: true, max_staff: 5, is_active: true
   }
 ];
 
 const seedPlans = async () => {
   try {
     for (const planData of plans) {
-      const existing = await Plan.findOne({ name: planData.name });
+      const { data: existing, error: findErr } = await supabase
+        .from('plans').select('id').eq('name', planData.name).maybeSingle();
+      if (findErr) throw findErr;
+
       if (!existing) {
-        await Plan.create(planData);
-        logger.info(`Plan created: ${planData.displayName}`);
+        const { error } = await supabase.from('plans').insert(planData);
+        if (error) throw error;
+        logger.info(`Plan created: ${planData.display_name}`);
       } else {
-        // Update existing plan with latest values
-        await Plan.findOneAndUpdate({ name: planData.name }, planData);
-        logger.info(`Plan updated: ${planData.displayName}`);
+        const { error } = await supabase.from('plans').update(planData).eq('name', planData.name);
+        if (error) throw error;
+        logger.info(`Plan updated: ${planData.display_name}`);
       }
     }
     logger.info('Plan seeding complete');

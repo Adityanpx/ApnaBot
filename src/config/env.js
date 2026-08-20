@@ -5,6 +5,8 @@ const requiredEnvVars = [
   'NODE_ENV',
   'MONGODB_URI',
   'REDIS_URL',
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_ROLE_KEY',
   'JWT_SECRET',
   'JWT_REFRESH_SECRET',
   'JWT_EXPIRY',
@@ -38,6 +40,8 @@ module.exports = {
   NODE_ENV: process.env.NODE_ENV,
   MONGODB_URI: process.env.MONGODB_URI,
   REDIS_URL: process.env.REDIS_URL,
+  SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
   JWT_EXPIRY: process.env.JWT_EXPIRY,
@@ -62,5 +66,8 @@ module.exports = {
   WEB_APP_URLS: (process.env.WEB_APP_URLS || '').split(',').map(s => s.trim()).filter(Boolean),
   // Optional: only needed by shops with enableDistanceFares on; read directly
   // from process.env in distanceMatrix.service.js, exported here for consistency.
-  GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY
+  GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY,
+  SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY
 };
+
