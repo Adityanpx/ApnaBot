@@ -1,5 +1,5 @@
 const redis = require('../config/redis');
-const Usage = require('../models/Usage');
+const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 
 /**
@@ -18,6 +18,32 @@ const getCurrentMonthKey = () => {
 const getUsageKey = (businessId) => {
   const month = getCurrentMonthKey();
   return `usage:${businessId}:${month}`;
+};
+
+const USAGE_TYPE_COLUMNS = { inbound: 'inbound_count', outbound: 'outbound_count', booking: 'booking_count', paymentLink: 'payment_link_count' };
+
+/**
+ * Upsert-and-increment the Supabase usage row. No atomic upsert-increment via
+ * REST, so read-then-write — acceptable since this only runs every 10th hit
+ * (see incrementUsage), not on every message.
+ */
+const persistUsageIncrement = async (businessId, month, typeColumn) => {
+  try {
+    const { data: existing } = await supabase
+      .from('usage').select('*').eq('business_id', businessId).eq('month', month).maybeSingle();
+
+    if (existing) {
+      const updates = { msg_count: (existing.msg_count || 0) + 10 };
+      if (typeColumn) updates[typeColumn] = (existing[typeColumn] || 0) + 1;
+      await supabase.from('usage').update(updates).eq('id', existing.id);
+    } else {
+      const insertRow = { business_id: businessId, month, msg_count: 10 };
+      if (typeColumn) insertRow[typeColumn] = 1;
+      await supabase.from('usage').insert(insertRow);
+    }
+  } catch (err) {
+    logger.error('Error persisting usage to Supabase:', err);
+  }
 };
 
 /**
@@ -48,13 +74,9 @@ const incrementUsage = async (businessId, type) => {
     // Get current count
     const msgCount = await redis.hget(usageKey, 'msgCount');
 
-    // Every 10 increments, persist to MongoDB (fire and forget)
+    // Every 10 increments, persist to Supabase (fire and forget)
     if (msgCount % 10 === 0) {
-      Usage.findOneAndUpdate(
-        { businessId, month },
-        { $inc: { msgCount: 10, [`${type}Count`]: 1 } },
-        { upsert: true, new: true }
-      ).catch(err => logger.error('Error persisting usage to MongoDB:', err));
+      persistUsageIncrement(businessId, month, USAGE_TYPE_COLUMNS[type]);
     }
 
     return msgCount;
@@ -83,9 +105,10 @@ const checkUsageLimit = async (businessId, planMsgLimit) => {
     let current = await redis.hget(usageKey, 'msgCount');
 
     if (!current) {
-      // Fall back to MongoDB
-      const usageDoc = await Usage.findOne({ businessId, month });
-      current = usageDoc ? usageDoc.msgCount : 0;
+      // Fall back to Supabase
+      const { data: usageRow } = await supabase
+        .from('usage').select('msg_count').eq('business_id', businessId).eq('month', month).maybeSingle();
+      current = usageRow ? usageRow.msg_count : 0;
     }
 
     current = parseInt(current) || 0;
@@ -126,15 +149,16 @@ const getUsageForBusiness = async (businessId) => {
       };
     }
 
-    // Fall back to MongoDB
-    const usageDoc = await Usage.findOne({ businessId, month });
+    // Fall back to Supabase
+    const { data: usageRow } = await supabase
+      .from('usage').select('*').eq('business_id', businessId).eq('month', month).maybeSingle();
 
     return {
-      msgCount: usageDoc ? usageDoc.msgCount : 0,
-      inboundCount: usageDoc ? usageDoc.inboundCount : 0,
-      outboundCount: usageDoc ? usageDoc.outboundCount : 0,
-      bookingCount: usageDoc ? usageDoc.bookingCount : 0,
-      paymentLinkCount: usageDoc ? usageDoc.paymentLinkCount : 0,
+      msgCount: usageRow ? usageRow.msg_count : 0,
+      inboundCount: usageRow ? usageRow.inbound_count : 0,
+      outboundCount: usageRow ? usageRow.outbound_count : 0,
+      bookingCount: usageRow ? usageRow.booking_count : 0,
+      paymentLinkCount: usageRow ? usageRow.payment_link_count : 0,
       month
     };
   } catch (error) {
@@ -151,10 +175,10 @@ const getUsageForBusiness = async (businessId) => {
 };
 
 /**
- * Force sync Redis counts to MongoDB
+ * Force sync Redis counts to Supabase
  * @param {string} businessId - The business ID
  */
-const syncUsageToMongoDB = async (businessId) => {
+const syncUsageToSupabase = async (businessId) => {
   const usageKey = getUsageKey(businessId);
   const month = getCurrentMonthKey();
 
@@ -162,23 +186,26 @@ const syncUsageToMongoDB = async (businessId) => {
     const redisData = await redis.hgetall(usageKey);
 
     if (redisData && Object.keys(redisData).length > 0) {
-      await Usage.findOneAndUpdate(
-        { businessId, month },
-        {
-          $set: {
-            msgCount: parseInt(redisData.msgCount) || 0,
-            inboundCount: parseInt(redisData.inboundCount) || 0,
-            outboundCount: parseInt(redisData.outboundCount) || 0,
-            bookingCount: parseInt(redisData.bookingCount) || 0,
-            paymentLinkCount: parseInt(redisData.paymentLinkCount) || 0
-          }
-        },
-        { upsert: true, new: true }
-      );
-      logger.info(`Usage synced to MongoDB for business ${businessId}`);
+      const payload = {
+        msg_count: parseInt(redisData.msgCount) || 0,
+        inbound_count: parseInt(redisData.inboundCount) || 0,
+        outbound_count: parseInt(redisData.outboundCount) || 0,
+        booking_count: parseInt(redisData.bookingCount) || 0,
+        payment_link_count: parseInt(redisData.paymentLinkCount) || 0
+      };
+
+      const { data: existing } = await supabase
+        .from('usage').select('id').eq('business_id', businessId).eq('month', month).maybeSingle();
+
+      if (existing) {
+        await supabase.from('usage').update(payload).eq('id', existing.id);
+      } else {
+        await supabase.from('usage').insert({ business_id: businessId, month, ...payload });
+      }
+      logger.info(`Usage synced to Supabase for business ${businessId}`);
     }
   } catch (error) {
-    logger.error('Error in syncUsageToMongoDB:', error);
+    logger.error('Error in syncUsageToSupabase:', error);
     throw error;
   }
 };
@@ -187,6 +214,6 @@ module.exports = {
   incrementUsage,
   checkUsageLimit,
   getUsageForBusiness,
-  syncUsageToMongoDB,
+  syncUsageToSupabase,
   getCurrentMonthKey
 };

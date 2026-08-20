@@ -7,10 +7,9 @@ const usageService = require('../services/usage.service');
 const bookingService = require('../services/booking.service');
 const socketService = require('../services/socket.service');
 const { addToWhatsappQueue, addToWhatsappQueueAndWait } = require('../queues/whatsapp.queue');
-const Customer = require('../models/Customer');
-const Message = require('../models/Message');
 const businessService = require('../services/business.service');
-const Rule = require('../models/Rule');
+const supabase = require('../config/supabase');
+const { toCamelCase } = require('../utils/caseConvert');
 const { applyMessageTemplate } = require('../utils/messageTemplating');
 const logger = require('../utils/logger');
 
@@ -25,6 +24,74 @@ const GREETING_KEYWORDS = new Set(['hi', 'hello', 'hey', 'hii', 'hlo', 'namaste'
 const ESCAPE_KEYWORDS = new Set(['menu', 'cancel', 'exit', 'restart', 'stop']);
 
 /**
+ * Insert a message row. Throws on failure — used at call sites that were
+ * never wrapped in try/catch pre-migration, so an insert failure still
+ * propagates to the outer handler's catch (logged, already-sent-200).
+ * @param {Object} fields - snake_case row fields
+ * @returns {Promise<Object>} camelCase row
+ */
+const saveMessage = async (fields) => {
+  const { data, error } = await supabase.from('messages').insert(fields).select().single();
+  if (error) throw error;
+  return toCamelCase(data);
+};
+
+/**
+ * Insert a message row, swallowing failure — used at the carousel call sites
+ * that were already wrapped in try/catch pre-migration, falling back to the
+ * input fields (camelCased) so downstream reads still work; `.id` will be
+ * undefined, same as the old fallback having no `_id`.
+ * @param {Object} fields - snake_case row fields
+ * @param {string} context - label for the log line
+ * @returns {Promise<Object>} camelCase row (persisted) or camelCased fields (fallback)
+ */
+const createMessageSoft = async (fields, context) => {
+  const { data, error } = await supabase.from('messages').insert(fields).select().single();
+  if (error) {
+    logger.error(`Error creating ${context} message record:`, { message: error.message, stack: error.stack });
+    return toCamelCase(fields);
+  }
+  return toCamelCase(data);
+};
+
+/**
+ * Find-or-create the customer row for an inbound message, then bump their
+ * lastMessageAt/totalMessages. Supabase has no atomic upsert-with-$inc, so
+ * this is a read-then-write — a tiny race window under true concurrent
+ * double-taps from the same customer, acceptable at current traffic.
+ * @param {string} businessId
+ * @param {string} customerNumber
+ * @returns {Promise<Object>} camelCase customer row
+ */
+const upsertCustomerForInboundMessage = async (businessId, customerNumber) => {
+  const { data: existing, error: findErr } = await supabase
+    .from('customers').select('*')
+    .eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
+  if (findErr) throw findErr;
+
+  const nowIso = new Date().toISOString();
+
+  if (existing) {
+    const { data, error } = await supabase.from('customers').update({
+      last_message_at: nowIso,
+      total_messages: (existing.total_messages || 0) + 1
+    }).eq('id', existing.id).select().single();
+    if (error) throw error;
+    return toCamelCase(data);
+  }
+
+  const { data, error } = await supabase.from('customers').insert({
+    business_id: businessId,
+    whatsapp_number: customerNumber,
+    first_seen_at: nowIso,
+    last_message_at: nowIso,
+    total_messages: 1
+  }).select().single();
+  if (error) throw error;
+  return toCamelCase(data);
+};
+
+/**
  * Build the numbered-menu list options for a business's enabled menu, in the
  * {label, nextKeyword} shape sendRuleListMessage expects. Shared by the
  * Step 12.5 greeting handler and the "no rule matched" fallback.
@@ -36,8 +103,9 @@ const buildMenuListOptions = async (menuItems) => {
     .sort((a, b) => a.order - b.order)
     .slice(0, 10);
   const ruleIds = sortedItems.map(item => item.ruleId);
-  const rules = await Rule.find({ _id: { $in: ruleIds } }).select('keyword');
-  const keywordByRuleId = new Map(rules.map(rule => [rule._id.toString(), rule.keyword]));
+  const { data: rules, error } = await supabase.from('rules').select('id, keyword').in('id', ruleIds);
+  if (error) throw error;
+  const keywordByRuleId = new Map((rules || []).map(rule => [rule.id.toString(), rule.keyword]));
 
   return sortedItems
     .filter(item => keywordByRuleId.has(item.ruleId.toString()))
@@ -106,15 +174,20 @@ const receiveWebhook = async (req, res) => {
     const statuses = value?.statuses;
     if (statuses) {
       for (const status of statuses) {
-        const updatedMsg = await Message.findOneAndUpdate(
-          { metaMessageId: status.id },
-          { status: status.status },
-          { new: true }
-        );
+        const { data: updatedMsg, error } = await supabase
+          .from('messages')
+          .update({ status: status.status })
+          .eq('meta_message_id', status.id)
+          .select()
+          .maybeSingle();
+        if (error) {
+          logger.error('Error updating message status:', error);
+          continue;
+        }
         if (updatedMsg) {
           try {
-            socketService.emitToBusiness(updatedMsg.businessId.toString(), 'message_status', {
-              messageId: updatedMsg._id,
+            socketService.emitToBusiness(updatedMsg.business_id, 'message_status', {
+              messageId: updatedMsg.id,
               metaMessageId: status.id,
               status: status.status
             });
@@ -174,15 +247,7 @@ const receiveWebhook = async (req, res) => {
     }
 
     // Step 8 - Upsert customer
-    const customer = await Customer.findOneAndUpdate(
-      { businessId: tenant.businessId, whatsappNumber: customerNumber },
-      {
-        $setOnInsert: { firstSeenAt: new Date() },
-        $set: { lastMessageAt: new Date() },
-        $inc: { totalMessages: 1 }
-      },
-      { upsert: true, new: true }
-    );
+    const customer = await upsertCustomerForInboundMessage(tenant.businessId, customerNumber);
 
     if (customer.isBlocked) {
       logger.warn(`Blocked customer ${customerNumber}`);
@@ -190,16 +255,16 @@ const receiveWebhook = async (req, res) => {
     }
 
     // Step 9 - Save inbound message
-    const inboundMsg = await Message.create({
-      businessId: tenant.businessId,
-      customerId: customer._id,
-      customerNumber,
+    const inboundMsg = await saveMessage({
+      business_id: tenant.businessId,
+      customer_id: customer.id,
+      customer_number: customerNumber,
       direction: 'inbound',
       type: messageType,
       content: messageText,
-      metaMessageId,
+      meta_message_id: metaMessageId,
       status: 'delivered',
-      isRead: false
+      is_read: false
     });
 
     // Step 10 - Increment usage (fire and forget)
@@ -244,15 +309,15 @@ const receiveWebhook = async (req, res) => {
         const cancelText = escapeHasMenu
           ? 'Booking cancelled.'
           : "Booking cancelled. Type 'hi' to see what I can help with.";
-        const cancelMsg = await Message.create({
-          businessId: tenant.businessId,
-          customerId: customer._id,
-          customerNumber,
+        const cancelMsg = await saveMessage({
+          business_id: tenant.businessId,
+          customer_id: customer.id,
+          customer_number: customerNumber,
           direction: 'outbound',
           type: 'text',
           content: cancelText,
           status: 'sent',
-          isRead: true
+          is_read: true
         });
         await addToWhatsappQueue({
           businessId: tenant.businessId,
@@ -261,7 +326,7 @@ const receiveWebhook = async (req, res) => {
           to: customerNumber,
           message: cancelText,
           type: 'text',
-          messageId: cancelMsg._id
+          messageId: cancelMsg.id
         });
         usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
           logger.error('Error incrementing outbound usage:', err)
@@ -285,15 +350,15 @@ const receiveWebhook = async (req, res) => {
             tenant
           );
 
-          const menuOutboundMsg = await Message.create({
-            businessId: tenant.businessId,
-            customerId: customer._id,
-            customerNumber,
+          const menuOutboundMsg = await saveMessage({
+            business_id: tenant.businessId,
+            customer_id: customer.id,
+            customer_number: customerNumber,
             direction: 'outbound',
             type: 'text',
             content: menuReplyText,
             status: 'sent',
-            isRead: true
+            is_read: true
           });
           await addToWhatsappQueue({
             businessId: tenant.businessId,
@@ -304,7 +369,7 @@ const receiveWebhook = async (req, res) => {
             type: 'text',
             listOptions: menuListOptions,
             listButtonLabel: 'Menu',
-            messageId: menuOutboundMsg._id
+            messageId: menuOutboundMsg.id
           });
           usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
             logger.error('Error incrementing outbound usage:', err)
@@ -353,16 +418,16 @@ const receiveWebhook = async (req, res) => {
           // it and re-send the current question's prompt so the customer
           // sees the bot is still waiting here, without advancing
           // session.step or touching session.collected.
-          const resendMsg = await Message.create({
-            businessId: tenant.businessId,
-            customerId: customer._id,
-            customerNumber,
+          const resendMsg = await saveMessage({
+            business_id: tenant.businessId,
+            customer_id: customer.id,
+            customer_number: customerNumber,
             direction: 'outbound',
             type: 'text',
             content: currentField.label,
             status: 'sent',
-            triggeredRuleId: activeSession.ruleId,
-            isRead: true
+            triggered_rule_id: activeSession.ruleId,
+            is_read: true
           });
           const resendJobData = {
             businessId: tenant.businessId,
@@ -372,7 +437,7 @@ const receiveWebhook = async (req, res) => {
             message: currentField.label,
             type: 'text',
             step: activeSession.step,
-            messageId: resendMsg._id
+            messageId: resendMsg.id
           };
           if (currentField.fieldType === 'buttons') {
             resendJobData.interactiveButtons = options;
@@ -438,24 +503,17 @@ const receiveWebhook = async (req, res) => {
           try {
             // Intro message (question text or the stale-vehicle re-prompt)
             const introText = nextField ? nextField.label : stepResult;
-            const introMsgShape = {
-              businessId: tenant.businessId,
-              customerId: customer._id,
-              customerNumber,
+            const introMsg = await createMessageSoft({
+              business_id: tenant.businessId,
+              customer_id: customer.id,
+              customer_number: customerNumber,
               direction: 'outbound',
               type: 'text',
               content: introText,
               status: 'sent',
-              triggeredRuleId: activeSession.ruleId,
-              isRead: true
-            };
-            let introMsg;
-            try {
-              introMsg = await Message.create(introMsgShape);
-            } catch (createError) {
-              logger.error('Error creating carousel intro message record:', { message: createError.message, stack: createError.stack });
-              introMsg = introMsgShape;
-            }
+              triggered_rule_id: activeSession.ruleId,
+              is_read: true
+            }, 'carousel intro');
 
             // Awaited-to-completion (not just enqueued) so this intro message
             // is guaranteed to land at WhatsApp before the vehicle messages
@@ -468,7 +526,7 @@ const receiveWebhook = async (req, res) => {
                 to: customerNumber,
                 message: introText,
                 type: 'text',
-                messageId: introMsg._id
+                messageId: introMsg.id
               });
             } catch (sendError) {
               logger.error('Error sending carousel intro message', {
@@ -501,31 +559,17 @@ const receiveWebhook = async (req, res) => {
               captionParts.push(`₹${option.fare}`);
               const caption = captionParts.join(' • ');
 
-              const vehicleMsgShape = {
-                businessId: tenant.businessId,
-                customerId: customer._id,
-                customerNumber,
+              const vehicleMsg = await createMessageSoft({
+                business_id: tenant.businessId,
+                customer_id: customer.id,
+                customer_number: customerNumber,
                 direction: 'outbound',
                 type: 'text',
                 content: caption,
                 status: 'sent',
-                triggeredRuleId: activeSession.ruleId,
-                isRead: true
-              };
-              let vehicleMsg;
-              try {
-                vehicleMsg = await Message.create(vehicleMsgShape);
-              } catch (createError) {
-                logger.error('Error creating carousel vehicle message record', {
-                  businessId: tenant.businessId,
-                  customerNumber,
-                  optionIndex: option.index,
-                  optionName: option.name,
-                  message: createError.message,
-                  stack: createError.stack
-                });
-                vehicleMsg = vehicleMsgShape;
-              }
+                triggered_rule_id: activeSession.ruleId,
+                is_read: true
+              }, 'carousel vehicle');
 
               // Awaited-to-completion so vehicle messages send in the same
               // order they're constructed, regardless of worker concurrency.
@@ -539,7 +583,7 @@ const receiveWebhook = async (req, res) => {
                   type: 'text',
                   imageUrl: option.photoUrl || null,
                   buttons: [{ title: 'Book this', nextKeyword: `vehicle_${option.index}` }],
-                  messageId: vehicleMsg._id
+                  messageId: vehicleMsg.id
                 });
                 sentCount++;
               } catch (sendError) {
@@ -578,24 +622,17 @@ const receiveWebhook = async (req, res) => {
             // Escape hatch: let the customer opt out of the carousel if their
             // preferred vehicle isn't listed.
             const otherOptionsText = "Don't see the vehicle you want?";
-            const otherOptionsMsgShape = {
-              businessId: tenant.businessId,
-              customerId: customer._id,
-              customerNumber,
+            const otherOptionsMsg = await createMessageSoft({
+              business_id: tenant.businessId,
+              customer_id: customer.id,
+              customer_number: customerNumber,
               direction: 'outbound',
               type: 'text',
               content: otherOptionsText,
               status: 'sent',
-              triggeredRuleId: activeSession.ruleId,
-              isRead: true
-            };
-            let otherOptionsMsg;
-            try {
-              otherOptionsMsg = await Message.create(otherOptionsMsgShape);
-            } catch (createError) {
-              logger.error('Error creating carousel other-options message record:', { message: createError.message, stack: createError.stack });
-              otherOptionsMsg = otherOptionsMsgShape;
-            }
+              triggered_rule_id: activeSession.ruleId,
+              is_read: true
+            }, 'carousel other-options');
 
             // Awaited-to-completion so this message lands after the last
             // vehicle message, preserving the constructed order.
@@ -608,7 +645,7 @@ const receiveWebhook = async (req, res) => {
                 message: otherOptionsText,
                 type: 'text',
                 buttons: [{ title: 'Other options', nextKeyword: 'vehicle_other' }],
-                messageId: otherOptionsMsg._id
+                messageId: otherOptionsMsg.id
               });
             } catch (sendError) {
               logger.error('Error sending carousel "other options" message', {
@@ -647,16 +684,16 @@ const receiveWebhook = async (req, res) => {
         const replyText = nextField ? nextField.label : stepResult;
 
         // Save outbound message to DB
-        const outboundMsg = await Message.create({
-          businessId: tenant.businessId,
-          customerId: customer._id,
-          customerNumber,
+        const outboundMsg = await saveMessage({
+          business_id: tenant.businessId,
+          customer_id: customer.id,
+          customer_number: customerNumber,
           direction: 'outbound',
           type: 'text',
           content: replyText,
           status: 'sent',
-          triggeredRuleId: activeSession.ruleId,
-          isRead: true
+          triggered_rule_id: activeSession.ruleId,
+          is_read: true
         });
 
         // Queue outbound message via addToWhatsappQueue
@@ -667,7 +704,7 @@ const receiveWebhook = async (req, res) => {
           to: customerNumber,
           message: replyText,
           type: 'text',
-          messageId: outboundMsg._id
+          messageId: outboundMsg.id
         };
         if (nextField && (nextField.fieldType === 'buttons' || nextField.fieldType === 'list')) {
           // nextField's step isn't always activeSession.step + 1 — bailing
@@ -730,15 +767,15 @@ const receiveWebhook = async (req, res) => {
         greetingReplyText = applyMessageTemplate(greetingReplyText, tenant);
 
         // Save outbound message
-        const greetingOutboundMsg = await Message.create({
-          businessId: tenant.businessId,
-          customerId: customer._id,
-          customerNumber,
+        const greetingOutboundMsg = await saveMessage({
+          business_id: tenant.businessId,
+          customer_id: customer.id,
+          customer_number: customerNumber,
           direction: 'outbound',
           type: 'text',
           content: greetingReplyText,
           status: 'sent',
-          isRead: true
+          is_read: true
         });
 
         // Queue outbound message the same way Step 16 does
@@ -751,7 +788,7 @@ const receiveWebhook = async (req, res) => {
           type: 'text',
           listOptions: menuListOptions,
           listButtonLabel: 'Menu',
-          messageId: greetingOutboundMsg._id
+          messageId: greetingOutboundMsg.id
         };
         await addToWhatsappQueue(greetingJobData);
 
@@ -786,7 +823,7 @@ const receiveWebhook = async (req, res) => {
     let fallbackMenuListOptions = null; // set when no rule matched and business has an enabled menu
 
     if (matchedRule) {
-      triggeredRuleId = matchedRule._id;
+      triggeredRuleId = matchedRule.id;
 
       if (matchedRule.replyType === 'text') {
         // Simple text reply (may also carry an image and/or buttons).
@@ -797,7 +834,7 @@ const receiveWebhook = async (req, res) => {
         const firstField = await bookingService.startBookingSession(
           tenant.businessId,
           customerNumber,
-          matchedRule._id
+          matchedRule.id
         );
         bookingField = firstField;
         replyText = firstField.label;
@@ -836,16 +873,16 @@ const receiveWebhook = async (req, res) => {
     }
 
     // Step 15 - Save outbound message
-    const outboundMsg = await Message.create({
-      businessId: tenant.businessId,
-      customerId: customer._id,
-      customerNumber,
+    const outboundMsg = await saveMessage({
+      business_id: tenant.businessId,
+      customer_id: customer.id,
+      customer_number: customerNumber,
       direction: 'outbound',
       type: 'text',
       content: replyText,
       status: 'sent',
-      triggeredRuleId,
-      isRead: true
+      triggered_rule_id: triggeredRuleId,
+      is_read: true
     });
 
     // Step 16 - Queue outbound message
@@ -859,7 +896,7 @@ const receiveWebhook = async (req, res) => {
       imageUrl: matchedRule?.replyImageUrl || null,
       buttons: matchedRule?.buttons || [],
       listOptions: fallbackMenuListOptions || matchedRule?.listOptions || [],
-      messageId: outboundMsg._id
+      messageId: outboundMsg.id
     };
     if (fallbackMenuListOptions) {
       outboundJobData.listButtonLabel = 'Menu';

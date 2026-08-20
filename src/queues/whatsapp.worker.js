@@ -1,6 +1,6 @@
 const { Worker } = require('bullmq');
 const whatsappService = require('../services/whatsapp.service');
-const Message = require('../models/Message');
+const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 
 const redisUrl = new URL(process.env.REDIS_URL);
@@ -42,7 +42,8 @@ const worker = new Worker('whatsapp-outbound', async (job) => {
     }
 
     if (messageId) {
-      await Message.findByIdAndUpdate(messageId, { status: 'sent' });
+      const { error: updateErr } = await supabase.from('messages').update({ status: 'sent' }).eq('id', messageId);
+      if (updateErr) logger.error('Error marking message sent:', updateErr);
     }
 
     logger.info(`Message sent successfully to ${to} for business ${businessId}`);
@@ -53,7 +54,8 @@ const worker = new Worker('whatsapp-outbound', async (job) => {
     });
 
     if (messageId && job.attemptsMade >= 2) {
-      await Message.findByIdAndUpdate(messageId, { status: 'failed' });
+      const { error: updateErr } = await supabase.from('messages').update({ status: 'failed' }).eq('id', messageId);
+      if (updateErr) logger.error('Error marking message failed:', updateErr);
     }
 
     throw error;

@@ -2,7 +2,6 @@ const redis = require('../config/redis');
 const supabase = require('../config/supabase');
 const businessService = require('./business.service');
 const Booking = require('../models/Booking');
-const Customer = require('../models/Customer');
 const RouteFare = require('../models/RouteFare');
 const RentalPackage = require('../models/RentalPackage');
 const Vehicle = require('../models/Vehicle');
@@ -796,13 +795,19 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
     }
 
     // Step 6: All fields collected - create booking
-    const customer = await Customer.findOne({ businessId, whatsappNumber: customerNumber });
+    const { data: customer, error: custErr } = await supabase
+      .from('customers').select('id').eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
+    if (custErr) logger.error('Error looking up customer for booking creation:', custErr);
 
     const bookingCode = 'CAB' + Math.floor(1000 + Math.random() * 9000);
 
+    // NOTE: Booking is still Mongoose with businessId/customerId typed as
+    // ObjectId — this throws a CastError below since businessId is now a
+    // Postgres UUID string. Pre-existing, unrelated to the Customer lookup
+    // above; Booking itself needs its own migration to Supabase.
     const booking = await Booking.create({
       businessId,
-      customerId: customer ? customer._id : null,
+      customerId: customer ? customer.id : null,
       customerNumber,
       status: 'pending',
       fields: session.collected,

@@ -1,5 +1,4 @@
 const supabase = require('../config/supabase');
-const Rule = require('../models/Rule');
 const RouteFare = require('../models/RouteFare');
 const { generateWebhookToken } = require('../utils/crypto');
 const { encrypt } = require('../utils/crypto');
@@ -103,26 +102,22 @@ const createBusiness = async (ownerUserId, data) => {
     if (templateErr) throw templateErr;
 
     if (template && template.default_rules && template.default_rules.length > 0) {
-      // BROKEN — Rule is still Mongoose, and business.id is now a Postgres
-      // UUID, so Rule.insertMany will throw a CastError on businessId. New
-      // businesses get zero default rules until Rule is migrated to Supabase.
-      // Caught below and logged loudly rather than failing business creation.
       try {
         const rulesToCreate = template.default_rules.map(rule => ({
-          businessId: business.id,
+          business_id: business.id,
           keyword: rule.keyword,
-          matchType: rule.matchType || 'contains',
+          match_type: rule.matchType || 'contains',
           reply: rule.reply || rule.response || '',
-          replyType: rule.replyType || 'text',
-          priority: rule.priority || 0,
-          isActive: true,
-          triggerCount: 0
+          reply_type: rule.replyType || 'text',
+          is_active: true,
+          trigger_count: 0
         }));
 
-        await Rule.insertMany(rulesToCreate);
+        const { error: rulesErr } = await supabase.from('rules').insert(rulesToCreate);
+        if (rulesErr) throw rulesErr;
         logger.info(`Created ${rulesToCreate.length} default rules for business ${business.id}`);
       } catch (ruleError) {
-        logger.error(`FAILED to create default rules for business ${business.id} — Rule model not yet migrated to Supabase:`, ruleError);
+        logger.error(`FAILED to create default rules for business ${business.id}:`, ruleError);
       }
     }
 
@@ -301,9 +296,6 @@ const getDashboardStats = async (businessId) => {
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
 
-  const now = new Date();
-  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-
   const safe = async (fn, label, fallback) => {
     try {
       return await fn();
@@ -311,6 +303,18 @@ const getDashboardStats = async (businessId) => {
       logger.error(`getDashboardStats: ${label} failed (model not yet migrated?):`, error.message);
       return fallback;
     }
+  };
+
+  // eq: {column: value} filters; gteColumn/gteValue: an additional >= filter (for "today" cutoffs)
+  const countRows = async (table, { eq = {}, gteColumn, gteValue } = {}) => {
+    let query = supabase.from(table).select('*', { count: 'exact', head: true }).eq('business_id', businessId);
+    for (const [column, value] of Object.entries(eq)) {
+      query = query.eq(column, value);
+    }
+    if (gteColumn) query = query.gte(gteColumn, gteValue);
+    const { count, error } = await query;
+    if (error) throw error;
+    return count || 0;
   };
 
   const [
@@ -322,13 +326,13 @@ const getDashboardStats = async (businessId) => {
     pendingBookings,
     currentMonthUsage
   ] = await Promise.all([
-    safe(() => require('../models/Message').countDocuments({ businessId, createdAt: { $gte: startOfToday } }), 'todayMessageCount', 0),
-    safe(() => require('../models/Message').countDocuments({ businessId, direction: 'inbound', createdAt: { $gte: startOfToday } }), 'todayInboundCount', 0),
+    safe(() => countRows('messages', { gteColumn: 'created_at', gteValue: startOfToday.toISOString() }), 'todayMessageCount', 0),
+    safe(() => countRows('messages', { eq: { direction: 'inbound' }, gteColumn: 'created_at', gteValue: startOfToday.toISOString() }), 'todayInboundCount', 0),
     safe(() => require('../models/Booking').countDocuments({ businessId, createdAt: { $gte: startOfToday } }), 'todayBookingCount', 0),
-    safe(() => require('../models/Customer').countDocuments({ businessId }), 'totalCustomers', 0),
-    safe(() => require('../models/Customer').countDocuments({ businessId, firstSeenAt: { $gte: startOfToday } }), 'newCustomersToday', 0),
+    safe(() => countRows('customers'), 'totalCustomers', 0),
+    safe(() => countRows('customers', { gteColumn: 'first_seen_at', gteValue: startOfToday.toISOString() }), 'newCustomersToday', 0),
     safe(() => require('../models/Booking').countDocuments({ businessId, status: 'pending' }), 'pendingBookings', 0),
-    safe(() => require('../models/Usage').findOne({ businessId, month: currentMonth }), 'currentMonthUsage', null)
+    require('./usage.service').getUsageForBusiness(businessId)
   ]);
 
   return {

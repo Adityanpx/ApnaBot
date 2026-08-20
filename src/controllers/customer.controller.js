@@ -1,7 +1,7 @@
-const Customer = require('../models/Customer');
-const Message = require('../models/Message');
+const supabase = require('../config/supabase');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
+const { toCamelCase } = require('../utils/caseConvert');
 const logger = require('../utils/logger');
 
 /**
@@ -12,30 +12,28 @@ const getCustomers = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, search, isBlocked } = req.query;
     const businessId = req.user.businessId;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
 
-    const filter = { businessId };
+    let query = supabase.from('customers').select('*', { count: 'exact' }).eq('business_id', businessId);
 
     if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { whatsappNumber: { $regex: search, $options: 'i' } }
-      ];
+      // PostgREST's .or() parses commas/parens as filter syntax — strip them
+      // so the search term can't break out of these two conditions.
+      const safeSearch = search.replace(/[,()%*]/g, '');
+      query = query.or(`name.ilike.%${safeSearch}%,whatsapp_number.ilike.%${safeSearch}%`);
     }
-
     if (isBlocked !== undefined) {
-      filter.isBlocked = isBlocked === 'true';
+      query = query.eq('is_blocked', isBlocked === 'true');
     }
 
-    const [total, customers] = await Promise.all([
-      Customer.countDocuments(filter),
-      Customer.find(filter)
-        .sort({ lastMessageAt: -1 })
-        .skip((parseInt(page) - 1) * parseInt(limit))
-        .limit(parseInt(limit))
-    ]);
+    const { data, error, count } = await query
+      .order('last_message_at', { ascending: false })
+      .range((pageNum - 1) * limitNum, pageNum * limitNum - 1);
+    if (error) throw error;
 
-    const pagination = getPagination(total, page, limit);
-    return successResponse(res, 200, { customers, pagination });
+    const pagination = getPagination(count, pageNum, limitNum);
+    return successResponse(res, 200, { customers: (data || []).map(toCamelCase), pagination });
   } catch (error) {
     logger.error('Error in getCustomers:', error);
     next(error);
@@ -51,15 +49,20 @@ const getCustomerById = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: id, businessId });
+    const { data: customer, error: custErr } = await supabase
+      .from('customers').select('*').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (custErr) throw custErr;
     if (!customer) return errorResponse(res, 404, 'Customer not found');
 
-    const messages = await Message.find({ businessId, customerId: id })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
+    const { data: messages, error: msgErr } = await supabase
+      .from('messages').select('*').eq('business_id', businessId).eq('customer_id', id)
+      .order('created_at', { ascending: false }).limit(50);
+    if (msgErr) throw msgErr;
 
-    return successResponse(res, 200, { customer, messages: messages.reverse() });
+    return successResponse(res, 200, {
+      customer: toCamelCase(customer),
+      messages: (messages || []).map(toCamelCase).reverse()
+    });
   } catch (error) {
     logger.error('Error in getCustomerById:', error);
     next(error);
@@ -76,18 +79,24 @@ const updateCustomer = async (req, res, next) => {
     const { name, tags, notes } = req.body;
     const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: id, businessId });
-    if (!customer) return errorResponse(res, 404, 'Customer not found');
+    const { data: existing, error: findErr } = await supabase
+      .from('customers').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) return errorResponse(res, 404, 'Customer not found');
 
-    if (name !== undefined) customer.name = name.trim();
+    const updateData = {};
+    if (name !== undefined) updateData.name = name.trim();
     if (tags !== undefined) {
       if (!Array.isArray(tags)) return errorResponse(res, 400, 'Tags must be an array');
-      customer.tags = tags.map(t => t.trim()).filter(Boolean);
+      updateData.tags = tags.map(t => t.trim()).filter(Boolean);
     }
-    if (notes !== undefined) customer.notes = notes;
+    if (notes !== undefined) updateData.notes = notes;
 
-    await customer.save();
-    return successResponse(res, 200, customer);
+    const { data: customer, error } = await supabase
+      .from('customers').update(updateData).eq('id', id).select().single();
+    if (error) throw error;
+
+    return successResponse(res, 200, toCamelCase(customer));
   } catch (error) {
     logger.error('Error in updateCustomer:', error);
     next(error);
@@ -103,15 +112,18 @@ const blockCustomer = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: id, businessId });
-    if (!customer) return errorResponse(res, 404, 'Customer not found');
-    if (customer.isBlocked) return errorResponse(res, 400, 'Customer is already blocked');
+    const { data: existing, error: findErr } = await supabase
+      .from('customers').select('is_blocked').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) return errorResponse(res, 404, 'Customer not found');
+    if (existing.is_blocked) return errorResponse(res, 400, 'Customer is already blocked');
 
-    customer.isBlocked = true;
-    await customer.save();
+    const { data: customer, error } = await supabase
+      .from('customers').update({ is_blocked: true }).eq('id', id).select().single();
+    if (error) throw error;
 
     logger.info(`Customer ${id} blocked for business ${businessId}`);
-    return successResponse(res, 200, customer, 'Customer blocked successfully');
+    return successResponse(res, 200, toCamelCase(customer), 'Customer blocked successfully');
   } catch (error) {
     logger.error('Error in blockCustomer:', error);
     next(error);
@@ -127,15 +139,18 @@ const unblockCustomer = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const customer = await Customer.findOne({ _id: id, businessId });
-    if (!customer) return errorResponse(res, 404, 'Customer not found');
-    if (!customer.isBlocked) return errorResponse(res, 400, 'Customer is not blocked');
+    const { data: existing, error: findErr } = await supabase
+      .from('customers').select('is_blocked').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) return errorResponse(res, 404, 'Customer not found');
+    if (!existing.is_blocked) return errorResponse(res, 400, 'Customer is not blocked');
 
-    customer.isBlocked = false;
-    await customer.save();
+    const { data: customer, error } = await supabase
+      .from('customers').update({ is_blocked: false }).eq('id', id).select().single();
+    if (error) throw error;
 
     logger.info(`Customer ${id} unblocked for business ${businessId}`);
-    return successResponse(res, 200, customer, 'Customer unblocked successfully');
+    return successResponse(res, 200, toCamelCase(customer), 'Customer unblocked successfully');
   } catch (error) {
     logger.error('Error in unblockCustomer:', error);
     next(error);

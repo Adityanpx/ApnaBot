@@ -1,68 +1,57 @@
-const mongoose = require('mongoose');
-const Message = require('../models/Message');
-const Customer = require('../models/Customer');
+const supabase = require('../config/supabase');
 const businessService = require('../services/business.service');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
+const { toCamelCase } = require('../utils/caseConvert');
 const logger = require('../utils/logger');
 
 /**
  * GET /api/messages
  * List conversations grouped by customer.
  * Returns latest message per customer + unread count.
+ *
+ * Every customer row is only ever created alongside a message (webhook
+ * upsert, sendMessage upsert below), so "customers with a conversation" and
+ * "all customers for this business" are the same set — paginating customers
+ * by lastMessageAt stands in for the old Message-grouped aggregation, without
+ * needing a Postgres view/RPC for it.
  */
 const getConversations = async (req, res, next) => {
   try {
     const { page = 1, limit = 20 } = req.query;
     const businessId = req.user.businessId;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
 
-    const conversations = await Message.aggregate([
-      { $match: { businessId: new mongoose.Types.ObjectId(businessId.toString()) } },
-      { $sort: { createdAt: -1 } },
-      {
-        $group: {
-          _id: '$customerId',
-          customerNumber: { $first: '$customerNumber' },
-          lastMessage: { $first: '$content' },
-          lastMessageAt: { $first: '$createdAt' },
-          lastDirection: { $first: '$direction' },
-          unreadCount: {
-            $sum: {
-              $cond: [
-                { $and: [
-                  { $eq: ['$direction', 'inbound'] },
-                  { $eq: ['$isRead', false] }
-                ]},
-                1, 0
-              ]
-            }
-          }
-        }
-      },
-      { $sort: { lastMessageAt: -1 } },
-      { $skip: skip },
-      { $limit: parseInt(limit) },
-      {
-        $lookup: {
-          from: 'customers',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'customer'
-        }
-      },
-      { $unwind: { path: '$customer', preserveNullAndEmptyArrays: true } }
-    ]);
+    const { data: customers, error, count } = await supabase
+      .from('customers').select('*', { count: 'exact' }).eq('business_id', businessId)
+      .order('last_message_at', { ascending: false })
+      .range((pageNum - 1) * limitNum, pageNum * limitNum - 1);
+    if (error) throw error;
 
-    const totalResult = await Message.aggregate([
-      { $match: { businessId: new mongoose.Types.ObjectId(businessId.toString()) } },
-      { $group: { _id: '$customerId' } },
-      { $count: 'total' }
-    ]);
+    const conversations = await Promise.all((customers || []).map(async (customerRow) => {
+      const customer = toCamelCase(customerRow);
 
-    const total = totalResult[0]?.total || 0;
-    const pagination = getPagination(total, page, limit);
+      const [{ data: lastMsg }, { count: unreadCount }] = await Promise.all([
+        supabase.from('messages').select('content, direction, created_at')
+          .eq('customer_id', customer.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('messages').select('*', { count: 'exact', head: true })
+          .eq('customer_id', customer.id).eq('direction', 'inbound').eq('is_read', false)
+      ]);
+
+      return {
+        _id: customer.id,
+        customerNumber: customer.whatsappNumber,
+        lastMessage: lastMsg?.content ?? null,
+        lastMessageAt: lastMsg?.created_at ?? customer.lastMessageAt,
+        lastDirection: lastMsg?.direction ?? null,
+        unreadCount: unreadCount || 0,
+        customer
+      };
+    }));
+
+    const pagination = getPagination(count, pageNum, limitNum);
 
     return successResponse(res, 200, { conversations, pagination });
   } catch (error) {
@@ -80,24 +69,25 @@ const getChatHistory = async (req, res, next) => {
     const { customerId } = req.params;
     const { page = 1, limit = 50 } = req.query;
     const businessId = req.user.businessId;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
 
-    const customer = await Customer.findOne({ _id: customerId, businessId });
-    if (!customer) return errorResponse(res, 404, 'Customer not found');
+    const { data: customerRow, error: custErr } = await supabase
+      .from('customers').select('*').eq('id', customerId).eq('business_id', businessId).maybeSingle();
+    if (custErr) throw custErr;
+    if (!customerRow) return errorResponse(res, 404, 'Customer not found');
 
-    const filter = { businessId, customerId };
-    const [total, messages] = await Promise.all([
-      Message.countDocuments(filter),
-      Message.find(filter)
-        .sort({ createdAt: -1 })
-        .skip((parseInt(page) - 1) * parseInt(limit))
-        .limit(parseInt(limit))
-        .lean()
-    ]);
+    const { data: messages, error, count } = await supabase
+      .from('messages').select('*', { count: 'exact' })
+      .eq('business_id', businessId).eq('customer_id', customerId)
+      .order('created_at', { ascending: false })
+      .range((pageNum - 1) * limitNum, pageNum * limitNum - 1);
+    if (error) throw error;
 
-    const pagination = getPagination(total, page, limit);
+    const pagination = getPagination(count, pageNum, limitNum);
     return successResponse(res, 200, {
-      customer,
-      messages: messages.reverse(), // return in chronological order
+      customer: toCamelCase(customerRow),
+      messages: (messages || []).map(toCamelCase).reverse(), // return in chronological order
       pagination
     });
   } catch (error) {
@@ -115,14 +105,14 @@ const markAsRead = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const message = await Message.findOneAndUpdate(
-      { _id: id, businessId, direction: 'inbound' },
-      { isRead: true },
-      { new: true }
-    );
+    const { data: message, error } = await supabase
+      .from('messages').update({ is_read: true })
+      .eq('id', id).eq('business_id', businessId).eq('direction', 'inbound')
+      .select().maybeSingle();
+    if (error) throw error;
 
     if (!message) return errorResponse(res, 404, 'Message not found');
-    return successResponse(res, 200, message, 'Message marked as read');
+    return successResponse(res, 200, toCamelCase(message), 'Message marked as read');
   } catch (error) {
     logger.error('Error in markAsRead:', error);
     next(error);
@@ -153,27 +143,43 @@ const sendMessage = async (req, res, next) => {
       return errorResponse(res, 400, 'WhatsApp is not connected to this business');
     }
 
-    // Upsert customer record
-    const customer = await Customer.findOneAndUpdate(
-      { businessId, whatsappNumber: customerNumber },
-      {
-        $setOnInsert: { firstSeenAt: new Date() },
-        $set: { lastMessageAt: new Date() }
-      },
-      { upsert: true, new: true }
-    );
+    // Upsert customer record (read-then-write — Supabase has no
+    // upsert-with-$setOnInsert; a tiny race under concurrent sends is
+    // acceptable at current traffic, same tradeoff as the webhook path)
+    const { data: existingCustomer, error: findErr } = await supabase
+      .from('customers').select('*').eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
+    if (findErr) throw findErr;
+
+    let customer;
+    if (existingCustomer) {
+      const { data, error } = await supabase.from('customers')
+        .update({ last_message_at: new Date().toISOString() }).eq('id', existingCustomer.id).select().single();
+      if (error) throw error;
+      customer = toCamelCase(data);
+    } else {
+      const { data, error } = await supabase.from('customers').insert({
+        business_id: businessId,
+        whatsapp_number: customerNumber,
+        first_seen_at: new Date().toISOString(),
+        last_message_at: new Date().toISOString()
+      }).select().single();
+      if (error) throw error;
+      customer = toCamelCase(data);
+    }
 
     // Save outbound message to DB
-    const outboundMsg = await Message.create({
-      businessId,
-      customerId: customer._id,
-      customerNumber,
+    const { data: outboundMsgRow, error: msgErr } = await supabase.from('messages').insert({
+      business_id: businessId,
+      customer_id: customer.id,
+      customer_number: customerNumber,
       direction: 'outbound',
       type: 'text',
       content: message.trim(),
       status: 'sent',
-      isRead: true
-    });
+      is_read: true
+    }).select().single();
+    if (msgErr) throw msgErr;
+    const outboundMsg = toCamelCase(outboundMsgRow);
 
     // Queue via BullMQ — NEVER call Meta API directly from controller
     await addToWhatsappQueue({
@@ -183,7 +189,7 @@ const sendMessage = async (req, res, next) => {
       to: customerNumber,
       message: message.trim(),
       type: 'text',
-      messageId: outboundMsg._id.toString()
+      messageId: outboundMsg.id
     });
 
     logger.info(`Manual message queued to ${customerNumber} for business ${businessId}`);

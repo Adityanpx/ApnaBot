@@ -1,7 +1,8 @@
 const { distance } = require('fastest-levenshtein');
-const Rule = require('../models/Rule');
+const supabase = require('../config/supabase');
 const redis = require('../config/redis');
 const logger = require('../utils/logger');
+const { toCamelCase } = require('../utils/caseConvert');
 
 /**
  * Adaptive edit-distance threshold for fuzzy keyword matching, scaled to
@@ -31,7 +32,10 @@ const getRulesFromCache = async (businessId) => {
     }
 
     // Cache miss - query DB
-    const rules = await Rule.find({ businessId, isActive: true });
+    const { data, error } = await supabase
+      .from('rules').select('*').eq('business_id', businessId).eq('is_active', true);
+    if (error) throw error;
+    const rules = (data || []).map(toCamelCase);
 
     // Store in Redis with 1 hour TTL
     await redis.set(cacheKey, JSON.stringify(rules), 'EX', 3600);
@@ -40,7 +44,9 @@ const getRulesFromCache = async (businessId) => {
   } catch (error) {
     logger.error('Error in getRulesFromCache:', error);
     // On error, try to fetch from DB directly
-    return Rule.find({ businessId, isActive: true });
+    const { data } = await supabase
+      .from('rules').select('*').eq('business_id', businessId).eq('is_active', true);
+    return (data || []).map(toCamelCase);
   }
 };
 
@@ -75,6 +81,20 @@ const normalizeText = (text) => {
 };
 
 /**
+ * Fire-and-forget trigger_count increment via RPC (atomic on the DB side,
+ * unlike a read-then-write). See supabase/migrations for
+ * increment_rule_trigger_count.
+ * @param {string} ruleId
+ */
+const incrementTriggerCount = (ruleId) => {
+  supabase.rpc('increment_rule_trigger_count', { rule_id: ruleId })
+    .then(({ error }) => {
+      if (error) logger.error('Error incrementing trigger count:', error);
+    })
+    .catch(err => logger.error('Error incrementing trigger count:', err));
+};
+
+/**
  * Find matching rule for incoming message
  * @param {string} businessId - The business ID
  * @param {string} incomingText - The incoming message text
@@ -95,18 +115,13 @@ const findMatchingRule = async (businessId, incomingText) => {
     // Filter active rules only
     const activeRules = rules.filter(rule => rule.isActive);
 
-    // Sort by priority (lower priority = higher importance)
-    activeRules.sort((a, b) => a.priority - b.priority);
-
     // Pass 1 - Exact match
-    const exactMatch = activeRules.find(rule => 
+    const exactMatch = activeRules.find(rule =>
       rule.matchType === 'exact' && normalizeText(rule.keyword) === normalizedText
     );
 
     if (exactMatch) {
-      // Increment trigger count (fire and forget)
-      Rule.findByIdAndUpdate(exactMatch._id, { $inc: { triggerCount: 1 } })
-        .catch(err => logger.error('Error incrementing trigger count:', err));
+      incrementTriggerCount(exactMatch.id);
       return exactMatch;
     }
 
@@ -116,8 +131,7 @@ const findMatchingRule = async (businessId, incomingText) => {
     );
 
     if (startsWithMatch) {
-      Rule.findByIdAndUpdate(startsWithMatch._id, { $inc: { triggerCount: 1 } })
-        .catch(err => logger.error('Error incrementing trigger count:', err));
+      incrementTriggerCount(startsWithMatch.id);
       return startsWithMatch;
     }
 
@@ -127,8 +141,7 @@ const findMatchingRule = async (businessId, incomingText) => {
     );
 
     if (containsMatch) {
-      Rule.findByIdAndUpdate(containsMatch._id, { $inc: { triggerCount: 1 } })
-        .catch(err => logger.error('Error incrementing trigger count:', err));
+      incrementTriggerCount(containsMatch.id);
       return containsMatch;
     }
 
@@ -139,8 +152,7 @@ const findMatchingRule = async (businessId, incomingText) => {
     );
 
     if (hindiExactMatch) {
-      Rule.findByIdAndUpdate(hindiExactMatch._id, { $inc: { triggerCount: 1 } })
-        .catch(err => logger.error('Error incrementing trigger count:', err));
+      incrementTriggerCount(hindiExactMatch.id);
       return hindiExactMatch;
     }
 
@@ -153,8 +165,7 @@ const findMatchingRule = async (businessId, incomingText) => {
     );
 
     if (hindiContainsMatch) {
-      Rule.findByIdAndUpdate(hindiContainsMatch._id, { $inc: { triggerCount: 1 } })
-        .catch(err => logger.error('Error incrementing trigger count:', err));
+      incrementTriggerCount(hindiContainsMatch.id);
       return hindiContainsMatch;
     }
 
@@ -179,8 +190,7 @@ const findMatchingRule = async (businessId, incomingText) => {
     }
 
     if (closestFuzzyMatch) {
-      Rule.findByIdAndUpdate(closestFuzzyMatch._id, { $inc: { triggerCount: 1 } })
-        .catch(err => logger.error('Error incrementing trigger count:', err));
+      incrementTriggerCount(closestFuzzyMatch.id);
       return closestFuzzyMatch;
     }
 

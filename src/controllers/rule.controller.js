@@ -1,9 +1,3 @@
-// NOTE: Rule is still on Mongoose while businessId (req.user.businessId) is
-// now a Supabase UUID — every Rule.* call below (getRules, createRule,
-// updateRule, deleteRule, toggleRule, and the import loop in
-// bulkImportRules) throws a Mongoose CastError until Rule is migrated to
-// Supabase. This is the next migration step, not something patched here.
-const Rule = require('../models/Rule');
 const supabase = require('../config/supabase');
 const businessService = require('../services/business.service');
 const subscriptionService = require('../services/subscription.service');
@@ -11,6 +5,7 @@ const { invalidateRulesCache } = require('../services/chatbot.service');
 const r2 = require('../services/r2.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
+const { toCamelCase } = require('../utils/caseConvert');
 const logger = require('../utils/logger');
 
 /**
@@ -21,25 +16,22 @@ const getRules = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, isActive } = req.query;
     const businessId = req.user.businessId;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
 
-    // Build filter
-    const filter = { businessId };
+    let query = supabase.from('rules').select('*', { count: 'exact' }).eq('business_id', businessId);
     if (isActive !== undefined) {
-      filter.isActive = isActive === 'true';
+      query = query.eq('is_active', isActive === 'true');
     }
 
-    // Get total count and paginated results
-    const [total, rules] = await Promise.all([
-      Rule.countDocuments(filter),
-      Rule.find(filter)
-        .sort({ priority: 1, createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(parseInt(limit))
-    ]);
+    const { data, error, count } = await query
+      .order('created_at', { ascending: false })
+      .range((pageNum - 1) * limitNum, pageNum * limitNum - 1);
+    if (error) throw error;
 
-    const pagination = getPagination(total, page, limit);
+    const pagination = getPagination(count, pageNum, limitNum);
 
-    return successResponse(res, 200, { rules, pagination });
+    return successResponse(res, 200, { rules: (data || []).map(toCamelCase), pagination });
   } catch (error) {
     logger.error('Error in getRules:', error);
     next(error);
@@ -116,44 +108,49 @@ const createRule = async (req, res, next) => {
     // Check plan rule limit
     const subscription = await subscriptionService.getActiveSubscription(businessId);
     if (subscription && subscription.plan && subscription.plan.rule_limit !== -1) {
-      const ruleCount = await Rule.countDocuments({ businessId });
+      const { count: ruleCount, error: countErr } = await supabase
+        .from('rules').select('*', { count: 'exact', head: true }).eq('business_id', businessId);
+      if (countErr) throw countErr;
       if (ruleCount >= subscription.plan.rule_limit) {
         return errorResponse(res, 403, 'Rule limit reached for your plan. Please upgrade.');
       }
     }
 
     // Check for duplicate keyword
-    const existingRule = await Rule.findOne({ businessId, keyword: normalizedKeyword });
+    const { data: existingRule, error: existingErr } = await supabase
+      .from('rules').select('id').eq('business_id', businessId).eq('keyword', normalizedKeyword).maybeSingle();
+    if (existingErr) throw existingErr;
     if (existingRule) {
       return errorResponse(res, 409, 'A rule with this keyword already exists.');
     }
 
     // Create rule
-    const rule = await Rule.create({
-      businessId,
+    const { data: rule, error } = await supabase.from('rules').insert({
+      business_id: businessId,
       keyword: normalizedKeyword,
-      matchType,
+      match_type: matchType,
       reply,
-      replyType,
-      replyImageUrl: replyImageUrl || null,
+      reply_type: replyType,
+      reply_image_url: replyImageUrl || null,
       buttons: (buttons || []).map(b => ({
         title: b.title.trim(),
         nextKeyword: b.nextKeyword.toLowerCase().trim()
       })),
-      listOptions: (listOptions || []).map(o => ({
+      list_options: (listOptions || []).map(o => ({
         label: o.label.trim(),
         description: (o.description || '').trim(),
         nextKeyword: o.nextKeyword.toLowerCase().trim()
       })),
-      hindiAliases: (hindiAliases || []).map(a => a.trim()).filter(Boolean),
-      isActive: true,
-      triggerCount: 0
-    });
+      hindi_aliases: (hindiAliases || []).map(a => a.trim()).filter(Boolean),
+      is_active: true,
+      trigger_count: 0
+    }).select().single();
+    if (error) throw error;
 
     // Invalidate cache
     await invalidateRulesCache(businessId);
 
-    return successResponse(res, 201, rule);
+    return successResponse(res, 201, toCamelCase(rule));
   } catch (error) {
     logger.error('Error in createRule:', error);
     next(error);
@@ -171,7 +168,9 @@ const updateRule = async (req, res, next) => {
     const businessId = req.user.businessId;
 
     // Find rule
-    const rule = await Rule.findOne({ _id: id, businessId });
+    const { data: rule, error: findErr } = await supabase
+      .from('rules').select('*').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
     if (!rule) {
       return errorResponse(res, 404, 'Rule not found');
     }
@@ -217,55 +216,57 @@ const updateRule = async (req, res, next) => {
       }
     }
 
-    const effectiveButtons = buttons !== undefined ? buttons : rule.buttons;
-    const effectiveListOptions = listOptions !== undefined ? listOptions : rule.listOptions;
+    const effectiveButtons = buttons !== undefined ? buttons : (rule.buttons || []);
+    const effectiveListOptions = listOptions !== undefined ? listOptions : (rule.list_options || []);
     if (effectiveButtons.length > 0 && effectiveListOptions.length > 0) {
       return errorResponse(res, 400, 'A rule can have buttons or list options, not both.');
     }
 
+    const updateData = {};
+
     // Check for duplicate keyword if being updated
     if (keyword) {
       const normalizedKeyword = keyword.toLowerCase().trim();
-      const existingRule = await Rule.findOne({
-        businessId,
-        keyword: normalizedKeyword,
-        _id: { $ne: id }
-      });
+      const { data: existingRule, error: existingErr } = await supabase
+        .from('rules').select('id').eq('business_id', businessId).eq('keyword', normalizedKeyword).neq('id', id).maybeSingle();
+      if (existingErr) throw existingErr;
       if (existingRule) {
         return errorResponse(res, 409, 'A rule with this keyword already exists.');
       }
-      rule.keyword = normalizedKeyword;
+      updateData.keyword = normalizedKeyword;
     }
 
     // Update allowed fields
-    if (matchType) rule.matchType = matchType;
-    if (reply) rule.reply = reply;
-    if (replyType) rule.replyType = replyType;
-    if (isActive !== undefined) rule.isActive = isActive;
-    if (replyImageUrl !== undefined) rule.replyImageUrl = replyImageUrl || null;
+    if (matchType) updateData.match_type = matchType;
+    if (reply) updateData.reply = reply;
+    if (replyType) updateData.reply_type = replyType;
+    if (isActive !== undefined) updateData.is_active = isActive;
+    if (replyImageUrl !== undefined) updateData.reply_image_url = replyImageUrl || null;
     if (buttons !== undefined) {
-      rule.buttons = buttons.map(b => ({
+      updateData.buttons = buttons.map(b => ({
         title: b.title.trim(),
         nextKeyword: b.nextKeyword.toLowerCase().trim()
       }));
     }
     if (listOptions !== undefined) {
-      rule.listOptions = listOptions.map(o => ({
+      updateData.list_options = listOptions.map(o => ({
         label: o.label.trim(),
         description: (o.description || '').trim(),
         nextKeyword: o.nextKeyword.toLowerCase().trim()
       }));
     }
     if (hindiAliases !== undefined) {
-      rule.hindiAliases = hindiAliases.map(a => a.trim()).filter(Boolean);
+      updateData.hindi_aliases = hindiAliases.map(a => a.trim()).filter(Boolean);
     }
 
-    await rule.save();
+    const { data: updatedRule, error } = await supabase
+      .from('rules').update(updateData).eq('id', id).select().single();
+    if (error) throw error;
 
     // Invalidate cache
     await invalidateRulesCache(businessId);
 
-    return successResponse(res, 200, rule);
+    return successResponse(res, 200, toCamelCase(updatedRule));
   } catch (error) {
     logger.error('Error in updateRule:', error);
     next(error);
@@ -282,13 +283,16 @@ const deleteRule = async (req, res, next) => {
     const businessId = req.user.businessId;
 
     // Find rule
-    const rule = await Rule.findOne({ _id: id, businessId });
+    const { data: rule, error: findErr } = await supabase
+      .from('rules').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
     if (!rule) {
       return errorResponse(res, 404, 'Rule not found');
     }
 
     // Delete rule
-    await Rule.findByIdAndDelete(id);
+    const { error } = await supabase.from('rules').delete().eq('id', id);
+    if (error) throw error;
 
     // Invalidate cache
     await invalidateRulesCache(businessId);
@@ -310,19 +314,22 @@ const toggleRule = async (req, res, next) => {
     const businessId = req.user.businessId;
 
     // Find rule
-    const rule = await Rule.findOne({ _id: id, businessId });
+    const { data: rule, error: findErr } = await supabase
+      .from('rules').select('is_active').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
     if (!rule) {
       return errorResponse(res, 404, 'Rule not found');
     }
 
     // Toggle isActive
-    rule.isActive = !rule.isActive;
-    await rule.save();
+    const { data: updatedRule, error } = await supabase
+      .from('rules').update({ is_active: !rule.is_active }).eq('id', id).select().single();
+    if (error) throw error;
 
     // Invalidate cache
     await invalidateRulesCache(businessId);
 
-    return successResponse(res, 200, rule);
+    return successResponse(res, 200, toCamelCase(updatedRule));
   } catch (error) {
     logger.error('Error in toggleRule:', error);
     next(error);
@@ -384,23 +391,27 @@ const bulkImportRules = async (req, res, next) => {
 
     // If replaceExisting, delete all existing rules
     if (replaceExisting) {
-      await Rule.deleteMany({ businessId });
+      const { error: deleteErr } = await supabase.from('rules').delete().eq('business_id', businessId);
+      if (deleteErr) throw deleteErr;
     }
 
     // Import rules that don't already exist
     let createdCount = 0;
     for (const rule of template.default_rules) {
-      const existingRule = await Rule.findOne({ businessId, keyword: rule.keyword });
+      const { data: existingRule, error: existingErr } = await supabase
+        .from('rules').select('id').eq('business_id', businessId).eq('keyword', rule.keyword).maybeSingle();
+      if (existingErr) throw existingErr;
       if (!existingRule) {
-        await Rule.create({
-          businessId,
+        const { error: insertErr } = await supabase.from('rules').insert({
+          business_id: businessId,
           keyword: rule.keyword,
-          matchType: rule.matchType || 'contains',
+          match_type: rule.matchType || 'contains',
           reply: rule.reply || '',
-          replyType: rule.replyType || 'text',
-          isActive: true,
-          triggerCount: 0
+          reply_type: rule.replyType || 'text',
+          is_active: true,
+          trigger_count: 0
         });
+        if (insertErr) throw insertErr;
         createdCount++;
       }
     }
