@@ -348,7 +348,7 @@ const updatePlan = async (req, res, next) => {
       .from('plans').update(updates).eq('id', id).select().single();
     if (error) throw error;
 
-    logger.info(`Plan ${id} updated by superadmin`);
+    logger.info(`Plan ${id} updated by superadmin`); 
     return successResponse(res, 200, plan, 'Plan updated successfully');
   } catch (error) {
     logger.error('Error in updatePlan:', error);
