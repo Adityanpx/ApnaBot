@@ -1,18 +1,20 @@
-// src/controllers/admin.controller.js — CREATE THIS FILE
-
-const Business = require('../models/Business');
-const User = require('../models/User');
-const Plan = require('../models/Plan');
-const Subscription = require('../models/Subscription');
 const supabase = require('../config/supabase');
-const Customer = require('../models/Customer');
-const Booking = require('../models/Booking');
+const { toCamelCase } = require('../utils/caseConvert');
 const subscriptionService = require('../services/subscription.service');
 const tenantService = require('../services/tenant.service');
 const adminService = require('../services/admin.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const logger = require('../utils/logger');
+
+const toCamelCaseDeep = (row, nestedKeys = []) => {
+  if (!row) return row;
+  const result = toCamelCase(row);
+  for (const key of nestedKeys) {
+    if (result[key]) result[key] = toCamelCase(result[key]);
+  }
+  return result;
+};
 
 /**
  * GET /api/admin/shops
@@ -21,29 +23,37 @@ const logger = require('../utils/logger');
 const getShops = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, search, isActive, businessCategory } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const from = (pageNum - 1) * limitNum;
+    const to = from + limitNum - 1;
 
-    const filter = {};
+    let query = supabase.from('businesses').select('*', { count: 'exact' });
 
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { city: { $regex: search, $options: 'i' } }
-      ];
+    if (search) query = query.or(`name.ilike.%${search}%,city.ilike.%${search}%`);
+    if (isActive !== undefined) query = query.eq('is_active', isActive === 'true');
+    if (businessCategory) query = query.eq('business_category', businessCategory);
+
+    const { data, error, count } = await query.order('created_at', { ascending: false }).range(from, to);
+    if (error) throw error;
+
+    const rows = data || [];
+    const ownerIds = [...new Set(rows.map((b) => b.owner_user_id).filter(Boolean))];
+    let ownersById = {};
+    if (ownerIds.length > 0) {
+      const { data: owners, error: ownersErr } = await supabase
+        .from('users').select('id, name, email').in('id', ownerIds);
+      if (ownersErr) throw ownersErr;
+      ownersById = Object.fromEntries((owners || []).map((o) => [o.id, o]));
     }
-    if (isActive !== undefined) filter.isActive = isActive === 'true';
-    if (businessCategory) filter.businessCategory = businessCategory;
 
-    const [total, shops] = await Promise.all([
-      Business.countDocuments(filter),
-      Business.find(filter)
-        .populate('ownerUserId', 'name email')
-        .sort({ createdAt: -1 })
-        .skip((parseInt(page) - 1) * parseInt(limit))
-        .limit(parseInt(limit))
-        .select('-accessToken') // never expose encrypted token
-    ]);
+    const shops = rows.map((b) => {
+      const { access_token, ...safeRow } = b; // never expose encrypted token
+      const owner = ownersById[b.owner_user_id];
+      return { ...toCamelCase(safeRow), ownerUserId: owner ? toCamelCase(owner) : b.owner_user_id };
+    });
 
-    const pagination = getPagination(total, page, limit);
+    const pagination = getPagination(count || 0, pageNum, limitNum);
     return successResponse(res, 200, { shops, pagination });
   } catch (error) {
     logger.error('Error in getShops:', error);
@@ -59,40 +69,44 @@ const getShopById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const business = await Business.findById(id)
-      .populate('ownerUserId', 'name email lastLoginAt')
-      .select('-accessToken');
+    const { data: businessRow, error: bizErr } = await supabase
+      .from('businesses').select('*').eq('id', id).maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!businessRow) return errorResponse(res, 404, 'Business not found');
+    const { access_token, ...safeBusinessRow } = businessRow;
 
-    if (!business) return errorResponse(res, 404, 'Business not found');
-
-    const subscription = await Subscription.findOne({
-      businessId: id,
-      status: { $in: ['active', 'trial'] }
-    }).populate('planId');
-
-    // Get all users (owner + staff)
-    const [owner, staff] = await Promise.all([
-      User.findById(business.ownerUserId).select('name email role lastLoginAt isActive'),
-      User.find({ businessId: id, role: 'staff' }).select('name email role lastLoginAt isActive')
+    const [ownerRes, staffRes, subRes, customerCountRes, bookingCountRes] = await Promise.all([
+      supabase.from('users').select('id, name, email, role, last_login_at, is_active')
+        .eq('id', businessRow.owner_user_id).maybeSingle(),
+      supabase.from('users').select('id, name, email, role, last_login_at, is_active')
+        .eq('business_id', id).eq('role', 'staff'),
+      supabase.from('subscriptions').select('*, plan:plans(*)')
+        .eq('business_id', id).in('status', ['active', 'trial'])
+        .order('created_at', { ascending: false }).limit(1),
+      supabase.from('customers').select('*', { count: 'exact', head: true }).eq('business_id', id),
+      supabase.from('bookings').select('*', { count: 'exact', head: true }).eq('business_id', id)
     ]);
+    if (ownerRes.error) throw ownerRes.error;
+    if (staffRes.error) throw staffRes.error;
+    if (subRes.error) throw subRes.error;
+    if (customerCountRes.error) throw customerCountRes.error;
+    if (bookingCountRes.error) throw bookingCountRes.error;
 
+    const owner = ownerRes.data ? toCamelCase(ownerRes.data) : null;
+    const staff = (staffRes.data || []).map(toCamelCase);
     const users = owner ? [owner, ...staff] : staff;
-    const userCount = users.length;
 
-    // Get customer and booking counts
-    const [customerCount, bookingCount] = await Promise.all([
-      Customer.countDocuments({ businessId: id }),
-      Booking.countDocuments({ businessId: id })
-    ]);
+    const subscriptionRow = (subRes.data || [])[0] || null;
+    const subscription = subscriptionRow ? toCamelCaseDeep(subscriptionRow, ['plan']) : null;
 
     return successResponse(res, 200, {
-      shop: business,
-      subscription: subscription || null,
-      plan: subscription?.planId || null,
+      shop: toCamelCase(safeBusinessRow),
+      subscription,
+      plan: subscription?.plan || null,
       users,
-      userCount,
-      customerCount,
-      bookingCount
+      userCount: users.length,
+      customerCount: customerCountRes.count || 0,
+      bookingCount: bookingCountRes.count || 0
     });
   } catch (error) {
     logger.error('Error in getShopById:', error);
@@ -108,16 +122,20 @@ const toggleShop = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const business = await Business.findById(id);
+    const { data: business, error: fetchErr } = await supabase
+      .from('businesses').select('id, is_active').eq('id', id).maybeSingle();
+    if (fetchErr) throw fetchErr;
     if (!business) return errorResponse(res, 404, 'Business not found');
 
-    business.isActive = !business.isActive;
-    await business.save();
+    const newIsActive = !business.is_active;
+    const { error: updateErr } = await supabase
+      .from('businesses').update({ is_active: newIsActive }).eq('id', id);
+    if (updateErr) throw updateErr;
 
-    const action = business.isActive ? 'activated' : 'deactivated';
+    const action = newIsActive ? 'activated' : 'deactivated';
     logger.info(`Business ${id} ${action} by superadmin`);
 
-    return successResponse(res, 200, { isActive: business.isActive }, `Business ${action} successfully`);
+    return successResponse(res, 200, { isActive: newIsActive }, `Business ${action} successfully`);
   } catch (error) {
     logger.error('Error in toggleShop:', error);
     next(error);
@@ -135,27 +153,33 @@ const changeShopPlan = async (req, res, next) => {
 
     if (!planId) return errorResponse(res, 400, 'planId is required');
 
-    const business = await Business.findById(id);
+    const { data: business, error: bizErr } = await supabase
+      .from('businesses').select('id, phone_number_id').eq('id', id).maybeSingle();
+    if (bizErr) throw bizErr;
     if (!business) return errorResponse(res, 404, 'Business not found');
 
-    const plan = await Plan.findById(planId);
-    if (!plan || !plan.isActive) return errorResponse(res, 404, 'Plan not found');
+    const { data: plan, error: planErr } = await supabase
+      .from('plans').select('*').eq('id', planId).maybeSingle();
+    if (planErr) throw planErr;
+    if (!plan || !plan.is_active) return errorResponse(res, 404, 'Plan not found');
 
     const subscription = await subscriptionService.createSubscription(id, planId, {
       status: 'active'
     });
 
-    const populated = await Subscription.findById(subscription._id).populate('planId');
+    const { data: populated, error: popErr } = await supabase
+      .from('subscriptions').select('*, plan:plans(*)').eq('id', subscription.id).maybeSingle();
+    if (popErr) throw popErr;
 
     // Clear cached subscription status so the new plan takes effect immediately
     await subscriptionService.invalidateSubscriptionCache(id);
     // Also clear the webhook's tenant cache, which stores its own subscription snapshot
-    if (business.phoneNumberId) {
-      await tenantService.invalidateTenantCache(business.phoneNumberId);
+    if (business.phone_number_id) {
+      await tenantService.invalidateTenantCache(business.phone_number_id);
     }
 
     logger.info(`Business ${id} plan changed to ${plan.name} by superadmin`);
-    return successResponse(res, 200, { subscription: populated }, 'Plan changed successfully');
+    return successResponse(res, 200, { subscription: toCamelCaseDeep(populated, ['plan']) }, 'Plan changed successfully');
   } catch (error) {
     logger.error('Error in changeShopPlan:', error);
     next(error);
@@ -171,30 +195,36 @@ const extendSubscription = async (req, res, next) => {
     const { id } = req.params;
     const { days = 30 } = req.body;
 
-    const subscription = await Subscription.findOne({
-      businessId: id,
-      status: { $in: ['active', 'expired'] }
-    });
+    const { data: subs, error: subErr } = await supabase
+      .from('subscriptions').select('*').eq('business_id', id).in('status', ['active', 'expired'])
+      .order('created_at', { ascending: false }).limit(1);
+    if (subErr) throw subErr;
+    const sub = (subs || [])[0];
 
-    if (!subscription) return errorResponse(res, 404, 'No subscription found for this business');
+    if (!sub) return errorResponse(res, 404, 'No subscription found for this business');
 
-    const currentEnd = subscription.endDate > new Date() ? subscription.endDate : new Date();
-    subscription.endDate = new Date(currentEnd.getTime() + days * 24 * 60 * 60 * 1000);
-    subscription.status = 'active';
-    await subscription.save();
+    const currentEnd = new Date(sub.end_date) > new Date() ? new Date(sub.end_date) : new Date();
+    const newEndDate = new Date(currentEnd.getTime() + days * 24 * 60 * 60 * 1000);
+
+    const { data: updatedSub, error: updateErr } = await supabase
+      .from('subscriptions').update({ end_date: newEndDate.toISOString(), status: 'active' })
+      .eq('id', sub.id).select().single();
+    if (updateErr) throw updateErr;
 
     // Reactivate business if it was deactivated
-    const updatedBusiness = await Business.findByIdAndUpdate(id, { isActive: true });
+    const { data: updatedBusiness, error: bizErr } = await supabase
+      .from('businesses').update({ is_active: true }).eq('id', id).select('phone_number_id').single();
+    if (bizErr) throw bizErr;
 
     // Clear Redis cache
     await subscriptionService.invalidateSubscriptionCache(id);
     // Also clear the webhook's tenant cache, which stores its own subscription snapshot
-    if (updatedBusiness?.phoneNumberId) {
-      await tenantService.invalidateTenantCache(updatedBusiness.phoneNumberId);
+    if (updatedBusiness?.phone_number_id) {
+      await tenantService.invalidateTenantCache(updatedBusiness.phone_number_id);
     }
 
     logger.info(`Business ${id} subscription extended by ${days} days by superadmin`);
-    return successResponse(res, 200, subscription, `Subscription extended by ${days} days`);
+    return successResponse(res, 200, toCamelCase(updatedSub), `Subscription extended by ${days} days`);
   } catch (error) {
     logger.error('Error in extendSubscription:', error);
     next(error);

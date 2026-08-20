@@ -1,6 +1,5 @@
-const mongoose = require('mongoose');
-const Booking = require('../models/Booking');
-const Customer = require('../models/Customer');
+const supabase = require('../config/supabase');
+const { toCamelCase } = require('../utils/caseConvert');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const paymentService = require('../services/payment.service');
@@ -19,29 +18,24 @@ const createRazorpayLink = async (req, res, next) => {
       return errorResponse(res, 400, 'Amount is required');
     }
 
-    // Find booking and verify ownership
-    let booking = null;
     let customer = null;
     if (bookingId && bookingId.trim() !== '') {
-      if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-        return errorResponse(res, 400, 'Invalid Booking ID format');
-      }
-
-      booking = await Booking.findOne({ _id: bookingId, businessId });
-
+      const { data: booking, error: bookingErr } = await supabase
+        .from('bookings').select('*').eq('id', bookingId).eq('business_id', businessId).maybeSingle();
+      if (bookingErr) throw bookingErr;
       if (!booking) {
         return errorResponse(res, 404, 'Booking not found');
       }
 
-      // Get customer details
-      customer = await Customer.findById(booking.customerId);
-
-      if (!customer) {
+      const { data: customerRow, error: custErr } = await supabase
+        .from('customers').select('*').eq('id', booking.customer_id).maybeSingle();
+      if (custErr) throw custErr;
+      if (!customerRow) {
         return errorResponse(res, 404, 'Customer not found');
       }
+      customer = toCamelCase(customerRow);
     }
 
-    // Create payment link
     const paymentLink = await paymentService.createRazorpayPaymentLink(
       bookingId || null,
       amount * 100, // Convert to paise
@@ -50,7 +44,6 @@ const createRazorpayLink = async (req, res, next) => {
       description || 'Payment for booking'
     );
 
-    // Emit socket event
     socketService.emitToBusiness(businessId, 'payment_link_created', {
       bookingId,
       paymentLink: paymentLink.short_url
@@ -82,29 +75,17 @@ const createUPILink = async (req, res, next) => {
       return errorResponse(res, 400, 'Amount, VPA, and payee name are required');
     }
 
-    // Find booking and verify ownership
-    let booking = null;
     if (bookingId && bookingId.trim() !== '') {
-      if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-        return errorResponse(res, 400, 'Invalid Booking ID format');
-      }
-
-      booking = await Booking.findOne({ _id: bookingId, businessId });
-
+      const { data: booking, error: bookingErr } = await supabase
+        .from('bookings').select('id').eq('id', bookingId).eq('business_id', businessId).maybeSingle();
+      if (bookingErr) throw bookingErr;
       if (!booking) {
         return errorResponse(res, 404, 'Booking not found');
       }
     }
 
-    // Generate UPI link
-    const upiDetails = await paymentService.generateUPILink(
-      bookingId,
-      amount,
-      vpa,
-      payeeName
-    );
+    const upiDetails = await paymentService.generateUPILink(bookingId, amount, vpa, payeeName);
 
-    // Emit socket event
     socketService.emitToBusiness(businessId, 'upi_link_created', {
       bookingId,
       upiLink: upiDetails.upiLink
@@ -143,18 +124,19 @@ const sendToCustomer = async (req, res, next) => {
 
     let customerPhone = req.body.customerPhone;
     if (bookingId && bookingId.trim() !== '') {
-      if (!mongoose.Types.ObjectId.isValid(bookingId)) {
-        return errorResponse(res, 400, 'Invalid Booking ID format');
-      }
-      const booking = await Booking.findOne({ _id: bookingId, businessId });
+      const { data: booking, error: bookingErr } = await supabase
+        .from('bookings').select('*').eq('id', bookingId).eq('business_id', businessId).maybeSingle();
+      if (bookingErr) throw bookingErr;
       if (!booking) {
         return errorResponse(res, 404, 'Booking not found');
       }
-      const customer = await Customer.findById(booking.customerId);
+      const { data: customer, error: custErr } = await supabase
+        .from('customers').select('whatsapp_number').eq('id', booking.customer_id).maybeSingle();
+      if (custErr) throw custErr;
       if (!customer) {
         return errorResponse(res, 404, 'Customer not found');
       }
-      customerPhone = customer.whatsappNumber;
+      customerPhone = customer.whatsapp_number;
     }
     if (!customerPhone) {
       return errorResponse(res, 400, 'Could not determine customer phone number');
@@ -199,47 +181,31 @@ const getPaymentHistory = async (req, res, next) => {
     const businessId = req.user.businessId;
     const { page = 1, limit = 20, status, startDate, endDate } = req.query;
 
-    // Build filter
-    const filter = { businessId };
-    
-    // Add payment status filter
-    if (status) {
-      filter.paymentStatus = status;
-    }
+    let query = supabase.from('bookings').select('*, customer:customers(name, whatsapp_number)', { count: 'exact' })
+      .eq('business_id', businessId);
 
-    // Add date range filter
-    if (startDate || endDate) {
-      filter.createdAt = {};
-      if (startDate) {
-        filter.createdAt.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        filter.createdAt.$lte = new Date(endDate);
-      }
-    }
+    query = status ? query.eq('payment_status', status) : query.neq('payment_status', 'not_required');
 
-    // Only get bookings with payment
-    filter.paymentStatus = { $ne: 'not_required' };
+    if (startDate) query = query.gte('created_at', new Date(startDate).toISOString());
+    if (endDate) query = query.lte('created_at', new Date(endDate).toISOString());
 
-    // Execute query
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    
-    const [bookings, total] = await Promise.all([
-      Booking.find(filter)
-        .populate('customerId', 'name whatsappNumber')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit)),
-      Booking.countDocuments(filter)
-    ]);
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const from = (pageNum - 1) * limitNum;
+    const to = from + limitNum - 1;
+
+    const { data, error, count } = await query.order('created_at', { ascending: false }).range(from, to);
+    if (error) throw error;
+
+    const bookings = (data || []).map(toCamelCase);
 
     return successResponse(res, 200, {
       bookings,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit))
+        page: pageNum,
+        limit: limitNum,
+        total: count || 0,
+        pages: Math.ceil((count || 0) / limitNum)
       }
     }, 'Payment history retrieved successfully');
   } catch (error) {
@@ -257,7 +223,6 @@ const razorpayWebhook = async (req, res, next) => {
     const signature = req.headers['x-razorpay-signature'];
     const payload = JSON.stringify(req.body);
 
-    // Verify signature
     const isValid = paymentService.verifyRazorpayWebhookSignature(payload, signature);
 
     if (!isValid) {
@@ -265,7 +230,6 @@ const razorpayWebhook = async (req, res, next) => {
       return errorResponse(res, 400, 'Invalid signature');
     }
 
-    // Handle webhook event
     await paymentService.handleRazorpayWebhook(req.body);
 
     return successResponse(res, 200, 'Webhook processed successfully');
@@ -284,21 +248,21 @@ const getPaymentStatus = async (req, res, next) => {
     const { bookingId } = req.params;
     const businessId = req.user.businessId;
 
-    // Find booking and verify ownership
-    const booking = await Booking.findOne({ _id: bookingId, businessId });
-
+    const { data: booking, error } = await supabase
+      .from('bookings').select('*').eq('id', bookingId).eq('business_id', businessId).maybeSingle();
+    if (error) throw error;
     if (!booking) {
       return errorResponse(res, 404, 'Booking not found');
     }
 
     const paymentStatus = {
-      bookingId: booking._id,
-      paymentStatus: booking.paymentStatus,
-      paymentAmount: booking.paymentAmount,
-      paymentLink: booking.paymentLink,
-      upiLink: booking.upiLink,
-      paymentId: booking.paymentId,
-      paymentDetails: booking.paymentDetails
+      bookingId: booking.id,
+      paymentStatus: booking.payment_status,
+      paymentAmount: booking.payment_amount,
+      paymentLink: booking.payment_link,
+      upiLink: booking.upi_link,
+      paymentId: booking.payment_id,
+      paymentDetails: booking.payment_details
     };
 
     return successResponse(res, 200, paymentStatus, 'Payment status retrieved successfully');

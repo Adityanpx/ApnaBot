@@ -1,7 +1,6 @@
 const Razorpay = require('razorpay');
 const config = require('../config/env');
-const Booking = require('../models/Booking');
-const Customer = require('../models/Customer');
+const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 
 // Initialize Razorpay instance
@@ -37,12 +36,14 @@ const createRazorpayPaymentLink = async (bookingId, amount, customerName, custom
       callback_method: 'get'
     });
 
-    // Update booking with payment link
-    await Booking.findByIdAndUpdate(bookingId, {
-      paymentLink: paymentLink.short_url,
-      paymentId: paymentLink.id,
-      paymentStatus: 'pending'
-    });
+    if (bookingId) {
+      const { error } = await supabase.from('bookings').update({
+        payment_link: paymentLink.short_url,
+        payment_id: paymentLink.id,
+        payment_status: 'pending'
+      }).eq('id', bookingId);
+      if (error) throw error;
+    }
 
     logger.info('Payment link created:', paymentLink.id);
     return paymentLink;
@@ -73,11 +74,13 @@ const generateUPILink = async (bookingId, amount, vpa, payeeName) => {
     // Generate UPI payment link
     const upiLink = `upi://pay?${upiParams.toString()}`;
 
-    // Update booking with UPI details
-    await Booking.findByIdAndUpdate(bookingId, {
-      upiLink: upiLink,
-      paymentStatus: 'pending'
-    });
+    if (bookingId) {
+      const { error } = await supabase.from('bookings').update({
+        upi_link: upiLink,
+        payment_status: 'pending'
+      }).eq('id', bookingId);
+      if (error) throw error;
+    }
 
     logger.info('UPI link generated for booking:', bookingId);
     return {
@@ -147,106 +150,70 @@ const handlePaymentLinkPaid = async (payload) => {
   const paymentLink = payload.payment_link;
   const paymentLinkId = paymentLink.id;
 
-  // Find booking by payment ID
-  const booking = await Booking.findOne({ paymentId: paymentLinkId });
+  const { data: booking, error } = await supabase
+    .from('bookings').select('id').eq('payment_id', paymentLinkId).maybeSingle();
+  if (error) throw error;
 
   if (booking) {
-    booking.paymentStatus = 'completed';
-    booking.paymentDetails = {
-      paymentId: paymentLinkId,
-      amount: paymentLink.amount / 100, // Convert from paise
-      paidAt: new Date(),
-      status: 'completed'
-    };
-    await booking.save();
+    const { error: updateErr } = await supabase.from('bookings').update({
+      payment_status: 'paid',
+      payment_details: {
+        paymentId: paymentLinkId,
+        amount: paymentLink.amount / 100, // Convert from paise
+        paidAt: new Date(),
+        status: 'completed'
+      }
+    }).eq('id', booking.id);
+    if (updateErr) throw updateErr;
 
-    logger.info('Payment completed for booking:', booking._id);
+    logger.info('Payment completed for booking:', booking.id);
   }
 };
 
 /**
  * Handle payment link expired event
+ *
+ * bookings.payment_status only supports pending/paid/not_required (no
+ * dedicated "expired" state), so this reverts to 'pending' — the business
+ * can issue a new link.
  */
 const handlePaymentLinkExpired = async (payload) => {
   const paymentLink = payload.payment_link;
   const paymentLinkId = paymentLink.id;
 
-  const booking = await Booking.findOne({ paymentId: paymentLinkId });
+  const { data: booking, error } = await supabase
+    .from('bookings').select('id').eq('payment_id', paymentLinkId).maybeSingle();
+  if (error) throw error;
 
   if (booking) {
-    booking.paymentStatus = 'expired';
-    await booking.save();
+    const { error: updateErr } = await supabase.from('bookings')
+      .update({ payment_status: 'pending' }).eq('id', booking.id);
+    if (updateErr) throw updateErr;
 
-    logger.info('Payment expired for booking:', booking._id);
+    logger.info('Payment expired for booking:', booking.id);
   }
 };
 
 /**
  * Handle payment link closed event
+ *
+ * Same payment_status limitation as handlePaymentLinkExpired — reverts to
+ * 'pending' rather than a dedicated "cancelled" state.
  */
 const handlePaymentLinkClosed = async (payload) => {
   const paymentLink = payload.payment_link;
   const paymentLinkId = paymentLink.id;
 
-  const booking = await Booking.findOne({ paymentId: paymentLinkId });
+  const { data: booking, error } = await supabase
+    .from('bookings').select('id').eq('payment_id', paymentLinkId).maybeSingle();
+  if (error) throw error;
 
   if (booking) {
-    booking.paymentStatus = 'cancelled';
-    await booking.save();
+    const { error: updateErr } = await supabase.from('bookings')
+      .update({ payment_status: 'pending' }).eq('id', booking.id);
+    if (updateErr) throw updateErr;
 
-    logger.info('Payment cancelled for booking:', booking._id);
-  }
-};
-
-/**
- * Get payment status for a booking
- * @param {string} bookingId - The booking ID
- * @returns {Promise<Object>} Payment status details
- */
-const getPaymentStatus = async (bookingId) => {
-  try {
-    const booking = await Booking.findById(bookingId);
-
-    if (!booking) {
-      throw new Error('Booking not found');
-    }
-
-    return {
-      bookingId: booking._id,
-      paymentStatus: booking.paymentStatus,
-      paymentLink: booking.paymentLink,
-      upiLink: booking.upiLink,
-      paymentDetails: booking.paymentDetails
-    };
-  } catch (error) {
-    logger.error('Error getting payment status:', error);
-    throw error;
-  }
-};
-
-/**
- * Send payment link to customer via WhatsApp
- * @param {string} bookingId - The booking ID
- * @param {string} customerPhone - Customer phone number
- * @param {string} paymentLink - Payment link URL
- * @param {Object} io - Socket.io instance
- */
-const sendPaymentLinkToCustomer = async (bookingId, customerPhone, paymentLink, io) => {
-  try {
-    const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
-    
-    const message = `Your payment link: ${paymentLink}\n\nPlease complete your payment to confirm the booking.`;
-    
-    await addToWhatsappQueue({
-      to: customerPhone,
-      message: message,
-      businessId: null // Will be extracted from booking
-    });
-
-    logger.info('Payment link sent to customer:', customerPhone);
-  } catch (error) {
-    logger.error('Error sending payment link:', error);
-    throw error;
+    logger.info('Payment cancelled for booking:', booking.id);
   }
 };
 
@@ -254,7 +221,5 @@ module.exports = {
   createRazorpayPaymentLink,
   generateUPILink,
   verifyRazorpayWebhookSignature,
-  handleRazorpayWebhook,
-  getPaymentStatus,
-  sendPaymentLinkToCustomer
+  handleRazorpayWebhook
 };

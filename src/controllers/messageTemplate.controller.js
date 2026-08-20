@@ -1,5 +1,6 @@
 const axios = require('axios');
-const MessageTemplate = require('../models/MessageTemplate');
+const supabase = require('../config/supabase');
+const { toCamelCase } = require('../utils/caseConvert');
 const businessService = require('../services/business.service');
 const { decrypt } = require('../utils/crypto');
 const { META_API_BASE } = require('../services/whatsapp.service');
@@ -23,9 +24,11 @@ const getMessageTemplates = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
-    const templates = await MessageTemplate.find({ businessId }).sort({ createdAt: -1 });
+    const { data, error } = await supabase
+      .from('message_templates').select('*').eq('business_id', businessId).order('created_at', { ascending: false });
+    if (error) throw error;
 
-    return successResponse(res, 200, { templates });
+    return successResponse(res, 200, { templates: (data || []).map(toCamelCase) });
   } catch (error) {
     logger.error('Error in getMessageTemplates:', error);
     next(error);
@@ -49,16 +52,17 @@ const createMessageTemplate = async (req, res, next) => {
       return errorResponse(res, 400, 'name must be lowercase_snake_case, alphanumeric characters and underscores only');
     }
 
-    const template = await MessageTemplate.create({
-      businessId,
+    const { data: template, error } = await supabase.from('message_templates').insert({
+      business_id: businessId,
       name,
       category: category || 'MARKETING',
       language: language || 'en',
-      bodyText,
-      variableCount: countTemplateVariables(bodyText)
-    });
+      body_text: bodyText,
+      variable_count: countTemplateVariables(bodyText)
+    }).select().single();
+    if (error) throw error;
 
-    return successResponse(res, 201, template, 'Message template created successfully');
+    return successResponse(res, 201, toCamelCase(template), 'Message template created successfully');
   } catch (error) {
     logger.error('Error in createMessageTemplate:', error);
     next(error);
@@ -74,10 +78,13 @@ const submitMessageTemplate = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const template = await MessageTemplate.findOne({ _id: id, businessId });
-    if (!template) {
+    const { data: templateRow, error: fetchErr } = await supabase
+      .from('message_templates').select('*').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!templateRow) {
       return errorResponse(res, 404, 'Message template not found');
     }
+    const template = toCamelCase(templateRow);
 
     if (template.status !== 'draft' && template.status !== 'rejected') {
       return errorResponse(res, 400, 'Only draft or rejected templates can be submitted');
@@ -119,10 +126,12 @@ const submitMessageTemplate = async (req, res, next) => {
       return errorResponse(res, 400, 'Failed to submit template to Meta', error.response?.data || error.message);
     }
 
-    template.metaTemplateId = metaResponse.id;
-    template.status = 'pending';
-    template.submittedAt = new Date();
-    await template.save();
+    const { data: updatedTemplate, error: updateErr } = await supabase.from('message_templates').update({
+      meta_template_id: metaResponse.id,
+      status: 'pending',
+      submitted_at: new Date().toISOString()
+    }).eq('id', id).select().single();
+    if (updateErr) throw updateErr;
 
     logger.info('Message template submitted to Meta successfully', {
       businessId,
@@ -130,7 +139,7 @@ const submitMessageTemplate = async (req, res, next) => {
       metaTemplateId: metaResponse.id
     });
 
-    return successResponse(res, 200, template, 'Template submitted to Meta for review');
+    return successResponse(res, 200, toCamelCase(updatedTemplate), 'Template submitted to Meta for review');
   } catch (error) {
     logger.error('Error in submitMessageTemplate:', error);
     next(error);
@@ -148,7 +157,9 @@ const deleteMessageTemplate = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const template = await MessageTemplate.findOne({ _id: id, businessId });
+    const { data: template, error: fetchErr } = await supabase
+      .from('message_templates').select('status').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (fetchErr) throw fetchErr;
     if (!template) {
       return errorResponse(res, 404, 'Message template not found');
     }
@@ -157,7 +168,8 @@ const deleteMessageTemplate = async (req, res, next) => {
       return errorResponse(res, 400, 'This template is registered with Meta. Please contact support to remove it.');
     }
 
-    await MessageTemplate.findByIdAndDelete(id);
+    const { error } = await supabase.from('message_templates').delete().eq('id', id);
+    if (error) throw error;
 
     return successResponse(res, 200, null, 'Message template deleted successfully');
   } catch (error) {

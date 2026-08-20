@@ -1,13 +1,19 @@
-// src/services/admin.service.js — CREATE THIS FILE
-
-const Business = require('../models/Business');
-const User = require('../models/User');
-const Subscription = require('../models/Subscription');
-const Plan = require('../models/Plan');
-const Usage = require('../models/Usage');
-const Message = require('../models/Message');
-const Booking = require('../models/Booking');
+const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
+
+const countRows = async (table, { eq = {}, gteColumn, gteValue } = {}) => {
+  let query = supabase.from(table).select('*', { count: 'exact', head: true });
+  for (const [column, value] of Object.entries(eq)) {
+    query = query.eq(column, value);
+  }
+  if (gteColumn) query = query.gte(gteColumn, gteValue);
+  const { count, error } = await query;
+  if (error) throw error;
+  return count || 0;
+};
+
+const sumPlanPrice = (subscriptions) =>
+  subscriptions.reduce((total, sub) => total + (sub.plan?.price || 0), 0);
 
 /**
  * Get platform-wide stats for admin dashboard
@@ -25,20 +31,18 @@ const getPlatformStats = async () => {
       activeSubscriptions,
       totalMessagesThisMonth,
       totalBookingsThisMonth,
-      revenueThisMonth
+      revenueSubs
     ] = await Promise.all([
-      Business.countDocuments(),
-      Business.countDocuments({ isActive: true }),
-      User.countDocuments({ role: { $in: ['owner', 'staff'] } }),
-      Subscription.countDocuments({ status: 'active' }),
-      Message.countDocuments({ createdAt: { $gte: startOfMonth } }),
-      Booking.countDocuments({ createdAt: { $gte: startOfMonth } }),
-      Subscription.aggregate([
-        { $match: { status: 'active', createdAt: { $gte: startOfMonth } } },
-        { $lookup: { from: 'plans', localField: 'planId', foreignField: '_id', as: 'plan' } },
-        { $unwind: '$plan' },
-        { $group: { _id: null, total: { $sum: '$plan.price' } } }
-      ])
+      countRows('businesses'),
+      countRows('businesses', { eq: { is_active: true } }),
+      supabase.from('users').select('*', { count: 'exact', head: true }).in('role', ['owner', 'staff'])
+        .then(({ count, error }) => { if (error) throw error; return count || 0; }),
+      countRows('subscriptions', { eq: { status: 'active' } }),
+      countRows('messages', { gteColumn: 'created_at', gteValue: startOfMonth.toISOString() }),
+      countRows('bookings', { gteColumn: 'created_at', gteValue: startOfMonth.toISOString() }),
+      supabase.from('subscriptions').select('plan:plans(price)')
+        .eq('status', 'active').gte('created_at', startOfMonth.toISOString())
+        .then(({ data, error }) => { if (error) throw error; return data || []; })
     ]);
 
     return {
@@ -49,7 +53,7 @@ const getPlatformStats = async () => {
       activeSubscriptions,
       totalMessagesThisMonth,
       totalBookingsThisMonth,
-      revenueThisMonth: revenueThisMonth[0]?.total || 0,
+      revenueThisMonth: sumPlanPrice(revenueSubs),
       month: currentMonth
     };
   } catch (error) {
@@ -68,31 +72,21 @@ const getRevenueReport = async (months = 6) => {
 
     for (let i = 0; i < months; i++) {
       const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const endDate = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+      const endDate = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
       const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
-      const result = await Subscription.aggregate([
-        {
-          $match: {
-            status: { $in: ['active', 'expired'] },
-            createdAt: { $gte: date, $lte: endDate }
-          }
-        },
-        { $lookup: { from: 'plans', localField: 'planId', foreignField: '_id', as: 'plan' } },
-        { $unwind: '$plan' },
-        {
-          $group: {
-            _id: null,
-            revenue: { $sum: '$plan.price' },
-            count: { $sum: 1 }
-          }
-        }
-      ]);
+      const { data: subs, error } = await supabase
+        .from('subscriptions')
+        .select('plan:plans(price)')
+        .in('status', ['active', 'expired'])
+        .gte('created_at', date.toISOString())
+        .lte('created_at', endDate.toISOString());
+      if (error) throw error;
 
       report.push({
         month: monthKey,
-        revenue: result[0]?.revenue || 0,
-        subscriptions: result[0]?.count || 0
+        revenue: sumPlanPrice(subs || []),
+        subscriptions: (subs || []).length
       });
     }
 

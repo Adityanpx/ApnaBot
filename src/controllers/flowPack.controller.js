@@ -1,4 +1,5 @@
-const FlowPack = require('../models/FlowPack');
+const supabase = require('../config/supabase');
+const { toCamelCase } = require('../utils/caseConvert');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -8,8 +9,10 @@ const logger = require('../utils/logger');
  */
 const getFlowPacks = async (req, res, next) => {
   try {
-    const packs = await FlowPack.find().sort({ order: 1, name: 1 });
-    return successResponse(res, 200, { packs });
+    const { data, error } = await supabase
+      .from('flow_packs').select('*').order('order', { ascending: true }).order('name', { ascending: true });
+    if (error) throw error;
+    return successResponse(res, 200, { packs: (data || []).map(toCamelCase) });
   } catch (error) {
     logger.error('Error in getFlowPacks:', error);
     next(error);
@@ -24,10 +27,11 @@ const getFlowPack = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const pack = await FlowPack.findById(id);
+    const { data: pack, error } = await supabase.from('flow_packs').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
     if (!pack) return errorResponse(res, 404, 'Flow pack not found');
 
-    return successResponse(res, 200, pack);
+    return successResponse(res, 200, toCamelCase(pack));
   } catch (error) {
     logger.error('Error in getFlowPack:', error);
     next(error);
@@ -40,25 +44,26 @@ const getFlowPack = async (req, res, next) => {
  */
 const createFlowPack = async (req, res, next) => {
   try {
-    const allowedFields = ['name', 'description', 'category', 'isActive', 'rules', 'order'];
-    const data = {};
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        data[field] = req.body[field];
-      }
-    }
+    const { name, description, category, isActive, rules, order } = req.body;
 
-    if (!data.name) {
+    if (!name) {
       return errorResponse(res, 400, 'name is required');
     }
-    if (!data.category) {
+    if (!category) {
       return errorResponse(res, 400, 'category is required');
     }
 
-    const pack = await FlowPack.create(data);
+    const data = { name, category };
+    if (description !== undefined) data.description = description;
+    if (isActive !== undefined) data.is_active = isActive;
+    if (rules !== undefined) data.rules = rules;
+    if (order !== undefined) data.order = order;
 
-    logger.info(`Flow pack ${pack._id} created by superadmin`);
-    return successResponse(res, 201, pack, 'Flow pack created successfully');
+    const { data: pack, error } = await supabase.from('flow_packs').insert(data).select().single();
+    if (error) throw error;
+
+    logger.info(`Flow pack ${pack.id} created by superadmin`);
+    return successResponse(res, 201, toCamelCase(pack), 'Flow pack created successfully');
   } catch (error) {
     logger.error('Error in createFlowPack:', error);
     next(error);
@@ -73,20 +78,25 @@ const updateFlowPack = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const pack = await FlowPack.findById(id);
-    if (!pack) return errorResponse(res, 404, 'Flow pack not found');
+    const { data: existing, error: fetchErr } = await supabase.from('flow_packs').select('id').eq('id', id).maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!existing) return errorResponse(res, 404, 'Flow pack not found');
 
-    const allowedFields = ['name', 'description', 'category', 'isActive', 'rules', 'order'];
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        pack[field] = req.body[field];
-      }
+    const fieldMap = {
+      name: 'name', description: 'description', category: 'category',
+      isActive: 'is_active', rules: 'rules', order: 'order'
+    };
+    const updates = {};
+    for (const [field, column] of Object.entries(fieldMap)) {
+      if (req.body[field] !== undefined) updates[column] = req.body[field];
     }
 
-    await pack.save();
+    const { data: pack, error } = await supabase
+      .from('flow_packs').update(updates).eq('id', id).select().single();
+    if (error) throw error;
 
     logger.info(`Flow pack ${id} updated by superadmin`);
-    return successResponse(res, 200, pack, 'Flow pack updated successfully');
+    return successResponse(res, 200, toCamelCase(pack), 'Flow pack updated successfully');
   } catch (error) {
     logger.error('Error in updateFlowPack:', error);
     next(error);
@@ -101,10 +111,12 @@ const deleteFlowPack = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const pack = await FlowPack.findById(id);
+    const { data: pack, error: fetchErr } = await supabase.from('flow_packs').select('id').eq('id', id).maybeSingle();
+    if (fetchErr) throw fetchErr;
     if (!pack) return errorResponse(res, 404, 'Flow pack not found');
 
-    await FlowPack.findByIdAndDelete(id);
+    const { error } = await supabase.from('flow_packs').delete().eq('id', id);
+    if (error) throw error;
 
     logger.info(`Flow pack ${id} deleted by superadmin`);
     return successResponse(res, 200, null, 'Flow pack deleted successfully');

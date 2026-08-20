@@ -1,6 +1,5 @@
 const http = require('http');
 const app = require('./src/app');
-const connectDB = require('./src/config/db');
 const redis = require('./src/config/redis');
 const logger = require('./src/utils/logger');
 const config = require('./src/config/env');
@@ -13,9 +12,6 @@ socketService.initialize(server);
 
 // Store io instance for later use
 app.set('io', socketService.getIO());
-
-// Connect to database
-connectDB();
 
 // Start BullMQ worker (for processing message queue)
 try {

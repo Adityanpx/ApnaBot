@@ -281,11 +281,6 @@ const disconnectWhatsapp = async (businessId) => {
 
 /**
  * Get dashboard statistics for a business
- *
- * BROKEN — Message/Booking/Customer/Usage are still Mongoose, and businessId
- * is now a Postgres UUID, so each of these queries throws a CastError. Each
- * is caught individually so one broken model doesn't 500 the whole dashboard;
- * broken stats come back as 0/null until those models are migrated.
  * @param {string} businessId - The business ID
  * @returns {Promise<Object>}
  */
@@ -325,10 +320,10 @@ const getDashboardStats = async (businessId) => {
   ] = await Promise.all([
     safe(() => countRows('messages', { gteColumn: 'created_at', gteValue: startOfToday.toISOString() }), 'todayMessageCount', 0),
     safe(() => countRows('messages', { eq: { direction: 'inbound' }, gteColumn: 'created_at', gteValue: startOfToday.toISOString() }), 'todayInboundCount', 0),
-    safe(() => require('../models/Booking').countDocuments({ businessId, createdAt: { $gte: startOfToday } }), 'todayBookingCount', 0),
+    safe(() => countRows('bookings', { gteColumn: 'created_at', gteValue: startOfToday.toISOString() }), 'todayBookingCount', 0),
     safe(() => countRows('customers'), 'totalCustomers', 0),
     safe(() => countRows('customers', { gteColumn: 'first_seen_at', gteValue: startOfToday.toISOString() }), 'newCustomersToday', 0),
-    safe(() => require('../models/Booking').countDocuments({ businessId, status: 'pending' }), 'pendingBookings', 0),
+    safe(() => countRows('bookings', { eq: { status: 'pending' } }), 'pendingBookings', 0),
     require('./usage.service').getUsageForBusiness(businessId)
   ]);
 
