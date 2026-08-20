@@ -408,6 +408,17 @@ const bulkImportRules = async (req, res, next) => {
           match_type: rule.matchType || 'contains',
           reply: rule.reply || '',
           reply_type: rule.replyType || 'text',
+          reply_image_url: rule.replyImageUrl || null,
+          buttons: (rule.buttons || []).map(b => ({
+            title: b.title,
+            nextKeyword: b.nextKeyword
+          })),
+          list_options: (rule.listOptions || []).map(o => ({
+            label: o.label,
+            description: o.description || '',
+            nextKeyword: o.nextKeyword
+          })),
+          hindi_aliases: rule.hindiAliases || [],
           is_active: true,
           trigger_count: 0
         });
