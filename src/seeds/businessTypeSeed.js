@@ -1,6 +1,6 @@
 // src/seeds/businessTypeSeed.js — REPLACE ENTIRE FILE
 
-const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
+const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 
 const templates = [
@@ -286,9 +286,20 @@ const templates = [
 const seedBusinessTypes = async () => {
   try {
     for (const template of templates) {
-      const existing = await BusinessTypeTemplate.findOne({ businessCategory: template.businessCategory });
+      const { data: existing, error: findErr } = await supabase
+        .from('business_type_templates')
+        .select('id')
+        .eq('business_category', template.businessCategory)
+        .maybeSingle();
+      if (findErr) throw findErr;
+
       if (!existing) {
-        await BusinessTypeTemplate.create(template);
+        const { error } = await supabase.from('business_type_templates').insert({
+          business_category: template.businessCategory,
+          default_rules: template.defaultRules,
+          booking_fields: template.bookingFields
+        });
+        if (error) throw error;
         logger.info(`Business type template created: ${template.businessCategory}`);
       } else {
         logger.info(`Business type template already exists: ${template.businessCategory}`);

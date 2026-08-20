@@ -1,5 +1,6 @@
 const Vehicle = require('../models/Vehicle');
 const VehicleTypeCatalog = require('../models/VehicleTypeCatalog');
+const supabase = require('../config/supabase');
 const r2 = require('../services/r2.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
@@ -10,7 +11,12 @@ const logger = require('../utils/logger');
  */
 const getVehicleCatalogForBusiness = async (req, res, next) => {
   try {
-    const catalog = await VehicleTypeCatalog.find({ isActive: true }).sort({ order: 1 });
+    const { data: catalog, error } = await supabase
+      .from('vehicle_type_catalog')
+      .select('*')
+      .eq('is_active', true)
+      .order('order', { ascending: true });
+    if (error) throw error;
     return successResponse(res, 200, { catalog });
   } catch (error) {
     logger.error('Error in getVehicleCatalogForBusiness:', error);

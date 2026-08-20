@@ -1,4 +1,4 @@
-const VehicleTypeCatalog = require('../models/VehicleTypeCatalog');
+const supabase = require('../config/supabase');
 const r2 = require('../services/r2.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
@@ -9,7 +9,12 @@ const logger = require('../utils/logger');
  */
 const getVehicleCatalog = async (req, res, next) => {
   try {
-    const catalog = await VehicleTypeCatalog.find().sort({ order: 1, name: 1 });
+    const { data: catalog, error } = await supabase
+      .from('vehicle_type_catalog')
+      .select('*')
+      .order('order', { ascending: true })
+      .order('name', { ascending: true });
+    if (error) throw error;
     return successResponse(res, 200, { catalog });
   } catch (error) {
     logger.error('Error in getVehicleCatalog:', error);
@@ -29,16 +34,21 @@ const createVehicleCatalogEntry = async (req, res, next) => {
       return errorResponse(res, 400, 'name is required');
     }
 
-    const entry = await VehicleTypeCatalog.create({
-      name: name.trim(),
-      type,
-      photoUrl,
-      seats,
-      order,
-      isActive: true
-    });
+    const { data: entry, error } = await supabase
+      .from('vehicle_type_catalog')
+      .insert({
+        name: name.trim(),
+        type,
+        photo_url: photoUrl,
+        seats,
+        order,
+        is_active: true
+      })
+      .select()
+      .single();
+    if (error) throw error;
 
-    logger.info(`Vehicle catalog entry ${entry._id} created by superadmin`);
+    logger.info(`Vehicle catalog entry ${entry.id} created by superadmin`);
     return successResponse(res, 201, entry, 'Vehicle catalog entry created successfully');
   } catch (error) {
     logger.error('Error in createVehicleCatalogEntry:', error);
@@ -54,17 +64,24 @@ const updateVehicleCatalogEntry = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const entry = await VehicleTypeCatalog.findById(id);
-    if (!entry) return errorResponse(res, 404, 'Vehicle catalog entry not found');
+    const { data: existing } = await supabase
+      .from('vehicle_type_catalog').select('id').eq('id', id).maybeSingle();
+    if (!existing) return errorResponse(res, 404, 'Vehicle catalog entry not found');
 
     const allowedFields = ['name', 'type', 'photoUrl', 'seats', 'isActive', 'order'];
+    const fieldMap = {
+      name: 'name', type: 'type', photoUrl: 'photo_url',
+      seats: 'seats', isActive: 'is_active', order: 'order'
+    };
+
+    const updates = {};
     for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        entry[field] = req.body[field];
-      }
+      if (req.body[field] !== undefined) updates[fieldMap[field]] = req.body[field];
     }
 
-    await entry.save();
+    const { data: entry, error } = await supabase
+      .from('vehicle_type_catalog').update(updates).eq('id', id).select().single();
+    if (error) throw error;
 
     logger.info(`Vehicle catalog entry ${id} updated by superadmin`);
     return successResponse(res, 200, entry, 'Vehicle catalog entry updated successfully');
@@ -82,10 +99,12 @@ const deleteVehicleCatalogEntry = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const entry = await VehicleTypeCatalog.findById(id);
+    const { data: entry } = await supabase
+      .from('vehicle_type_catalog').select('id').eq('id', id).maybeSingle();
     if (!entry) return errorResponse(res, 404, 'Vehicle catalog entry not found');
 
-    await VehicleTypeCatalog.findByIdAndDelete(id);
+    const { error } = await supabase.from('vehicle_type_catalog').delete().eq('id', id);
+    if (error) throw error;
 
     logger.info(`Vehicle catalog entry ${id} deleted by superadmin`);
     return successResponse(res, 200, null, 'Vehicle catalog entry deleted successfully');

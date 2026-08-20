@@ -4,7 +4,7 @@ const Business = require('../models/Business');
 const User = require('../models/User');
 const Plan = require('../models/Plan');
 const Subscription = require('../models/Subscription');
-const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
+const supabase = require('../config/supabase');
 const Customer = require('../models/Customer');
 const Booking = require('../models/Booking');
 const subscriptionService = require('../services/subscription.service');
@@ -364,7 +364,11 @@ const deletePlan = async (req, res, next) => {
  */
 const getTemplates = async (req, res, next) => {
   try {
-    const templates = await BusinessTypeTemplate.find().sort({ businessCategory: 1 });
+    const { data: templates, error } = await supabase
+      .from('business_type_templates')
+      .select('*')
+      .order('business_category', { ascending: true });
+    if (error) throw error;
     return successResponse(res, 200, { templates });
   } catch (error) {
     logger.error('Error in getTemplates:', error);
@@ -381,13 +385,17 @@ const updateTemplate = async (req, res, next) => {
     const { id } = req.params;
     const { defaultRules, bookingFields } = req.body;
 
-    const template = await BusinessTypeTemplate.findById(id);
-    if (!template) return errorResponse(res, 404, 'Template not found');
+    const { data: existing } = await supabase
+      .from('business_type_templates').select('id').eq('id', id).maybeSingle();
+    if (!existing) return errorResponse(res, 404, 'Template not found');
 
-    if (defaultRules !== undefined) template.defaultRules = defaultRules;
-    if (bookingFields !== undefined) template.bookingFields = bookingFields;
+    const updates = {};
+    if (defaultRules !== undefined) updates.default_rules = defaultRules;
+    if (bookingFields !== undefined) updates.booking_fields = bookingFields;
 
-    await template.save();
+    const { data: template, error } = await supabase
+      .from('business_type_templates').update(updates).eq('id', id).select().single();
+    if (error) throw error;
 
     logger.info(`Template ${id} updated by superadmin`);
     return successResponse(res, 200, template, 'Template updated successfully');
