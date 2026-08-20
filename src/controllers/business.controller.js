@@ -54,7 +54,7 @@ const getBusiness = async (req, res, next) => {
     }
 
     // Remove accessToken from response (never expose it)
-    const businessData = { ...business };
+    const businessData = { ...business, _id: business.id };
     delete businessData.accessToken;
 
     const { remaining, resetAt } = bookingService.getPreviewCreditsStatus(business);
@@ -118,7 +118,7 @@ const createBusiness = async (req, res, next) => {
     await saveTokenToRedis(req.user.userId, refreshToken);
 
     // Remove accessToken from business data
-    const businessData = { ...business };
+    const businessData = { ...business, _id: business.id };
     delete businessData.accessToken;
 
     return successResponse(res, 201, {
@@ -167,7 +167,7 @@ const updateBusiness = async (req, res, next) => {
     const business = await businessService.updateBusiness(businessId, req.body);
 
     // Remove accessToken from response
-    const businessData = { ...business };
+    const businessData = { ...business, _id: business.id };
     delete businessData.accessToken;
 
     return successResponse(res, 200, businessData);
@@ -380,7 +380,7 @@ const connectWhatsapp = async (req, res, next) => {
     await tenantService.invalidateTenantCache(phoneNumberId);
 
     // Remove accessToken from response
-    const businessData = { ...business };
+    const businessData = { ...business, _id: business.id };
     delete businessData.accessToken;
 
     return successResponse(res, 200, { business: businessData }, 'WhatsApp connected successfully');
