@@ -1,50 +1,73 @@
-const User = require('../models/User');
-const { 
-  generateAccessToken, 
-  generateRefreshToken, 
-  saveRefreshToken, 
-  getRefreshToken, 
+const bcrypt = require('bcryptjs');
+const supabase = require('../config/supabase');
+const {
+  generateAccessToken,
+  generateRefreshToken,
+  saveRefreshToken,
+  getRefreshToken,
   deleteRefreshToken,
   verifyRefreshToken,
-  buildPermissions 
+  buildPermissions
 } = require('../services/auth.service');
 const { errorResponse, successResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { generateResetToken, generateOtp } = require('../utils/crypto');
 const redis = require('../config/redis');
 
+const toUserResponse = (user) => ({
+  _id: user.id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  businessId: user.business_id,
+  permissions: {
+    canViewChats: user.can_view_chats,
+    canManageRules: user.can_manage_rules,
+    canManageBookings: user.can_manage_bookings,
+    canViewCustomers: user.can_view_customers,
+    canManageBilling: user.can_manage_billing
+  }
+});
+
 const register = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
-    
+
     if (!name || !email || !password) {
       return errorResponse(res, 400, 'Name, email, and password are required');
     }
-    
+
     if (password.length < 6) {
       return errorResponse(res, 400, 'Password must be at least 6 characters');
     }
-    
-    const existingUser = await User.findOne({ email: email.toLowerCase() });
+
+    const { data: existingUser } = await supabase
+      .from('users').select('id').eq('email', email.toLowerCase()).maybeSingle();
     if (existingUser) {
       return errorResponse(res, 409, 'Email already registered');
     }
-    
-    const user = new User({
+
+    const permissions = buildPermissions('owner');
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const { data: user, error } = await supabase.from('users').insert({
       name,
       email: email.toLowerCase(),
-      passwordHash: password,
+      password_hash: passwordHash,
       role: 'owner',
-      businessId: null,
-      permissions: buildPermissions('owner'),
-      isVerified: false
-    });
-
-    await user.save();
+      business_id: null,
+      can_view_chats: permissions.canViewChats,
+      can_manage_rules: permissions.canManageRules,
+      can_manage_bookings: permissions.canManageBookings,
+      can_view_customers: permissions.canViewCustomers,
+      can_manage_billing: permissions.canManageBilling,
+      is_verified: false
+    }).select().single();
+    if (error) throw error;
 
     const otp = generateOtp();
 
-    await redis.set(`verify-email:${user._id}`, otp, 'EX', 600);
+    await redis.set(`verify-email:${user.id}`, otp, 'EX', 600);
 
     // DEV MODE — log OTP to terminal so you can test without email setup
     logger.info(`DEV MODE — Email verification OTP for ${user.email}: ${otp}`);
@@ -58,26 +81,19 @@ const register = async (req, res, next) => {
     }
 
     const payload = {
-      userId: user._id,
-      businessId: user.businessId,
+      userId: user.id,
+      businessId: user.business_id,
       role: user.role,
-      permissions: user.permissions
+      permissions
     };
 
     const accessToken = generateAccessToken(payload);
-    const refreshToken = generateRefreshToken(user._id);
+    const refreshToken = generateRefreshToken(user.id);
 
-    await saveRefreshToken(user._id.toString(), refreshToken);
+    await saveRefreshToken(user.id, refreshToken);
 
     return successResponse(res, 201, {
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        businessId: user.businessId,
-        permissions: user.permissions
-      },
+      user: toUserResponse(user),
       accessToken,
       refreshToken
     }, 'Registration successful');
@@ -90,54 +106,55 @@ const register = async (req, res, next) => {
 const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    
+
     if (!email || !password) {
       return errorResponse(res, 400, 'Email and password are required');
     }
-    
-    const user = await User.findOne({ email: email.toLowerCase() }).select('+passwordHash');
-    
+
+    const { data: user } = await supabase
+      .from('users').select('*').eq('email', email.toLowerCase()).maybeSingle();
+
     if (!user) {
       return errorResponse(res, 401, 'Invalid credentials');
     }
-    
-    if (user.isActive === false) {
+
+    if (user.is_active === false) {
       return errorResponse(res, 403, 'Account is deactivated');
     }
-    
-    const isMatch = await user.comparePassword(password);
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       return errorResponse(res, 401, 'Invalid credentials');
     }
 
-    if (!user.isVerified) {
+    if (!user.is_verified) {
       return errorResponse(res, 403, 'Please verify your email before logging in', { code: 'EMAIL_NOT_VERIFIED' });
     }
 
-    user.lastLoginAt = new Date();
-    await user.save();
-    
-    const payload = {
-      userId: user._id,
-      businessId: user.businessId,
-      role: user.role,
-      permissions: user.permissions
+    await supabase.from('users').update({ last_login_at: new Date().toISOString() }).eq('id', user.id);
+
+    const permissions = {
+      canViewChats: user.can_view_chats,
+      canManageRules: user.can_manage_rules,
+      canManageBookings: user.can_manage_bookings,
+      canViewCustomers: user.can_view_customers,
+      canManageBilling: user.can_manage_billing
     };
-    
+
+    const payload = {
+      userId: user.id,
+      businessId: user.business_id,
+      role: user.role,
+      permissions
+    };
+
     const accessToken = generateAccessToken(payload);
-    const refreshToken = generateRefreshToken(user._id);
-    
-    await saveRefreshToken(user._id.toString(), refreshToken);
-    
+    const refreshToken = generateRefreshToken(user.id);
+
+    await saveRefreshToken(user.id, refreshToken);
+
     return successResponse(res, 200, {
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        businessId: user.businessId,
-        permissions: user.permissions
-      },
+      user: toUserResponse(user),
       accessToken,
       refreshToken
     }, 'Login successful');
@@ -150,37 +167,43 @@ const login = async (req, res, next) => {
 const refresh = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
-    
+
     if (!refreshToken) {
       return errorResponse(res, 400, 'Refresh token required');
     }
-    
+
     let decoded;
     try {
       decoded = verifyRefreshToken(refreshToken);
     } catch (err) {
       return errorResponse(res, 401, 'Invalid refresh token');
     }
-    
+
     const storedToken = await getRefreshToken(decoded.userId);
     if (storedToken !== refreshToken) {
       return errorResponse(res, 401, 'Refresh token expired or revoked');
     }
-    
-    const user = await User.findById(decoded.userId);
-    if (!user || user.isActive === false) {
+
+    const { data: user } = await supabase.from('users').select('*').eq('id', decoded.userId).maybeSingle();
+    if (!user || user.is_active === false) {
       return errorResponse(res, 401, 'User not found');
     }
-    
+
     const payload = {
-      userId: user._id,
-      businessId: user.businessId,
+      userId: user.id,
+      businessId: user.business_id,
       role: user.role,
-      permissions: user.permissions
+      permissions: {
+        canViewChats: user.can_view_chats,
+        canManageRules: user.can_manage_rules,
+        canManageBookings: user.can_manage_bookings,
+        canViewCustomers: user.can_view_customers,
+        canManageBilling: user.can_manage_billing
+      }
     };
-    
+
     const accessToken = generateAccessToken(payload);
-    
+
     return successResponse(res, 200, { accessToken }, 'Token refreshed');
   } catch (error) {
     logger.error('Refresh error:', error);
@@ -191,11 +214,11 @@ const refresh = async (req, res, next) => {
 const logout = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
-    
+
     if (!refreshToken) {
       return errorResponse(res, 400, 'Refresh token required');
     }
-    
+
     let userId = null;
     try {
       const decoded = verifyRefreshToken(refreshToken);
@@ -203,11 +226,11 @@ const logout = async (req, res, next) => {
     } catch (err) {
       logger.info('Invalid refresh token during logout');
     }
-    
+
     if (userId) {
       await deleteRefreshToken(userId);
     }
-    
+
     return successResponse(res, 200, null, 'Logged out successfully');
   } catch (error) {
     logger.error('Logout error:', error);
@@ -223,13 +246,14 @@ const forgotPassword = async (req, res, next) => {
       return errorResponse(res, 400, 'Email is required');
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const { data: user } = await supabase
+      .from('users').select('*').eq('email', email.toLowerCase()).maybeSingle();
 
     if (user) {
       const resetToken = generateResetToken();
 
       // Save to Redis with 1 hour TTL
-      await redis.set(`reset:${user._id}`, resetToken, 'EX', 3600);
+      await redis.set(`reset:${user.id}`, resetToken, 'EX', 3600);
 
       // DEV MODE — log token to terminal so you can test without email setup
       logger.info(`DEV MODE — Password reset token for ${email}: ${resetToken}`);
@@ -254,31 +278,32 @@ const forgotPassword = async (req, res, next) => {
 const resetPassword = async (req, res, next) => {
   try {
     const { email, token, newPassword } = req.body;
-    
+
     if (!email || !token || !newPassword) {
       return errorResponse(res, 400, 'Email, token, and newPassword are required');
     }
-    
+
     if (newPassword.length < 6) {
       return errorResponse(res, 400, 'Password must be at least 6 characters');
     }
-    
-    const user = await User.findOne({ email: email.toLowerCase() });
+
+    const { data: user } = await supabase
+      .from('users').select('*').eq('email', email.toLowerCase()).maybeSingle();
     if (!user) {
       return errorResponse(res, 400, 'Invalid or expired reset token');
     }
-    
-    const storedToken = await redis.get(`reset:${user._id}`);
+
+    const storedToken = await redis.get(`reset:${user.id}`);
     if (!storedToken || storedToken !== token) {
       return errorResponse(res, 400, 'Invalid or expired reset token');
     }
-    
-    user.passwordHash = newPassword;
-    await user.save();
-    
-    await redis.del(`reset:${user._id}`);
-    await deleteRefreshToken(user._id.toString());
-    
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await supabase.from('users').update({ password_hash: passwordHash }).eq('id', user.id);
+
+    await redis.del(`reset:${user.id}`);
+    await deleteRefreshToken(user.id);
+
     return successResponse(res, 200, null, 'Password reset successfully');
   } catch (error) {
     logger.error('Reset password error:', error);
@@ -294,24 +319,24 @@ const verifyEmail = async (req, res, next) => {
       return errorResponse(res, 400, 'Email and OTP are required');
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const { data: user } = await supabase
+      .from('users').select('*').eq('email', email.toLowerCase()).maybeSingle();
     if (!user) {
       return errorResponse(res, 404, 'User not found');
     }
 
-    if (user.isVerified) {
+    if (user.is_verified) {
       return successResponse(res, 200, null, 'Email already verified');
     }
 
-    const storedOtp = await redis.get(`verify-email:${user._id}`);
+    const storedOtp = await redis.get(`verify-email:${user.id}`);
     if (!storedOtp || storedOtp !== otp) {
       return errorResponse(res, 400, 'Invalid or expired OTP');
     }
 
-    user.isVerified = true;
-    await user.save();
+    await supabase.from('users').update({ is_verified: true }).eq('id', user.id);
 
-    await redis.del(`verify-email:${user._id}`);
+    await redis.del(`verify-email:${user.id}`);
 
     return successResponse(res, 200, null, 'Email verified successfully');
   } catch (error) {
@@ -328,18 +353,19 @@ const resendVerificationOtp = async (req, res, next) => {
       return errorResponse(res, 400, 'Email is required');
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const { data: user } = await supabase
+      .from('users').select('*').eq('email', email.toLowerCase()).maybeSingle();
     if (!user) {
       return errorResponse(res, 404, 'User not found');
     }
 
-    if (user.isVerified) {
+    if (user.is_verified) {
       return successResponse(res, 200, null, 'Email already verified');
     }
 
     const otp = generateOtp();
 
-    await redis.set(`verify-email:${user._id}`, otp, 'EX', 600);
+    await redis.set(`verify-email:${user.id}`, otp, 'EX', 600);
 
     // DEV MODE — log OTP to terminal so you can test without email setup
     logger.info(`DEV MODE — Email verification OTP for ${user.email}: ${otp}`);

@@ -1,20 +1,32 @@
-const Business = require('../models/Business');
-const User = require('../models/User');
+const supabase = require('../config/supabase');
 const Rule = require('../models/Rule');
-const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const RouteFare = require('../models/RouteFare');
 const { generateWebhookToken } = require('../utils/crypto');
 const { encrypt } = require('../utils/crypto');
+const { toCamelCase } = require('../utils/caseConvert');
 const logger = require('../utils/logger');
+
+const businessFieldMap = {
+  name: 'name', displayName: 'display_name', address: 'address', city: 'city',
+  profileImage: 'profile_image', upiId: 'upi_id', fallbackReply: 'fallback_reply',
+  welcomeMessage: 'welcome_message', isMenuEnabled: 'is_menu_enabled', menuItems: 'menu_items',
+  enableDistanceFares: 'enable_distance_fares', enableSmartFallback: 'enable_smart_fallback',
+  roundTripPerDayKm: 'round_trip_per_day_km', roundTripDriverDaEnabled: 'round_trip_driver_da_enabled',
+  roundTripDriverDaAmount: 'round_trip_driver_da_amount', disabledBookingFields: 'disabled_booking_fields'
+};
 
 /**
  * Get business by owner user ID
  * @param {string} ownerUserId - The owner's user ID
- * @returns {Promise<Business|null>}
+ * @returns {Promise<Object|null>} camelCase business row, so existing callers written
+ *   against the old Mongoose field names (business.businessCategory etc.) keep working
  */
 const getBusinessByOwnerId = async (ownerUserId) => {
   try {
-    return await Business.findOne({ ownerUserId });
+    const { data, error } = await supabase
+      .from('businesses').select('*').eq('owner_user_id', ownerUserId).maybeSingle();
+    if (error) throw error;
+    return toCamelCase(data);
   } catch (error) {
     logger.error('Error in getBusinessByOwnerId:', error);
     throw error;
@@ -24,11 +36,14 @@ const getBusinessByOwnerId = async (ownerUserId) => {
 /**
  * Get business by ID
  * @param {string} businessId - The business ID
- * @returns {Promise<Business|null>}
+ * @returns {Promise<Object|null>}
  */
 const getBusinessById = async (businessId) => {
   try {
-    return await Business.findById(businessId);
+    const { data, error } = await supabase
+      .from('businesses').select('*').eq('id', businessId).maybeSingle();
+    if (error) throw error;
+    return toCamelCase(data);
   } catch (error) {
     logger.error('Error in getBusinessById:', error);
     throw error;
@@ -38,11 +53,14 @@ const getBusinessById = async (businessId) => {
 /**
  * Get business by phone number ID (used by webhook tenant resolution)
  * @param {string} phoneNumberId - The WhatsApp phone number ID
- * @returns {Promise<Business|null>}
+ * @returns {Promise<Object|null>}
  */
 const getBusinessByPhoneNumberId = async (phoneNumberId) => {
   try {
-    return await Business.findOne({ phoneNumberId });
+    const { data, error } = await supabase
+      .from('businesses').select('*').eq('phone_number_id', phoneNumberId).maybeSingle();
+    if (error) throw error;
+    return toCamelCase(data);
   } catch (error) {
     logger.error('Error in getBusinessByPhoneNumberId:', error);
     throw error;
@@ -53,50 +71,62 @@ const getBusinessByPhoneNumberId = async (phoneNumberId) => {
  * Create a new business
  * @param {string} ownerUserId - The owner's user ID
  * @param {Object} data - Business data
- * @returns {Promise<Business>}
+ * @returns {Promise<Object>}
  */
 const createBusiness = async (ownerUserId, data) => {
   try {
     const { name, businessCategory, address, city, displayName } = data;
 
-    // Generate webhook verify token
     const webhookVerifyToken = generateWebhookToken();
 
-    // Create business document
-    const business = await Business.create({
+    const { data: business, error } = await supabase.from('businesses').insert({
       name,
-      businessCategory,
+      business_category: businessCategory,
       address,
       city,
-      displayName: displayName || name,
-      ownerUserId,
-      webhookVerifyToken,
-      isActive: true,
-      isWhatsappConnected: false
-    });
+      display_name: displayName || name,
+      owner_user_id: ownerUserId,
+      webhook_verify_token: webhookVerifyToken,
+      is_active: true,
+      is_whatsapp_connected: false
+    }).select().single();
+    if (error) throw error;
 
-    // Update owner user with businessId
-    await User.findByIdAndUpdate(ownerUserId, { businessId: business._id });
+    // Link owner -> business (User is on Supabase too, so this is a plain FK update now)
+    const { error: userErr } = await supabase
+      .from('users').update({ business_id: business.id }).eq('id', ownerUserId);
+    if (userErr) throw userErr;
 
-    // Copy default rules from BusinessTypeTemplate
-    const template = await BusinessTypeTemplate.findOne({ businessCategory });
-    if (template && template.defaultRules && template.defaultRules.length > 0) {
-      const rulesToCreate = template.defaultRules.map(rule => ({
-        businessId: business._id,
-        keyword: rule.keyword,
-        matchType: rule.matchType || 'contains',
-        reply: rule.reply || rule.response || '',
-        replyType: rule.replyType || 'text',
-        priority: rule.priority || 0,
-        isActive: true,
-        triggerCount: 0
-      }));
+    // Copy default rules from BusinessTypeTemplate (Supabase — migrated earlier).
+    const { data: template, error: templateErr } = await supabase
+      .from('business_type_templates').select('default_rules').eq('business_category', businessCategory).maybeSingle();
+    if (templateErr) throw templateErr;
 
-      await Rule.insertMany(rulesToCreate);
-      logger.info(`Created ${rulesToCreate.length} default rules for business ${business._id}`);
+    if (template && template.default_rules && template.default_rules.length > 0) {
+      // BROKEN — Rule is still Mongoose, and business.id is now a Postgres
+      // UUID, so Rule.insertMany will throw a CastError on businessId. New
+      // businesses get zero default rules until Rule is migrated to Supabase.
+      // Caught below and logged loudly rather than failing business creation.
+      try {
+        const rulesToCreate = template.default_rules.map(rule => ({
+          businessId: business.id,
+          keyword: rule.keyword,
+          matchType: rule.matchType || 'contains',
+          reply: rule.reply || rule.response || '',
+          replyType: rule.replyType || 'text',
+          priority: rule.priority || 0,
+          isActive: true,
+          triggerCount: 0
+        }));
+
+        await Rule.insertMany(rulesToCreate);
+        logger.info(`Created ${rulesToCreate.length} default rules for business ${business.id}`);
+      } catch (ruleError) {
+        logger.error(`FAILED to create default rules for business ${business.id} — Rule model not yet migrated to Supabase:`, ruleError);
+      }
     }
 
-    return business;
+    return toCamelCase(business);
   } catch (error) {
     logger.error('Error in createBusiness:', error);
     throw error;
@@ -107,27 +137,22 @@ const createBusiness = async (ownerUserId, data) => {
  * Update business profile
  * @param {string} businessId - The business ID
  * @param {Object} data - Fields to update
- * @returns {Promise<Business>}
+ * @returns {Promise<Object>}
  */
 const updateBusiness = async (businessId, data) => {
   try {
-    const allowedFields = ['name', 'displayName', 'address', 'city', 'profileImage', 'upiId', 'fallbackReply', 'welcomeMessage', 'isMenuEnabled', 'menuItems', 'enableDistanceFares', 'enableSmartFallback', 'roundTripPerDayKm', 'roundTripDriverDaEnabled', 'roundTripDriverDaAmount', 'disabledBookingFields'];
     const updateData = {};
-
-    // Only allow updating specific fields
-    for (const field of allowedFields) {
+    for (const [field, column] of Object.entries(businessFieldMap)) {
       if (data[field] !== undefined) {
-        updateData[field] = data[field];
+        updateData[column] = data[field];
       }
     }
 
-    const business = await Business.findByIdAndUpdate(
-      businessId,
-      updateData,
-      { new: true }
-    );
+    const { data: business, error } = await supabase
+      .from('businesses').update(updateData).eq('id', businessId).select().single();
+    if (error) throw error;
 
-    return business;
+    return toCamelCase(business);
   } catch (error) {
     logger.error('Error in updateBusiness:', error);
     throw error;
@@ -141,8 +166,10 @@ const updateBusiness = async (businessId, data) => {
  */
 const getServedCities = async (businessId) => {
   try {
-    const business = await Business.findById(businessId).select('servedCities');
-    return business ? (business.servedCities || []) : null;
+    const { data, error } = await supabase
+      .from('businesses').select('served_cities').eq('id', businessId).maybeSingle();
+    if (error) throw error;
+    return data ? (data.served_cities || []) : null;
   } catch (error) {
     logger.error('Error in getServedCities:', error);
     throw error;
@@ -157,12 +184,10 @@ const getServedCities = async (businessId) => {
  */
 const updateServedCities = async (businessId, cities) => {
   try {
-    const business = await Business.findByIdAndUpdate(
-      businessId,
-      { servedCities: cities },
-      { new: true }
-    ).select('servedCities');
-    return business ? (business.servedCities || []) : null;
+    const { data, error } = await supabase
+      .from('businesses').update({ served_cities: cities }).eq('id', businessId).select('served_cities').single();
+    if (error) throw error;
+    return data ? (data.served_cities || []) : null;
   } catch (error) {
     logger.error('Error in updateServedCities:', error);
     throw error;
@@ -178,6 +203,10 @@ const toTitleCase = (str) => str.replace(/\w\S*/g, word => word.charAt(0).toUppe
  * Suggested servedCities prefill list, built from this business's active
  * RouteFare routes (unique fromCity/toCity values, title-cased for display).
  * Read-only — callers decide whether/what to save via updateServedCities.
+ *
+ * BROKEN — RouteFare is still Mongoose, and businessId is now a Postgres
+ * UUID, so this always fails and returns []. Fails soft (not critical path)
+ * until RouteFare is migrated to Supabase.
  * @param {string} businessId - The business ID
  * @returns {Promise<Array<string>>}
  */
@@ -195,8 +224,8 @@ const getServedCitySuggestions = async (businessId) => {
     }
     return suggestions.sort((a, b) => a.localeCompare(b));
   } catch (error) {
-    logger.error('Error in getServedCitySuggestions:', error);
-    throw error;
+    logger.error('Error in getServedCitySuggestions (RouteFare not yet migrated):', error);
+    return [];
   }
 };
 
@@ -204,34 +233,31 @@ const getServedCitySuggestions = async (businessId) => {
  * Connect WhatsApp to business
  * @param {string} businessId - The business ID
  * @param {Object} data - WhatsApp connection data
- * @returns {Promise<Business>}
+ * @returns {Promise<Object>}
  */
 const connectWhatsapp = async (businessId, data) => {
   try {
     const { phoneNumberId, wabaId, whatsappNumber, accessToken, displayName } = data;
 
-    // Encrypt access token before saving
     const encryptedAccessToken = encrypt(accessToken);
 
     const updateData = {
-      phoneNumberId,
-      wabaId,
-      whatsappNumber,
-      accessToken: encryptedAccessToken,
-      isWhatsappConnected: true
+      phone_number_id: phoneNumberId,
+      waba_id: wabaId,
+      whatsapp_number: whatsappNumber,
+      access_token: encryptedAccessToken,
+      is_whatsapp_connected: true
     };
 
     if (displayName) {
-      updateData.displayName = displayName;
+      updateData.display_name = displayName;
     }
 
-    const business = await Business.findByIdAndUpdate(
-      businessId,
-      updateData,
-      { new: true }
-    );
+    const { data: business, error } = await supabase
+      .from('businesses').update(updateData).eq('id', businessId).select().single();
+    if (error) throw error;
 
-    return business;
+    return toCamelCase(business);
   } catch (error) {
     logger.error('Error in connectWhatsapp:', error);
     throw error;
@@ -241,23 +267,20 @@ const connectWhatsapp = async (businessId, data) => {
 /**
  * Disconnect WhatsApp from business
  * @param {string} businessId - The business ID
- * @returns {Promise<Business>}
+ * @returns {Promise<Object>}
  */
 const disconnectWhatsapp = async (businessId) => {
   try {
-    const business = await Business.findByIdAndUpdate(
-      businessId,
-      {
-        phoneNumberId: null,
-        wabaId: null,
-        whatsappNumber: null,
-        accessToken: null,
-        isWhatsappConnected: false
-      },
-      { new: true }
-    );
+    const { data: business, error } = await supabase.from('businesses').update({
+      phone_number_id: null,
+      waba_id: null,
+      whatsapp_number: null,
+      access_token: null,
+      is_whatsapp_connected: false
+    }).eq('id', businessId).select().single();
+    if (error) throw error;
 
-    return business;
+    return toCamelCase(business);
   } catch (error) {
     logger.error('Error in disconnectWhatsapp:', error);
     throw error;
@@ -266,77 +289,57 @@ const disconnectWhatsapp = async (businessId) => {
 
 /**
  * Get dashboard statistics for a business
+ *
+ * BROKEN — Message/Booking/Customer/Usage are still Mongoose, and businessId
+ * is now a Postgres UUID, so each of these queries throws a CastError. Each
+ * is caught individually so one broken model doesn't 500 the whole dashboard;
+ * broken stats come back as 0/null until those models are migrated.
  * @param {string} businessId - The business ID
  * @returns {Promise<Object>}
  */
 const getDashboardStats = async (businessId) => {
-  try {
-    // Get start of today
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
 
-    // Get current month in YYYY-MM format
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-    // Run all queries in parallel
-    const [
-      todayMessageCount,
-      todayInboundCount,
-      todayBookingCount,
-      totalCustomers,
-      newCustomersToday,
-      pendingBookings,
-      currentMonthUsage
-    ] = await Promise.all([
-      // todayMessageCount
-      require('../models/Message').countDocuments({
-        businessId,
-        createdAt: { $gte: startOfToday }
-      }),
-      // todayInboundCount
-      require('../models/Message').countDocuments({
-        businessId,
-        direction: 'inbound',
-        createdAt: { $gte: startOfToday }
-      }),
-      // todayBookingCount
-      require('../models/Booking').countDocuments({
-        businessId,
-        createdAt: { $gte: startOfToday }
-      }),
-      // totalCustomers
-      require('../models/Customer').countDocuments({ businessId }),
-      // newCustomersToday
-      require('../models/Customer').countDocuments({
-        businessId,
-        firstSeenAt: { $gte: startOfToday }
-      }),
-      // pendingBookings
-      require('../models/Booking').countDocuments({
-        businessId,
-        status: 'pending'
-      }),
-      // currentMonthUsage
-      require('../models/Usage').findOne({
-        businessId,
-        month: currentMonth
-      })
-    ]);
+  const safe = async (fn, label, fallback) => {
+    try {
+      return await fn();
+    } catch (error) {
+      logger.error(`getDashboardStats: ${label} failed (model not yet migrated?):`, error.message);
+      return fallback;
+    }
+  };
 
-    return {
-      todayMessageCount,
-      todayInboundCount,
-      todayBookingCount,
-      totalCustomers,
-      newCustomersToday,
-      pendingBookings,
-      currentMonthUsage: currentMonthUsage || null
-    };
-  } catch (error) {
-    logger.error('Error in getDashboardStats:', error);
-    throw error;
-  }
+  const [
+    todayMessageCount,
+    todayInboundCount,
+    todayBookingCount,
+    totalCustomers,
+    newCustomersToday,
+    pendingBookings,
+    currentMonthUsage
+  ] = await Promise.all([
+    safe(() => require('../models/Message').countDocuments({ businessId, createdAt: { $gte: startOfToday } }), 'todayMessageCount', 0),
+    safe(() => require('../models/Message').countDocuments({ businessId, direction: 'inbound', createdAt: { $gte: startOfToday } }), 'todayInboundCount', 0),
+    safe(() => require('../models/Booking').countDocuments({ businessId, createdAt: { $gte: startOfToday } }), 'todayBookingCount', 0),
+    safe(() => require('../models/Customer').countDocuments({ businessId }), 'totalCustomers', 0),
+    safe(() => require('../models/Customer').countDocuments({ businessId, firstSeenAt: { $gte: startOfToday } }), 'newCustomersToday', 0),
+    safe(() => require('../models/Booking').countDocuments({ businessId, status: 'pending' }), 'pendingBookings', 0),
+    safe(() => require('../models/Usage').findOne({ businessId, month: currentMonth }), 'currentMonthUsage', null)
+  ]);
+
+  return {
+    todayMessageCount,
+    todayInboundCount,
+    todayBookingCount,
+    totalCustomers,
+    newCustomersToday,
+    pendingBookings,
+    currentMonthUsage: currentMonthUsage || null
+  };
 };
 
 module.exports = {

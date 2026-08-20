@@ -1,10 +1,10 @@
 const redis = require('../config/redis');
+const supabase = require('../config/supabase');
+const businessService = require('./business.service');
 const Booking = require('../models/Booking');
-const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Customer = require('../models/Customer');
 const RouteFare = require('../models/RouteFare');
 const RentalPackage = require('../models/RentalPackage');
-const Business = require('../models/Business');
 const Vehicle = require('../models/Vehicle');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const usageService = require('./usage.service');
@@ -89,7 +89,7 @@ const buildVehicleCarouselOptions = (routeFares) => routeFares.map((rf, idx) => 
  * @returns {Promise<Array>} Carousel-shaped options with source: 'distance_estimate', or []
  */
 const findDistanceBasedVehicleOptions = async (businessId, pickupLocation, dropLocation, tripType, numberOfDays) => {
-  const business = await Business.findById(businessId).select('enableDistanceFares roundTripPerDayKm roundTripDriverDaEnabled roundTripDriverDaAmount');
+  const business = await businessService.getBusinessById(businessId);
   if (!business || business.enableDistanceFares !== true) {
     logger.warn('Distance fares lookup skipped: not enabled or business not found', { businessId, enableDistanceFares: business?.enableDistanceFares });
     return [];
@@ -317,9 +317,10 @@ const rebuildCarouselOrFallback = async (businessId, customerNumber, session, cu
  * the customer explicitly asks to see options outside the carousel.
  */
 const fallbackToGenericVehicleField = async (businessId, session) => {
-  const business = await Business.findById(businessId).select('businessCategory');
-  const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
-  const genericVehicleField = template.bookingFields.find(f => f.fieldKey === 'vehicleType');
+  const business = await businessService.getBusinessById(businessId);
+  const { data: template } = await supabase
+    .from('business_type_templates').select('booking_fields').eq('business_category', business.businessCategory).maybeSingle();
+  const genericVehicleField = template.booking_fields.find(f => f.fieldKey === 'vehicleType');
   session.fields[session.step] = genericVehicleField;
   return genericVehicleField;
 };
@@ -450,18 +451,19 @@ const applyServedCitiesFields = (fields, servedCities) => {
 const startBookingSession = async (businessId, customerNumber, ruleId) => {
   try {
     // Step 1: Load booking fields for business's businessCategory
-    const business = await Business.findById(businessId).select('businessCategory disabledBookingFields servedCities');
+    const business = await businessService.getBusinessById(businessId);
     if (!business) {
       throw new Error('Business not found');
     }
 
-    const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
-    if (!template || !template.bookingFields || template.bookingFields.length === 0) {
+    const { data: template } = await supabase
+      .from('business_type_templates').select('booking_fields').eq('business_category', business.businessCategory).maybeSingle();
+    if (!template || !template.booking_fields || template.booking_fields.length === 0) {
       throw new Error('No booking fields configured for this business type');
     }
 
     // Sort booking fields by order field
-    const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
+    const sortedFields = [...template.booking_fields].sort((a, b) => a.order - b.order);
 
     const disabledFieldKeys = business.disabledBookingFields || [];
     let activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
@@ -891,17 +893,18 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
  * @returns {Promise<Object>} { fields: [...] } - the ordered bookingFields
  */
 const getBookingFieldsPreview = async (businessId) => {
-  const business = await Business.findById(businessId).select('businessCategory disabledBookingFields servedCities');
+  const business = await businessService.getBusinessById(businessId);
   if (!business) {
     throw new Error('Business not found');
   }
 
-  const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
-  if (!template || !template.bookingFields || template.bookingFields.length === 0) {
+  const { data: template } = await supabase
+    .from('business_type_templates').select('booking_fields').eq('business_category', business.businessCategory).maybeSingle();
+  if (!template || !template.booking_fields || template.booking_fields.length === 0) {
     throw new Error('No booking fields configured for this business type');
   }
 
-  const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
+  const sortedFields = [...template.booking_fields].sort((a, b) => a.order - b.order);
 
   const disabledFieldKeys = business.disabledBookingFields || [];
   let activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
@@ -919,17 +922,18 @@ const getBookingFieldsPreview = async (businessId) => {
  * @returns {Promise<Object>} { fields: [...] } - the ordered bookingFields, unfiltered
  */
 const getAllBookingFields = async (businessId) => {
-  const business = await Business.findById(businessId).select('businessCategory');
+  const business = await businessService.getBusinessById(businessId);
   if (!business) {
     throw new Error('Business not found');
   }
 
-  const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
-  if (!template || !template.bookingFields || template.bookingFields.length === 0) {
+  const { data: template } = await supabase
+    .from('business_type_templates').select('booking_fields').eq('business_category', business.businessCategory).maybeSingle();
+  if (!template || !template.booking_fields || template.booking_fields.length === 0) {
     throw new Error('No booking fields configured for this business type');
   }
 
-  const sortedFields = [...template.bookingFields].sort((a, b) => a.order - b.order);
+  const sortedFields = [...template.booking_fields].sort((a, b) => a.order - b.order);
 
   return { fields: sortedFields };
 };
@@ -961,14 +965,17 @@ const getNextMonthStart = (from) => {
  * date), for display on GET /business. Mirrors the lazy-reset math in
  * checkAndConsumeManualPreviewCredit but never mutates/persists, so it's
  * safe to call on every GET.
- * @param {Object} business - a Business doc/object with previewCreditsUsed, previewCreditsResetAt, previewCreditsPurchased
+ * @param {Object} business - a business object with previewCreditsUsed, previewCreditsResetAt, previewCreditsPurchased
  * @returns {{ remaining: number, resetAt: Date }}
  */
 const getPreviewCreditsStatus = (business) => {
   const now = new Date();
-  const isDue = !business.previewCreditsResetAt || now >= business.previewCreditsResetAt;
+  // previewCreditsResetAt comes back as an ISO string from Supabase (unlike
+  // the Date instance Mongoose used to hand back) — parse before comparing.
+  const resetAtDate = business.previewCreditsResetAt ? new Date(business.previewCreditsResetAt) : null;
+  const isDue = !resetAtDate || now >= resetAtDate;
   const used = isDue ? 0 : business.previewCreditsUsed;
-  const resetAt = isDue ? getNextMonthStart(now) : business.previewCreditsResetAt;
+  const resetAt = isDue ? getNextMonthStart(now) : resetAtDate;
   const remaining = Math.max(0, FREE_MONTHLY_PREVIEW_CREDITS - used) + (business.previewCreditsPurchased || 0);
   return { remaining, resetAt };
 };
@@ -984,31 +991,52 @@ const getPreviewCreditsStatus = (business) => {
  * @returns {Promise<{ allowed: boolean, remaining: number }>}
  */
 const checkAndConsumeManualPreviewCredit = async (businessId) => {
-  const business = await Business.findById(businessId).select('previewCreditsUsed previewCreditsResetAt previewCreditsPurchased');
+  const { data: business, error } = await supabase
+    .from('businesses')
+    .select('preview_credits_used, preview_credits_reset_at, preview_credits_purchased')
+    .eq('id', businessId)
+    .maybeSingle();
+  if (error) throw error;
   if (!business) {
     throw new Error('Business not found');
   }
 
   const now = new Date();
-  if (!business.previewCreditsResetAt || now >= business.previewCreditsResetAt) {
-    business.previewCreditsUsed = 0;
-    business.previewCreditsResetAt = getNextMonthStart(now);
+  let used = business.preview_credits_used;
+  let resetAt = business.preview_credits_reset_at ? new Date(business.preview_credits_reset_at) : null;
+  const purchased = business.preview_credits_purchased;
+
+  if (!resetAt || now >= resetAt) {
+    used = 0;
+    resetAt = getNextMonthStart(now);
   }
 
-  const remaining = Math.max(0, FREE_MONTHLY_PREVIEW_CREDITS - business.previewCreditsUsed) + business.previewCreditsPurchased;
+  const remaining = Math.max(0, FREE_MONTHLY_PREVIEW_CREDITS - used) + purchased;
 
   if (remaining <= 0) {
-    await business.save();
+    const { error: saveErr } = await supabase.from('businesses').update({
+      preview_credits_used: used,
+      preview_credits_reset_at: resetAt.toISOString()
+    }).eq('id', businessId);
+    if (saveErr) throw saveErr;
     return { allowed: false, remaining: 0 };
   }
 
-  if (business.previewCreditsUsed < FREE_MONTHLY_PREVIEW_CREDITS) {
-    business.previewCreditsUsed += 1;
+  let finalUsed = used;
+  let finalPurchased = purchased;
+  if (used < FREE_MONTHLY_PREVIEW_CREDITS) {
+    finalUsed = used + 1;
   } else {
-    business.previewCreditsPurchased -= 1;
+    finalPurchased = purchased - 1;
   }
 
-  await business.save();
+  const { error: saveErr } = await supabase.from('businesses').update({
+    preview_credits_used: finalUsed,
+    preview_credits_reset_at: resetAt.toISOString(),
+    preview_credits_purchased: finalPurchased
+  }).eq('id', businessId);
+  if (saveErr) throw saveErr;
+
   return { allowed: true, remaining: remaining - 1 };
 };
 

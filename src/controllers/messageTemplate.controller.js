@@ -1,6 +1,6 @@
 const axios = require('axios');
 const MessageTemplate = require('../models/MessageTemplate');
-const Business = require('../models/Business');
+const businessService = require('../services/business.service');
 const { decrypt } = require('../utils/crypto');
 const { META_API_BASE } = require('../services/whatsapp.service');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -83,7 +83,7 @@ const submitMessageTemplate = async (req, res, next) => {
       return errorResponse(res, 400, 'Only draft or rejected templates can be submitted');
     }
 
-    const business = await Business.findById(businessId);
+    const business = await businessService.getBusinessById(businessId);
     if (!business || !business.wabaId || !business.accessToken) {
       return errorResponse(res, 400, 'Business is not connected to WhatsApp. Please connect WhatsApp first.');
     }

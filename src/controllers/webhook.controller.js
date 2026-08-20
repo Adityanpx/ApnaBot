@@ -9,7 +9,7 @@ const socketService = require('../services/socket.service');
 const { addToWhatsappQueue, addToWhatsappQueueAndWait } = require('../queues/whatsapp.queue');
 const Customer = require('../models/Customer');
 const Message = require('../models/Message');
-const Business = require('../models/Business');
+const businessService = require('../services/business.service');
 const Rule = require('../models/Rule');
 const { applyMessageTemplate } = require('../utils/messageTemplating');
 const logger = require('../utils/logger');
@@ -237,9 +237,7 @@ const receiveWebhook = async (req, res) => {
       if (ESCAPE_KEYWORDS.has(normalizedEscapeText)) {
         await bookingService.deleteBookingSession(tenant.businessId, customerNumber);
 
-        const escapeBusinessDoc = await Business.findById(tenant.businessId)
-          .select('welcomeMessage isMenuEnabled menuItems')
-          .lean();
+        const escapeBusinessDoc = await businessService.getBusinessById(tenant.businessId);
         const escapeHasMenu = !!(escapeBusinessDoc?.isMenuEnabled && escapeBusinessDoc.menuItems?.length > 0);
 
         // Cancellation confirmation message
@@ -713,9 +711,7 @@ const receiveWebhook = async (req, res) => {
     // real rule keywords still take priority over this).
     const normalizedText = (messageText || '').trim().toLowerCase();
     if (GREETING_KEYWORDS.has(normalizedText)) {
-      const businessDoc = await Business.findById(tenant.businessId)
-        .select('welcomeMessage isMenuEnabled menuItems')
-        .lean();
+      const businessDoc = await businessService.getBusinessById(tenant.businessId);
 
       const hasMenu = !!(businessDoc?.isMenuEnabled && businessDoc.menuItems?.length > 0);
 
@@ -831,9 +827,7 @@ const receiveWebhook = async (req, res) => {
       // whether replyText above came from the AI smart fallback or the
       // static fallbackReply — gives the customer a way to reach a real
       // rule instead of a dead-end message.
-      const fallbackBusinessDoc = await Business.findById(tenant.businessId)
-        .select('isMenuEnabled menuItems')
-        .lean();
+      const fallbackBusinessDoc = await businessService.getBusinessById(tenant.businessId);
       const fallbackHasMenu = !!(fallbackBusinessDoc?.isMenuEnabled && fallbackBusinessDoc.menuItems?.length > 0);
 
       if (fallbackHasMenu) {

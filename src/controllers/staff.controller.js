@@ -1,10 +1,26 @@
-// src/controllers/staff.controller.js — CREATE THIS FILE
-
-const User = require('../models/User');
+const bcrypt = require('bcryptjs');
+const supabase = require('../config/supabase');
 const subscriptionService = require('../services/subscription.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { buildPermissions } = require('../services/auth.service');
 const logger = require('../utils/logger');
+
+const toStaffResponse = (u) => ({
+  _id: u.id,
+  name: u.name,
+  email: u.email,
+  role: u.role,
+  businessId: u.business_id,
+  isActive: u.is_active,
+  lastLoginAt: u.last_login_at,
+  permissions: {
+    canViewChats: u.can_view_chats,
+    canManageRules: u.can_manage_rules,
+    canManageBookings: u.can_manage_bookings,
+    canViewCustomers: u.can_view_customers,
+    canManageBilling: u.can_manage_billing
+  }
+});
 
 /**
  * GET /api/staff
@@ -14,11 +30,15 @@ const getStaff = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
-    const staff = await User.find({ businessId, role: 'staff' })
-      .select('-passwordHash')
-      .sort({ createdAt: -1 });
+    const { data: staff, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('role', 'staff')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
 
-    return successResponse(res, 200, { staff, total: staff.length });
+    return successResponse(res, 200, { staff: staff.map(toStaffResponse), total: staff.length });
   } catch (error) {
     logger.error('Error in getStaff:', error);
     next(error);
@@ -53,32 +73,42 @@ const inviteStaff = async (req, res, next) => {
     }
 
     const maxStaff = subscription.plan.max_staff || 0;
-    const currentCount = await User.countDocuments({ businessId, role: 'staff', isActive: true });
+    const { count: currentCount } = await supabase
+      .from('users')
+      .select('id', { count: 'exact', head: true })
+      .eq('business_id', businessId)
+      .eq('role', 'staff')
+      .eq('is_active', true);
 
     if (currentCount >= maxStaff) {
       return errorResponse(res, 403, `Staff limit reached (${maxStaff}). Please upgrade your plan.`);
     }
 
     // Check email not already registered
-    const existing = await User.findOne({ email: email.toLowerCase() });
+    const { data: existing } = await supabase
+      .from('users').select('id').eq('email', email.toLowerCase()).maybeSingle();
     if (existing) return errorResponse(res, 409, 'Email is already registered');
 
-    const staffUser = new User({
+    const permissions = buildPermissions('staff');
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const { data: staffUser, error } = await supabase.from('users').insert({
       name: name.trim(),
       email: email.toLowerCase(),
-      passwordHash: password, // pre-save hook in User model hashes this
+      password_hash: passwordHash,
       role: 'staff',
-      businessId,
-      permissions: buildPermissions('staff'),
-      isActive: true
-    });
-    await staffUser.save();
+      business_id: businessId,
+      can_view_chats: permissions.canViewChats,
+      can_manage_rules: permissions.canManageRules,
+      can_manage_bookings: permissions.canManageBookings,
+      can_view_customers: permissions.canViewCustomers,
+      can_manage_billing: permissions.canManageBilling,
+      is_active: true
+    }).select().single();
+    if (error) throw error;
 
-    const responseUser = staffUser.toObject();
-    delete responseUser.passwordHash;
-
-    logger.info(`Staff ${staffUser._id} created for business ${businessId}`);
-    return successResponse(res, 201, responseUser, 'Staff member added successfully');
+    logger.info(`Staff ${staffUser.id} created for business ${businessId}`);
+    return successResponse(res, 201, toStaffResponse(staffUser), 'Staff member added successfully');
   } catch (error) {
     logger.error('Error in inviteStaff:', error);
     next(error);
@@ -100,27 +130,28 @@ const updatePermissions = async (req, res, next) => {
       return errorResponse(res, 400, 'permissions object is required');
     }
 
-    const staffMember = await User.findOne({ _id: id, businessId, role: 'staff' });
+    const { data: staffMember } = await supabase
+      .from('users').select('id').eq('id', id).eq('business_id', businessId).eq('role', 'staff').maybeSingle();
     if (!staffMember) return errorResponse(res, 404, 'Staff member not found');
 
     // Only these 3 flags are adjustable for staff
-    const adjustable = ['canViewChats', 'canManageBookings', 'canViewCustomers'];
-    for (const key of adjustable) {
+    const adjustable = { canViewChats: 'can_view_chats', canManageBookings: 'can_manage_bookings', canViewCustomers: 'can_view_customers' };
+    const updates = {};
+    for (const [key, col] of Object.entries(adjustable)) {
       if (permissions[key] !== undefined) {
-        staffMember.permissions[key] = Boolean(permissions[key]);
+        updates[col] = Boolean(permissions[key]);
       }
     }
 
     // Hard enforce — staff can never have these
-    staffMember.permissions.canManageRules = false;
-    staffMember.permissions.canManageBilling = false;
+    updates.can_manage_rules = false;
+    updates.can_manage_billing = false;
 
-    await staffMember.save();
+    const { data: updated, error } = await supabase
+      .from('users').update(updates).eq('id', id).select().single();
+    if (error) throw error;
 
-    const responseUser = staffMember.toObject();
-    delete responseUser.passwordHash;
-
-    return successResponse(res, 200, responseUser, 'Permissions updated');
+    return successResponse(res, 200, toStaffResponse(updated), 'Permissions updated');
   } catch (error) {
     logger.error('Error in updatePermissions:', error);
     next(error);
@@ -136,10 +167,12 @@ const removeStaff = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const staffMember = await User.findOne({ _id: id, businessId, role: 'staff' });
+    const { data: staffMember } = await supabase
+      .from('users').select('id').eq('id', id).eq('business_id', businessId).eq('role', 'staff').maybeSingle();
     if (!staffMember) return errorResponse(res, 404, 'Staff member not found');
 
-    await User.findByIdAndDelete(id);
+    const { error } = await supabase.from('users').delete().eq('id', id);
+    if (error) throw error;
 
     logger.info(`Staff ${id} removed from business ${businessId}`);
     return successResponse(res, 200, null, 'Staff member removed successfully');
@@ -158,19 +191,18 @@ const toggleStaff = async (req, res, next) => {
     const { id } = req.params;
     const businessId = req.user.businessId;
 
-    const staffMember = await User.findOne({ _id: id, businessId, role: 'staff' });
+    const { data: staffMember } = await supabase
+      .from('users').select('*').eq('id', id).eq('business_id', businessId).eq('role', 'staff').maybeSingle();
     if (!staffMember) return errorResponse(res, 404, 'Staff member not found');
 
-    staffMember.isActive = !staffMember.isActive;
-    await staffMember.save();
+    const { data: updated, error } = await supabase
+      .from('users').update({ is_active: !staffMember.is_active }).eq('id', id).select().single();
+    if (error) throw error;
 
-    const action = staffMember.isActive ? 'activated' : 'deactivated';
+    const action = updated.is_active ? 'activated' : 'deactivated';
     logger.info(`Staff ${id} ${action} for business ${businessId}`);
 
-    const responseUser = staffMember.toObject();
-    delete responseUser.passwordHash;
-
-    return successResponse(res, 200, responseUser, `Staff member ${action}`);
+    return successResponse(res, 200, toStaffResponse(updated), `Staff member ${action}`);
   } catch (error) {
     logger.error('Error in toggleStaff:', error);
     next(error);

@@ -1,6 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const chatbotService = require('./chatbot.service');
-const Business = require('../models/Business');
+const businessService = require('./business.service');
 const logger = require('../utils/logger');
 
 const MODEL = 'claude-sonnet-4-6';
@@ -32,7 +32,7 @@ const getSmartFallbackReply = async (businessId, customerMessage) => {
 
     const [rules, business] = await Promise.all([
       chatbotService.getRulesFromCache(businessId),
-      Business.findById(businessId).select('name businessCategory fallbackReply')
+      businessService.getBusinessById(businessId)
     ]);
 
     if (!business) return null;

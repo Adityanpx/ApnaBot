@@ -161,8 +161,8 @@ const sendToCustomer = async (req, res, next) => {
     }
 
     // Load business to get WhatsApp credentials — REQUIRED for queue
-    const Business = require('../models/Business');
-    const business = await Business.findById(businessId);
+    const businessService = require('../services/business.service');
+    const business = await businessService.getBusinessById(businessId);
     if (!business || !business.isWhatsappConnected || !business.phoneNumberId) {
       return errorResponse(res, 400, 'WhatsApp is not connected to this business');
     }

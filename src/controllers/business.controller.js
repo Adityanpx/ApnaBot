@@ -3,7 +3,7 @@ const businessService = require('../services/business.service');
 const tenantService = require('../services/tenant.service');
 const subscriptionService = require('../services/subscription.service');
 const bookingService = require('../services/booking.service');
-const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
+const supabase = require('../config/supabase');
 const { successResponse, errorResponse } = require('../utils/response');
 const { generateTokens, saveTokenToRedis } = require('../services/auth.service');
 const logger = require('../utils/logger');
@@ -54,7 +54,7 @@ const getBusiness = async (req, res, next) => {
     }
 
     // Remove accessToken from response (never expose it)
-    const businessData = business.toObject();
+    const businessData = { ...business };
     delete businessData.accessToken;
 
     const { remaining, resetAt } = bookingService.getPreviewCreditsStatus(business);
@@ -109,7 +109,7 @@ const createBusiness = async (req, res, next) => {
       userId: req.user.userId,
       email: req.user.email,
       role: req.user.role,
-      businessId: business._id
+      businessId: business.id
     };
 
     const { accessToken, refreshToken } = await generateTokens(userPayload);
@@ -118,7 +118,7 @@ const createBusiness = async (req, res, next) => {
     await saveTokenToRedis(req.user.userId, refreshToken);
 
     // Remove accessToken from business data
-    const businessData = business.toObject();
+    const businessData = { ...business };
     delete businessData.accessToken;
 
     return successResponse(res, 201, {
@@ -147,8 +147,12 @@ const updateBusiness = async (req, res, next) => {
 
     if (req.body.disabledBookingFields !== undefined) {
       const currentBusiness = await businessService.getBusinessById(businessId);
-      const template = await BusinessTypeTemplate.findOne({ businessCategory: currentBusiness.businessCategory });
-      const templateFieldsByKey = new Map((template?.bookingFields || []).map(field => [field.fieldKey, field]));
+      const { data: template } = await supabase
+        .from('business_type_templates')
+        .select('booking_fields')
+        .eq('business_category', currentBusiness.businessCategory)
+        .maybeSingle();
+      const templateFieldsByKey = new Map((template?.booking_fields || []).map(field => [field.fieldKey, field]));
 
       const invalidFieldKeys = req.body.disabledBookingFields.filter(fieldKey => {
         const templateField = templateFieldsByKey.get(fieldKey);
@@ -163,7 +167,7 @@ const updateBusiness = async (req, res, next) => {
     const business = await businessService.updateBusiness(businessId, req.body);
 
     // Remove accessToken from response
-    const businessData = business.toObject();
+    const businessData = { ...business };
     delete businessData.accessToken;
 
     return successResponse(res, 200, businessData);
@@ -316,7 +320,7 @@ const connectWhatsapp = async (req, res, next) => {
 
     // Check if phoneNumberId is already used by another business
     const existingBusiness = await businessService.getBusinessByPhoneNumberId(phoneNumberId);
-    if (existingBusiness && existingBusiness._id.toString() !== req.user.businessId.toString()) {
+    if (existingBusiness && existingBusiness.id !== req.user.businessId) {
       return errorResponse(res, 409, 'This WhatsApp number is already connected to another business.');
     }
 
@@ -376,7 +380,7 @@ const connectWhatsapp = async (req, res, next) => {
     await tenantService.invalidateTenantCache(phoneNumberId);
 
     // Remove accessToken from response
-    const businessData = business.toObject();
+    const businessData = { ...business };
     delete businessData.accessToken;
 
     return successResponse(res, 200, { business: businessData }, 'WhatsApp connected successfully');

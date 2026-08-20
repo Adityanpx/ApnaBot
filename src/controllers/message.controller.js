@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const Message = require('../models/Message');
 const Customer = require('../models/Customer');
-const Business = require('../models/Business');
+const businessService = require('../services/business.service');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
@@ -147,7 +147,7 @@ const sendMessage = async (req, res, next) => {
     }
 
     // Verify business has WhatsApp connected
-    const business = await Business.findById(businessId);
+    const business = await businessService.getBusinessById(businessId);
     if (!business) return errorResponse(res, 404, 'Business not found');
     if (!business.isWhatsappConnected || !business.phoneNumberId) {
       return errorResponse(res, 400, 'WhatsApp is not connected to this business');

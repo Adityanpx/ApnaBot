@@ -1,6 +1,11 @@
+// NOTE: Rule is still on Mongoose while businessId (req.user.businessId) is
+// now a Supabase UUID — every Rule.* call below (getRules, createRule,
+// updateRule, deleteRule, toggleRule, and the import loop in
+// bulkImportRules) throws a Mongoose CastError until Rule is migrated to
+// Supabase. This is the next migration step, not something patched here.
 const Rule = require('../models/Rule');
-const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
-const Business = require('../models/Business');
+const supabase = require('../config/supabase');
+const businessService = require('../services/business.service');
 const subscriptionService = require('../services/subscription.service');
 const { invalidateRulesCache } = require('../services/chatbot.service');
 const r2 = require('../services/r2.service');
@@ -333,20 +338,21 @@ const getTemplates = async (req, res, next) => {
     const businessId = req.user.businessId;
 
     // Get business to find business category
-    const business = await Business.findById(businessId);
+    const business = await businessService.getBusinessById(businessId);
     if (!business) {
       return errorResponse(res, 404, 'Business not found');
     }
 
     // Find template
-    const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
+    const { data: template } = await supabase
+      .from('business_type_templates').select('default_rules, booking_fields').eq('business_category', business.businessCategory).maybeSingle();
     if (!template) {
       return successResponse(res, 200, { defaultRules: [], bookingFields: [] });
     }
 
     return successResponse(res, 200, {
-      defaultRules: template.defaultRules || [],
-      bookingFields: template.bookingFields || []
+      defaultRules: template.default_rules || [],
+      bookingFields: template.booking_fields || []
     });
   } catch (error) {
     logger.error('Error in getTemplates:', error);
@@ -364,14 +370,15 @@ const bulkImportRules = async (req, res, next) => {
     const businessId = req.user.businessId;
 
     // Get business to find business category
-    const business = await Business.findById(businessId);
+    const business = await businessService.getBusinessById(businessId);
     if (!business) {
       return errorResponse(res, 404, 'Business not found');
     }
 
     // Find template
-    const template = await BusinessTypeTemplate.findOne({ businessCategory: business.businessCategory });
-    if (!template || !template.defaultRules) {
+    const { data: template } = await supabase
+      .from('business_type_templates').select('default_rules').eq('business_category', business.businessCategory).maybeSingle();
+    if (!template || !template.default_rules) {
       return errorResponse(res, 404, 'No template found for this business type');
     }
 
@@ -382,7 +389,7 @@ const bulkImportRules = async (req, res, next) => {
 
     // Import rules that don't already exist
     let createdCount = 0;
-    for (const rule of template.defaultRules) {
+    for (const rule of template.default_rules) {
       const existingRule = await Rule.findOne({ businessId, keyword: rule.keyword });
       if (!existingRule) {
         await Rule.create({
