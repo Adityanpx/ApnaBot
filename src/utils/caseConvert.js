@@ -11,6 +11,9 @@ const toCamelCase = (row) => {
     const camelKey = key.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
     result[camelKey] = value;
   }
+  if (result.id !== undefined && result._id === undefined) {
+    result._id = result.id;
+  }
   return result;
 };
 
