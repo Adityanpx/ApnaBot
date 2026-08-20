@@ -1,7 +1,7 @@
 const Rule = require('../models/Rule');
 const BusinessTypeTemplate = require('../models/BusinessTypeTemplate');
 const Business = require('../models/Business');
-const Subscription = require('../models/Subscription');
+const subscriptionService = require('../services/subscription.service');
 const { invalidateRulesCache } = require('../services/chatbot.service');
 const r2 = require('../services/r2.service');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -109,10 +109,10 @@ const createRule = async (req, res, next) => {
     const normalizedKeyword = keyword.toLowerCase().trim();
 
     // Check plan rule limit
-    const subscription = await Subscription.findOne({ businessId, status: 'active' }).populate('planId');
-    if (subscription && subscription.planId && subscription.planId.ruleLimit !== -1) {
+    const subscription = await subscriptionService.getActiveSubscription(businessId);
+    if (subscription && subscription.plan && subscription.plan.rule_limit !== -1) {
       const ruleCount = await Rule.countDocuments({ businessId });
-      if (ruleCount >= subscription.planId.ruleLimit) {
+      if (ruleCount >= subscription.plan.rule_limit) {
         return errorResponse(res, 403, 'Rule limit reached for your plan. Please upgrade.');
       }
     }

@@ -1,4 +1,4 @@
-const Subscription = require('../models/Subscription');
+const supabase = require('../config/supabase');
 const { errorResponse } = require('../utils/response');
 const redis = require('../config/redis');
 
@@ -20,10 +20,14 @@ const requireFeature = (featureName) => {
         subscription = JSON.parse(subscription);
       } else {
         // Query DB if not in cache
-        subscription = await Subscription.findOne({
-          businessId,
-          status: 'active'
-        }).populate('planId');
+        const { data, error } = await supabase
+          .from('subscriptions')
+          .select('*, plan:plans(*)')
+          .eq('business_id', businessId)
+          .eq('status', 'active')
+          .maybeSingle();
+        if (error) throw error;
+        subscription = data;
 
         if (subscription) {
           // Cache for 5 minutes
@@ -37,19 +41,19 @@ const requireFeature = (featureName) => {
       }
 
       // Get the plan
-      const plan = subscription.planId || subscription.planId;
+      const plan = subscription.plan;
 
       // Check if feature is enabled
       let featureEnabled = false;
       switch (featureName) {
         case 'paymentLink':
-          featureEnabled = plan.paymentLinkEnabled;
+          featureEnabled = plan.payment_link_enabled;
           break;
         case 'staff':
-          featureEnabled = plan.staffEnabled;
+          featureEnabled = plan.staff_enabled;
           break;
         case 'booking':
-          featureEnabled = plan.bookingEnabled;
+          featureEnabled = plan.booking_enabled;
           break;
         default:
           featureEnabled = false;

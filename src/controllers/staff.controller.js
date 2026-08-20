@@ -1,7 +1,7 @@
 // src/controllers/staff.controller.js — CREATE THIS FILE
 
 const User = require('../models/User');
-const Subscription = require('../models/Subscription');
+const subscriptionService = require('../services/subscription.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { buildPermissions } = require('../services/auth.service');
 const logger = require('../utils/logger');
@@ -43,17 +43,16 @@ const inviteStaff = async (req, res, next) => {
     }
 
     // Check plan allows staff
-    const subscription = await Subscription.findOne({ businessId, status: 'active' })
-      .populate('planId');
+    const subscription = await subscriptionService.getActiveSubscription(businessId);
 
     if (!subscription) {
       return errorResponse(res, 403, 'No active subscription. Cannot add staff.');
     }
-    if (!subscription.planId.staffEnabled) {
+    if (!subscription.plan.staff_enabled) {
       return errorResponse(res, 403, 'Staff feature not available on your plan. Please upgrade.');
     }
 
-    const maxStaff = subscription.planId.maxStaff || 0;
+    const maxStaff = subscription.plan.max_staff || 0;
     const currentCount = await User.countDocuments({ businessId, role: 'staff', isActive: true });
 
     if (currentCount >= maxStaff) {

@@ -1,9 +1,6 @@
-// src/controllers/subscription.controller.js — CREATE THIS FILE
-
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const Subscription = require('../models/Subscription');
-const Plan = require('../models/Plan');
+const supabase = require('../config/supabase');
 const subscriptionService = require('../services/subscription.service');
 const usageService = require('../services/usage.service');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -23,16 +20,22 @@ const getCurrentSubscription = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
-    const [subscription, usage] = await Promise.all([
-      Subscription.findOne({ businessId, status: { $in: ['active', 'trial'] } })
-        .populate('planId')
-        .lean(),
+    const [subResult, usage] = await Promise.all([
+      supabase
+        .from('subscriptions')
+        .select('*, plan:plans(*)')
+        .eq('business_id', businessId)
+        .in('status', ['active', 'trial'])
+        .maybeSingle(),
       usageService.getUsageForBusiness(businessId)
     ]);
 
+    if (subResult.error) throw subResult.error;
+    const subscription = subResult.data;
+
     return successResponse(res, 200, {
       subscription: subscription || null,
-      plan: subscription?.planId || null,
+      plan: subscription?.plan || null,
       usage,
       isActive: !!subscription
     });
@@ -48,7 +51,12 @@ const getCurrentSubscription = async (req, res, next) => {
  */
 const getPlans = async (req, res, next) => {
   try {
-    const plans = await Plan.find({ isActive: true }).sort({ price: 1 });
+    const { data: plans, error } = await supabase
+      .from('plans')
+      .select('*')
+      .eq('is_active', true)
+      .order('price', { ascending: true });
+    if (error) throw error;
     return successResponse(res, 200, { plans });
   } catch (error) {
     logger.error('Error in getPlans:', error);
@@ -67,8 +75,8 @@ const createSubscriptionOrder = async (req, res, next) => {
 
     if (!planId) return errorResponse(res, 400, 'planId is required');
 
-    const plan = await Plan.findById(planId);
-    if (!plan || !plan.isActive) return errorResponse(res, 404, 'Plan not found');
+    const { data: plan } = await supabase.from('plans').select('*').eq('id', planId).maybeSingle();
+    if (!plan || !plan.is_active) return errorResponse(res, 404, 'Plan not found');
 
     const order = await razorpay.orders.create({
       amount: plan.price * 100, // paise
@@ -87,9 +95,9 @@ const createSubscriptionOrder = async (req, res, next) => {
       amount: order.amount,
       currency: order.currency,
       plan: {
-        _id: plan._id,
+        _id: plan.id,
         name: plan.name,
-        displayName: plan.displayName,
+        displayName: plan.display_name,
         price: plan.price
       }
     });
@@ -135,7 +143,12 @@ const verifyAndActivate = async (req, res, next) => {
       razorpaySubscriptionId: razorpay_order_id
     });
 
-    const populated = await Subscription.findById(subscription._id).populate('planId');
+    const { data: populated, error } = await supabase
+      .from('subscriptions')
+      .select('*, plan:plans(*)')
+      .eq('id', subscription.id)
+      .single();
+    if (error) throw error;
 
     logger.info(`Subscription activated for business ${businessId}, payment ${razorpay_payment_id}`);
     return successResponse(res, 200, { subscription: populated }, 'Subscription activated successfully');
@@ -153,17 +166,19 @@ const cancelAutoRenew = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
-    const sub = await Subscription.findOne({ businessId, status: 'active' });
+    const { data: sub } = await supabase
+      .from('subscriptions').select('*').eq('business_id', businessId).eq('status', 'active').maybeSingle();
     if (!sub) return errorResponse(res, 404, 'No active subscription found');
-    if (!sub.autoRenew) return errorResponse(res, 400, 'Auto-renew is already disabled');
+    if (!sub.auto_renew) return errorResponse(res, 400, 'Auto-renew is already disabled');
 
-    sub.autoRenew = false;
-    await sub.save();
+    const { data: updated, error } = await supabase
+      .from('subscriptions').update({ auto_renew: false }).eq('id', sub.id).select().single();
+    if (error) throw error;
 
     logger.info(`Auto-renew cancelled for business ${businessId}`);
     return successResponse(
-      res, 200, sub,
-      `Auto-renew cancelled. Subscription active until ${sub.endDate.toDateString()}`
+      res, 200, updated,
+      `Auto-renew cancelled. Subscription active until ${new Date(updated.end_date).toDateString()}`
     );
   } catch (error) {
     logger.error('Error in cancelAutoRenew:', error);

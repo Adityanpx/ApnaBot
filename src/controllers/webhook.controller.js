@@ -166,7 +166,7 @@ const receiveWebhook = async (req, res) => {
     }
 
     // Step 7 - Check usage limit
-    const msgLimit = tenant.plan?.msgLimit || 500;
+    const msgLimit = tenant.plan?.msg_limit || 500;
     const usageCheck = await usageService.checkUsageLimit(tenant.businessId, msgLimit);
     if (!usageCheck.allowed) {
       logger.warn(`Usage limit reached for business ${tenant.businessId}`);
@@ -206,7 +206,7 @@ const receiveWebhook = async (req, res) => {
     usageService.incrementUsage(tenant.businessId, 'inbound');
 
     // ADD THIS — Emit usage_update to Flutter dashboard
-    usageService.checkUsageLimit(tenant.businessId, tenant.plan?.msgLimit || 500)
+    usageService.checkUsageLimit(tenant.businessId, tenant.plan?.msg_limit || 500)
       .then(usageCheck => {
         socketService.emitToBusiness(tenant.businessId.toString(), 'usage_update', {
           msgCount: usageCheck.current,

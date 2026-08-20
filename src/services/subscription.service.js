@@ -1,7 +1,4 @@
-// src/services/subscription.service.js — CREATE THIS FILE
-
-const Subscription = require('../models/Subscription');
-const Business = require('../models/Business');
+const supabase = require('../config/supabase');
 const redis = require('../config/redis');
 const logger = require('../utils/logger');
 
@@ -10,7 +7,7 @@ const CACHE_TTL = 300; // 5 minutes
 
 /**
  * Get active subscription for business with plan details.
- * Redis-first, falls back to MongoDB.
+ * Redis-first, falls back to Supabase.
  */
 const getActiveSubscription = async (businessId) => {
   try {
@@ -18,9 +15,13 @@ const getActiveSubscription = async (businessId) => {
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
-    const sub = await Subscription.findOne({ businessId, status: 'active' })
-      .populate('planId')
-      .lean();
+    const { data: sub, error } = await supabase
+      .from('subscriptions')
+      .select('*, plan:plans(*)')
+      .eq('business_id', businessId)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (error) throw error;
 
     if (sub) await redis.set(cacheKey, JSON.stringify(sub), 'EX', CACHE_TTL);
     return sub || null;
@@ -49,28 +50,37 @@ const invalidateSubscriptionCache = async (businessId) => {
 const createSubscription = async (businessId, planId, options = {}) => {
   try {
     // Cancel existing active subscriptions
-    await Subscription.updateMany(
-      { businessId, status: 'active' },
-      { status: 'cancelled' }
-    );
+    const { error: cancelErr } = await supabase
+      .from('subscriptions')
+      .update({ status: 'cancelled' })
+      .eq('business_id', businessId)
+      .eq('status', 'active');
+    if (cancelErr) throw cancelErr;
 
     const startDate = new Date();
     const endDate = new Date();
     endDate.setMonth(endDate.getMonth() + 1); // 1 month validity
 
-    const sub = await Subscription.create({
-      businessId,
-      planId,
-      status: options.status || 'active',
-      startDate,
-      endDate,
-      razorpaySubscriptionId: options.razorpaySubscriptionId || null,
-      razorpayPaymentId: options.razorpayPaymentId || null,
-      autoRenew: options.autoRenew !== undefined ? options.autoRenew : true
-    });
+    const { data: sub, error } = await supabase
+      .from('subscriptions')
+      .insert({
+        business_id: businessId,
+        plan_id: planId,
+        status: options.status || 'active',
+        start_date: startDate.toISOString(),
+        end_date: endDate.toISOString(),
+        razorpay_subscription_id: options.razorpaySubscriptionId || null,
+        razorpay_payment_id: options.razorpayPaymentId || null,
+        auto_renew: options.autoRenew !== undefined ? options.autoRenew : true
+      })
+      .select()
+      .single();
+    if (error) throw error;
 
     // Activate business on subscription creation
-    await Business.findByIdAndUpdate(businessId, { isActive: true });
+    const { error: bizErr } = await supabase
+      .from('businesses').update({ is_active: true }).eq('id', businessId);
+    if (bizErr) throw bizErr;
 
     await invalidateSubscriptionCache(businessId);
 
@@ -88,33 +98,40 @@ const createSubscription = async (businessId, planId, options = {}) => {
  */
 const runExpiryCheck = async () => {
   try {
-    const now = new Date();
+    const now = new Date().toISOString();
     logger.info('Running subscription expiry check...');
 
-    const expiredSubs = await Subscription.find({
-      status: 'active',
-      endDate: { $lt: now }
-    });
+    const { data: expiredSubs, error } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .eq('status', 'active')
+      .lt('end_date', now);
+    if (error) throw error;
 
     logger.info(`Found ${expiredSubs.length} expired subscriptions`);
 
     for (const sub of expiredSubs) {
       try {
-        sub.status = 'expired';
-        await sub.save();
+        const { error: subErr } = await supabase
+          .from('subscriptions').update({ status: 'expired' }).eq('id', sub.id);
+        if (subErr) throw subErr;
 
-        await Business.findByIdAndUpdate(sub.businessId, { isActive: false });
+        const { error: bizErr } = await supabase
+          .from('businesses').update({ is_active: false }).eq('id', sub.business_id);
+        if (bizErr) throw bizErr;
 
         // Clear Redis caches
-        await redis.del(CACHE_KEY(sub.businessId));
-        const business = await Business.findById(sub.businessId).select('phoneNumberId');
-        if (business?.phoneNumberId) {
-          await redis.del(`tenant:${business.phoneNumberId}`);
+        await redis.del(CACHE_KEY(sub.business_id));
+
+        const { data: business } = await supabase
+          .from('businesses').select('phone_number_id').eq('id', sub.business_id).maybeSingle();
+        if (business?.phone_number_id) {
+          await redis.del(`tenant:${business.phone_number_id}`);
         }
 
-        logger.info(`Subscription expired for business ${sub.businessId}`);
+        logger.info(`Subscription expired for business ${sub.business_id}`);
       } catch (err) {
-        logger.error(`Error processing expiry for sub ${sub._id}:`, err);
+        logger.error(`Error processing expiry for sub ${sub.id}:`, err);
       }
     }
 

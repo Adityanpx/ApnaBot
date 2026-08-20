@@ -1,5 +1,4 @@
-const Business = require('../models/Business');
-const Subscription = require('../models/Subscription');
+const supabase = require('../config/supabase');
 const redis = require('../config/redis');
 const logger = require('../utils/logger');
 
@@ -20,10 +19,13 @@ const resolveBusinessByPhoneNumberId = async (phoneNumberId) => {
     }
 
     // Step 2: Cache miss - query DB
-    const business = await Business.findOne({
-      phoneNumberId,
-      isActive: true
-    }).populate('ownerUserId', 'name email');
+    const { data: business, error: bizErr } = await supabase
+      .from('businesses')
+      .select('*, owner:users!owner_user_id(name, email)')
+      .eq('phone_number_id', phoneNumberId)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (bizErr) throw bizErr;
 
     if (!business) {
       logger.warn(`No business found for phoneNumberId: ${phoneNumberId}`);
@@ -31,24 +33,27 @@ const resolveBusinessByPhoneNumberId = async (phoneNumberId) => {
     }
 
     // Step 3: Load active subscription for business
-    const subscription = await Subscription.findOne({
-      businessId: business._id,
-      status: 'active'
-    }).populate('planId');
+    const { data: subscription, error: subErr } = await supabase
+      .from('subscriptions')
+      .select('*, plan:plans(*)')
+      .eq('business_id', business.id)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (subErr) throw subErr;
 
     // Step 4: Build tenant object
     const tenant = {
-      businessId: business._id,
+      businessId: business.id,
       businessName: business.name,
-      displayName: business.displayName,
-      phoneNumberId: business.phoneNumberId,
-      accessToken: business.accessToken, // Still encrypted here
-      fallbackReply: business.fallbackReply,
-      enableSmartFallback: business.enableSmartFallback,
-      businessCategory: business.businessCategory,
-      isActive: business.isActive,
+      displayName: business.display_name,
+      phoneNumberId: business.phone_number_id,
+      accessToken: business.access_token, // Still encrypted here
+      fallbackReply: business.fallback_reply,
+      enableSmartFallback: business.enable_smart_fallback,
+      businessCategory: business.business_category,
+      isActive: business.is_active,
       subscription: subscription || null,
-      plan: subscription ? subscription.planId : null
+      plan: subscription ? subscription.plan : null
     };
 
     // Step 5: Store in Redis with 1 hour TTL
