@@ -3,9 +3,20 @@ const { toCamelCase } = require('../utils/caseConvert');
 const subscriptionService = require('../services/subscription.service');
 const tenantService = require('../services/tenant.service');
 const adminService = require('../services/admin.service');
+const { invalidateRulesCache } = require('../services/chatbot.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const logger = require('../utils/logger');
+
+// Tables with business_id and ON DELETE CASCADE on the businesses FK (see
+// supabase/migrations/20260819213717_init_schema.sql) — deleting the business
+// row atomically wipes these in the same statement, so they're only counted
+// here (for the response) rather than deleted individually.
+const CASCADE_DELETED_TABLES = [
+  'customers', 'rules', 'bookings', 'vehicles', 'route_fares',
+  'rental_packages', 'messages', 'message_templates', 'broadcasts',
+  'usage', 'subscriptions'
+];
 
 const toCamelCaseDeep = (row, nestedKeys = []) => {
   if (!row) return row;
@@ -138,6 +149,112 @@ const toggleShop = async (req, res, next) => {
     return successResponse(res, 200, { isActive: newIsActive }, `Business ${action} successfully`);
   } catch (error) {
     logger.error('Error in toggleShop:', error);
+    next(error);
+  }
+};
+
+/**
+ * DELETE /api/admin/shops/:id
+ * Permanently delete a business and cascade-delete every row that belongs to it.
+ *
+ * customers, rules, bookings, vehicles, route_fares, rental_packages, messages,
+ * message_templates, broadcasts, usage, and subscriptions all have ON DELETE
+ * CASCADE on their business_id FK, so deleting the business row wipes them in
+ * one atomic DB statement — no manual per-table deletes needed (and no risk of
+ * a partial failure among them).
+ *
+ * users.business_id has NO cascade, and businesses.owner_user_id is a NOT NULL
+ * FK back to users — a circular reference — so owner/staff users need explicit
+ * handling in this order:
+ *   1. delete staff users (business_id = this business, role = 'staff')
+ *   2. null out the owner's business_id (unblocks deleting the business row)
+ *   3. delete the business row (cascades the 11 tables above)
+ *   4. delete the owner user row (unblocked now that the business row is gone)
+ *
+ * NOT deleted: plans, business_type_templates, flow_packs, vehicle_type_catalog
+ * (shared/global, not business-owned).
+ */
+const deleteShop = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const { data: business, error: fetchErr } = await supabase
+      .from('businesses').select('id, name, owner_user_id, phone_number_id').eq('id', id).maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!business) return errorResponse(res, 404, 'Business not found');
+
+    // Pre-count cascade-covered tables so the response can confirm what was removed
+    const cascadeCounts = {};
+    for (const table of CASCADE_DELETED_TABLES) {
+      const { count, error } = await supabase
+        .from(table).select('id', { count: 'exact', head: true }).eq('business_id', id);
+      if (error) throw error;
+      cascadeCounts[table] = count || 0;
+    }
+
+    const { count: staffCount, error: staffCountErr } = await supabase
+      .from('users').select('id', { count: 'exact', head: true })
+      .eq('business_id', id).eq('role', 'staff');
+    if (staffCountErr) throw staffCountErr;
+
+    logger.info(`[deleteShop] business=${id} (${business.name}) — starting delete. Row counts: ${JSON.stringify({ ...cascadeCounts, staffUsers: staffCount || 0 })}`);
+
+    // 1. Delete staff users tied to this business — nothing else references them
+    const { error: staffDelErr } = await supabase
+      .from('users').delete().eq('business_id', id).eq('role', 'staff');
+    if (staffDelErr) {
+      logger.error(`[deleteShop] business=${id} — failed deleting staff users, nothing else was touched:`, staffDelErr);
+      throw staffDelErr;
+    }
+    logger.info(`[deleteShop] business=${id} — deleted ${staffCount || 0} staff user(s)`);
+
+    // 2. Unlink the owner so users.business_id no longer blocks deleting the business row
+    const { error: ownerUnlinkErr } = await supabase
+      .from('users').update({ business_id: null }).eq('id', business.owner_user_id);
+    if (ownerUnlinkErr) {
+      logger.error(`[deleteShop] business=${id} — failed unlinking owner ${business.owner_user_id}, business row and owner user are untouched:`, ownerUnlinkErr);
+      throw ownerUnlinkErr;
+    }
+    logger.info(`[deleteShop] business=${id} — unlinked owner ${business.owner_user_id} from business`);
+
+    // 3. Delete the business row — cascades customers/rules/bookings/vehicles/
+    // route_fares/rental_packages/messages/message_templates/broadcasts/usage/subscriptions
+    const { error: bizDelErr } = await supabase.from('businesses').delete().eq('id', id);
+    if (bizDelErr) {
+      logger.error(`[deleteShop] business=${id} — failed deleting business row. Owner ${business.owner_user_id} is now unlinked but not deleted — rerun or manually delete the owner user if this business is not recovered:`, bizDelErr);
+      throw bizDelErr;
+    }
+    logger.info(`[deleteShop] business=${id} — deleted business row (cascaded ${JSON.stringify(cascadeCounts)})`);
+
+    // 4. Delete the owner user row now that nothing references it
+    const { error: ownerDelErr } = await supabase
+      .from('users').delete().eq('id', business.owner_user_id);
+    if (ownerDelErr) {
+      logger.error(`[deleteShop] business=${id} — business row and all its data are deleted, but failed deleting owner user ${business.owner_user_id}. Orphaned unlinked user needs manual cleanup:`, ownerDelErr);
+      throw ownerDelErr;
+    }
+    logger.info(`[deleteShop] business=${id} — deleted owner user ${business.owner_user_id}`);
+
+    // Flush caches for this business
+    await invalidateRulesCache(id);
+    await subscriptionService.invalidateSubscriptionCache(id);
+    if (business.phone_number_id) {
+      await tenantService.invalidateTenantCache(business.phone_number_id);
+    }
+
+    logger.info(`Business ${id} (${business.name}) permanently deleted by superadmin`);
+    return successResponse(res, 200, {
+      businessId: id,
+      businessName: business.name,
+      deleted: {
+        business: 1,
+        ownerUser: 1,
+        staffUsers: staffCount || 0,
+        ...cascadeCounts
+      }
+    }, 'Business and all related data deleted successfully');
+  } catch (error) {
+    logger.error('Error in deleteShop:', error);
     next(error);
   }
 };
@@ -439,6 +556,7 @@ module.exports = {
   getShops,
   getShopById,
   toggleShop,
+  deleteShop,
   changeShopPlan,
   extendSubscription,
   getPlatformStats,

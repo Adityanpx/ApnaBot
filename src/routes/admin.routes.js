@@ -8,6 +8,7 @@ const {
   getShops,
   getShopById,
   toggleShop,
+  deleteShop,
   changeShopPlan,
   extendSubscription,
   getPlatformStats,
@@ -27,6 +28,7 @@ router.use(protect, requireRole('superadmin'));
 router.get('/shops',                getShops);
 router.get('/shops/:id',            getShopById);
 router.put('/shops/:id/toggle',     toggleShop);
+router.delete('/shops/:id',         deleteShop);
 router.put('/shops/:id/plan',       changeShopPlan);
 router.put('/shops/:id/extend',     extendSubscription);
 
