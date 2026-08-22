@@ -157,10 +157,56 @@ const unblockCustomer = async (req, res, next) => {
   }
 };
 
+const OPT_IN_SOURCES = ['customer_initiated', 'manual', 'website_form'];
+
+/**
+ * PATCH /api/customers/:id/opt-in
+ * Set marketing opt-in status. 'customer_initiated' only proves consent for
+ * service-window replies, not marketing — callers must not pass optedIn=true
+ * with that source.
+ */
+const toggleCustomerOptIn = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { optedIn, source } = req.body;
+    const businessId = req.user.businessId;
+
+    if (typeof optedIn !== 'boolean') {
+      return errorResponse(res, 400, 'optedIn must be a boolean');
+    }
+    if (!source || !OPT_IN_SOURCES.includes(source)) {
+      return errorResponse(res, 400, `source must be one of: ${OPT_IN_SOURCES.join(', ')}`);
+    }
+    if (optedIn && source === 'customer_initiated') {
+      return errorResponse(res, 400, 'customer_initiated only establishes service-window consent and cannot be used to set marketing opt-in to true');
+    }
+
+    const { data: existing, error: findErr } = await supabase
+      .from('customers').select('id').eq('id', id).eq('business_id', businessId).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) return errorResponse(res, 404, 'Customer not found');
+
+    const { data: customer, error } = await supabase
+      .from('customers').update({
+        opted_in: optedIn,
+        opted_in_at: optedIn ? new Date().toISOString() : null,
+        opt_in_source: source
+      }).eq('id', id).select().single();
+    if (error) throw error;
+
+    logger.info(`Customer ${id} opt-in set to ${optedIn} (source: ${source}) for business ${businessId}`);
+    return successResponse(res, 200, toCamelCase(customer), 'Customer opt-in status updated');
+  } catch (error) {
+    logger.error('Error in toggleCustomerOptIn:', error);
+    next(error);
+  }
+};
+
 module.exports = {
   getCustomers,
   getCustomerById,
   updateCustomer,
   blockCustomer,
-  unblockCustomer
+  unblockCustomer,
+  toggleCustomerOptIn
 };

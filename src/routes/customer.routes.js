@@ -10,7 +10,8 @@ const {
   getCustomerById,
   updateCustomer,
   blockCustomer,
-  unblockCustomer
+  unblockCustomer,
+  toggleCustomerOptIn
 } = require('../controllers/customer.controller');
 
 router.use(protect, requireBusiness);
@@ -20,5 +21,6 @@ router.get('/:id',          requireRole('owner', 'staff', 'superadmin'), getCust
 router.put('/:id',          requireRole('owner', 'superadmin'),          updateCustomer);
 router.post('/:id/block',   requireRole('owner', 'superadmin'),          blockCustomer);
 router.post('/:id/unblock', requireRole('owner', 'superadmin'),          unblockCustomer);
+router.patch('/:id/opt-in', requireRole('owner', 'superadmin'),          toggleCustomerOptIn);
 
 module.exports = router;
