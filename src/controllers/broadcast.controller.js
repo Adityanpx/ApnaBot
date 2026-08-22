@@ -10,6 +10,11 @@ const logger = require('../utils/logger');
 // default for broadcast fan-out).
 const BATCH_SIZE = 50;
 
+// Temporary safety cap: ApnaBot is flat-fee with no per-message billing yet,
+// so an uncapped broadcast could run up uncapped Meta marketing-rate spend.
+// Adjust or remove once usage-based billing/wallet limits are in place.
+const MAX_BROADCAST_RECIPIENTS = 100;
+
 const chunk = (arr, size) => {
   const batches = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -115,6 +120,10 @@ const sendBroadcast = async (req, res, next) => {
 
     if (!customers || customers.length === 0) {
       return errorResponse(res, 400, 'No opted-in customers to send this broadcast to');
+    }
+
+    if (customers.length > MAX_BROADCAST_RECIPIENTS) {
+      return errorResponse(res, 400, `This broadcast has ${customers.length} eligible recipients, which exceeds the current limit of ${MAX_BROADCAST_RECIPIENTS}. Contact support to send larger broadcasts.`);
     }
 
     const { data: updatedBroadcast, error: updateErr } = await supabase.from('broadcasts').update({
