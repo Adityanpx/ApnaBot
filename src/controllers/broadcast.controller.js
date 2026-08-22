@@ -49,7 +49,7 @@ const getBroadcasts = async (req, res, next) => {
 const createBroadcast = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
-    const { name, templateId, templateVariables } = req.body;
+    const { name, templateId, templateVariables, variableMapping } = req.body;
 
     if (!name || !templateId) {
       return errorResponse(res, 400, 'name and templateId are required');
@@ -69,7 +69,8 @@ const createBroadcast = async (req, res, next) => {
       business_id: businessId,
       template_id: templateId,
       name,
-      template_variables: templateVariables || []
+      template_variables: templateVariables || [],
+      variable_mapping: variableMapping || null
     }).select().single();
     if (error) throw error;
 
@@ -114,7 +115,7 @@ const sendBroadcast = async (req, res, next) => {
     }
 
     const { data: customers, error: customersErr } = await supabase
-      .from('customers').select('id, whatsapp_number')
+      .from('customers').select('id, whatsapp_number, name')
       .eq('business_id', businessId).eq('opted_in', true).eq('is_blocked', false);
     if (customersErr) throw customersErr;
 
@@ -147,7 +148,8 @@ const sendBroadcast = async (req, res, next) => {
       templateName: templateRow.name,
       language: templateRow.language,
       components,
-      recipients: batch.map((c) => ({ customerId: c.id, whatsappNumber: c.whatsapp_number }))
+      variableMapping: broadcastRow.variable_mapping || null,
+      recipients: batch.map((c) => ({ customerId: c.id, whatsappNumber: c.whatsapp_number, customer: { name: c.name } }))
     })));
 
     logger.info(`Broadcast ${id} queued: ${customers.length} recipients across ${batches.length} batches`);

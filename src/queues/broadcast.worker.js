@@ -13,8 +13,25 @@ const connection = {
   tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined
 };
 
+// Resolves a recipient's own {{1}}, {{2}}... values from variableMapping
+// (see broadcast.controller.js createBroadcast) instead of the shared,
+// broadcast-wide components array. 'customer.name' pulls from that
+// recipient's own data; 'static' uses the fixed value from the mapping.
+const resolveRecipientComponents = (variableMapping, recipient) => {
+  const parameters = [...variableMapping]
+    .sort((a, b) => a.position - b.position)
+    .map((entry) => {
+      const text = entry.source === 'customer.name'
+        ? recipient.customer?.name
+        : entry.value;
+      return { type: 'text', text: String(text || '') };
+    });
+
+  return parameters.length > 0 ? [{ type: 'body', parameters }] : [];
+};
+
 const worker = new Worker('broadcast-outbound', async (job) => {
-  const { broadcastId, businessId, phoneNumberId, encryptedAccessToken, templateName, language, components, recipients } = job.data;
+  const { broadcastId, businessId, phoneNumberId, encryptedAccessToken, templateName, language, components, variableMapping, recipients } = job.data;
 
   let sent = 0;
   let failed = 0;
@@ -24,7 +41,10 @@ const worker = new Worker('broadcast-outbound', async (job) => {
   // progress tracking for the batch, not just a retry.
   for (const recipient of recipients) {
     try {
-      await whatsappService.sendTemplateMessage(phoneNumberId, encryptedAccessToken, recipient.whatsappNumber, templateName, language, components);
+      const recipientComponents = variableMapping
+        ? resolveRecipientComponents(variableMapping, recipient)
+        : components;
+      await whatsappService.sendTemplateMessage(phoneNumberId, encryptedAccessToken, recipient.whatsappNumber, templateName, language, recipientComponents);
       sent += 1;
     } catch (error) {
       failed += 1;
