@@ -6,6 +6,7 @@ const usageService = require('../services/usage.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const config = require('../config/env');
 const logger = require('../utils/logger');
+const { toCamelCase } = require('../utils/caseConvert');
 
 const razorpay = new Razorpay({
   key_id: config.RAZORPAY_KEY_ID,
@@ -31,7 +32,9 @@ const getCurrentSubscription = async (req, res, next) => {
     ]);
 
     if (subResult.error) throw subResult.error;
-    const subscription = subResult.data;
+    const subscription = subResult.data
+      ? { ...toCamelCase(subResult.data), plan: toCamelCase(subResult.data.plan) }
+      : null;
 
     return successResponse(res, 200, {
       subscription: subscription || null,
@@ -57,7 +60,7 @@ const getPlans = async (req, res, next) => {
       .eq('is_active', true)
       .order('price', { ascending: true });
     if (error) throw error;
-    return successResponse(res, 200, { plans });
+    return successResponse(res, 200, { plans: (plans || []).map(toCamelCase) });
   } catch (error) {
     logger.error('Error in getPlans:', error);
     next(error);
@@ -151,7 +154,8 @@ const verifyAndActivate = async (req, res, next) => {
     if (error) throw error;
 
     logger.info(`Subscription activated for business ${businessId}, payment ${razorpay_payment_id}`);
-    return successResponse(res, 200, { subscription: populated }, 'Subscription activated successfully');
+    const camelPopulated = { ...toCamelCase(populated), plan: toCamelCase(populated.plan) };
+    return successResponse(res, 200, { subscription: camelPopulated }, 'Subscription activated successfully');
   } catch (error) {
     logger.error('Error in verifyAndActivate:', error);
     next(error);
@@ -176,8 +180,9 @@ const cancelAutoRenew = async (req, res, next) => {
     if (error) throw error;
 
     logger.info(`Auto-renew cancelled for business ${businessId}`);
+    const camelUpdated = toCamelCase(updated);
     return successResponse(
-      res, 200, updated,
+      res, 200, camelUpdated,
       `Auto-renew cancelled. Subscription active until ${new Date(updated.end_date).toDateString()}`
     );
   } catch (error) {
