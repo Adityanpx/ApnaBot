@@ -21,6 +21,13 @@ try {
   logger.warn('BullMQ worker not started (Redis may not be available):', err.message);
 }
 
+try {
+  require('./src/queues/broadcast.worker');
+  logger.info('Broadcast BullMQ worker started');
+} catch (err) {
+  logger.warn('Broadcast BullMQ worker not started (Redis may not be available):', err.message);
+}
+
 // ── Subscription Expiry Cron (every 24 hours) ──────────────────────────────
 const subscriptionService = require('./src/services/subscription.service');
 

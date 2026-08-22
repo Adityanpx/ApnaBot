@@ -26,6 +26,7 @@ const vehicleRoutes = require('./routes/vehicle.routes');
 const routeFareRoutes = require('./routes/routeFare.routes');
 const rentalPackageRoutes = require('./routes/rentalPackage.routes');
 const messageTemplateRoutes = require('./routes/messageTemplate.routes');
+const broadcastRoutes = require('./routes/broadcast.routes');
 
 const app = express();
 
@@ -104,6 +105,7 @@ app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/route-fares', routeFareRoutes);
 app.use('/api/rental-packages', rentalPackageRoutes);
 app.use('/api/message-templates', messageTemplateRoutes);
+app.use('/api/broadcasts', broadcastRoutes);
 
 // Error handler middleware
 app.use(errorHandler);
