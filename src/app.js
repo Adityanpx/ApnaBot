@@ -27,6 +27,7 @@ const routeFareRoutes = require('./routes/routeFare.routes');
 const rentalPackageRoutes = require('./routes/rentalPackage.routes');
 const messageTemplateRoutes = require('./routes/messageTemplate.routes');
 const broadcastRoutes = require('./routes/broadcast.routes');
+const walletRoutes = require('./routes/wallet.routes');
 
 const app = express();
 
@@ -106,6 +107,7 @@ app.use('/api/route-fares', routeFareRoutes);
 app.use('/api/rental-packages', rentalPackageRoutes);
 app.use('/api/message-templates', messageTemplateRoutes);
 app.use('/api/broadcasts', broadcastRoutes);
+app.use('/api/wallet', walletRoutes);
 
 // Error handler middleware
 app.use(errorHandler);
