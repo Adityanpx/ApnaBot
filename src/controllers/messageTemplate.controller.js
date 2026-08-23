@@ -42,7 +42,7 @@ const getMessageTemplates = async (req, res, next) => {
 const createMessageTemplate = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
-    const { name, category, language, bodyText } = req.body;
+    const { name, category, language, bodyText, variableSamples } = req.body;
 
     if (!name || !bodyText) {
       return errorResponse(res, 400, 'name and bodyText are required');
@@ -52,13 +52,23 @@ const createMessageTemplate = async (req, res, next) => {
       return errorResponse(res, 400, 'name must be lowercase_snake_case, alphanumeric characters and underscores only');
     }
 
+    const variableCount = countTemplateVariables(bodyText);
+
+    if (variableSamples !== undefined && variableCount > 0) {
+      if (!Array.isArray(variableSamples) || variableSamples.length !== variableCount) {
+        const placeholders = Array.from({ length: variableCount }, (_, i) => `{{${i + 1}}}`).join(', ');
+        return errorResponse(res, 400, `This template has ${variableCount} variables (${placeholders}) - provide exactly ${variableCount} sample values.`);
+      }
+    }
+
     const { data: template, error } = await supabase.from('message_templates').insert({
       business_id: businessId,
       name,
       category: category || 'MARKETING',
       language: language || 'en',
       body_text: bodyText,
-      variable_count: countTemplateVariables(bodyText)
+      variable_count: variableCount,
+      variable_samples: variableSamples !== undefined ? variableSamples : null
     }).select().single();
     if (error) throw error;
 
@@ -90,12 +100,21 @@ const submitMessageTemplate = async (req, res, next) => {
       return errorResponse(res, 400, 'Only draft or rejected templates can be submitted');
     }
 
+    if (template.variableCount > 0 && (!Array.isArray(template.variableSamples) || template.variableSamples.length === 0)) {
+      return errorResponse(res, 400, "Add sample values for this template's variables before submitting");
+    }
+
     const business = await businessService.getBusinessById(businessId);
     if (!business || !business.wabaId || !business.accessToken) {
       return errorResponse(res, 400, 'Business is not connected to WhatsApp. Please connect WhatsApp first.');
     }
 
     const accessToken = decrypt(business.accessToken);
+
+    const bodyComponent = { type: 'BODY', text: template.bodyText };
+    if (template.variableCount > 0) {
+      bodyComponent.example = { body_text: [template.variableSamples] };
+    }
 
     let metaResponse;
     try {
@@ -106,7 +125,7 @@ const submitMessageTemplate = async (req, res, next) => {
           category: template.category,
           language: template.language,
           components: [
-            { type: 'BODY', text: template.bodyText }
+            bodyComponent
           ]
         },
         {
