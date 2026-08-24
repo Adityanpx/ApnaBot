@@ -199,6 +199,92 @@ const receiveWebhook = async (req, res) => {
       return;
     }
 
+    // Handle message template status updates (Meta approves/rejects/pauses a
+    // template submitted via messageTemplate.controller.js's submit flow) so
+    // message_templates.status doesn't stay stuck on 'pending' forever.
+    if (changes?.field === 'message_template_status_update') {
+      const templateEvent = value?.event; // Meta's casing: 'APPROVED', 'REJECTED', 'PAUSED', 'DISABLED'
+      const metaTemplateId = value?.message_template_id;
+      const templateName = value?.message_template_name;
+      const rejectionReason = value?.reason; // present on rejections
+
+      // message_templates.status has a check constraint of
+      // ('draft','pending','approved','rejected') - PAUSED/DISABLED have no
+      // matching value, so they're logged and skipped rather than written.
+      const TEMPLATE_EVENT_TO_STATUS = { APPROVED: 'approved', REJECTED: 'rejected' };
+      const mappedStatus = TEMPLATE_EVENT_TO_STATUS[templateEvent];
+
+      if (!mappedStatus) {
+        logger.warn(`Unhandled message_template_status_update event "${templateEvent}" - no matching message_templates.status value, skipping`, {
+          metaTemplateId,
+          templateName
+        });
+        return;
+      }
+
+      const updateFields = {
+        status: mappedStatus,
+        reviewed_at: new Date().toISOString(),
+        rejection_reason: mappedStatus === 'rejected' ? (rejectionReason || null) : null
+      };
+
+      let updatedTemplate = null;
+      if (metaTemplateId) {
+        const { data, error } = await supabase
+          .from('message_templates')
+          .update(updateFields)
+          .eq('meta_template_id', metaTemplateId)
+          .select()
+          .maybeSingle();
+        if (error) {
+          logger.error('Error updating message_templates by meta_template_id:', error);
+          return;
+        }
+        updatedTemplate = data;
+      }
+
+      // Legacy fallback: submitMessageTemplate always sets meta_template_id
+      // together with status 'pending', so this only matters for a row that
+      // predates that flow or otherwise never got meta_template_id persisted.
+      if (!updatedTemplate && templateName) {
+        const { data, error } = await supabase
+          .from('message_templates')
+          .update(updateFields)
+          .eq('name', templateName)
+          .is('meta_template_id', null)
+          .select()
+          .maybeSingle();
+        if (error) {
+          logger.error('Error updating message_templates by name fallback:', error);
+          return;
+        }
+        updatedTemplate = data;
+      }
+
+      if (!updatedTemplate) {
+        logger.warn('No message_templates row found for template status update', {
+          metaTemplateId,
+          templateName,
+          templateEvent
+        });
+        return;
+      }
+
+      try {
+        socketService.emitToBusiness(updatedTemplate.business_id, 'template_status_update', {
+          templateId: updatedTemplate.id,
+          metaTemplateId: updatedTemplate.meta_template_id,
+          name: updatedTemplate.name,
+          status: updatedTemplate.status,
+          rejectionReason: updatedTemplate.rejection_reason
+        });
+      } catch (socketErr) {
+        logger.error('Error emitting template_status_update socket event:', socketErr);
+      }
+
+      return;
+    }
+
     // Check for messages
     const messages = value?.messages;
     if (!messages) {
