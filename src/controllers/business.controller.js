@@ -12,6 +12,38 @@ const config = require('../config/env');
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Resolves the WABA's phone number ID server-side, for the "connect existing
+ * WhatsApp Business app" (QR migration) signup path where Meta's FINISH
+ * postMessage often arrives before the number migration has finished on
+ * Meta's side, so the frontend doesn't reliably get a phoneNumberId. Retries
+ * a few times since the registration can still be in flight.
+ */
+const resolvePhoneNumberIdForWaba = async (wabaId, accessToken) => {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await axios.get(`${META_GRAPH_BASE}/${wabaId}/phone_numbers`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const numbers = response.data.data || [];
+
+    if (numbers.length === 1) {
+      return numbers[0].id;
+    }
+
+    if (numbers.length > 1) {
+      throw new Error('MULTIPLE_PHONE_NUMBERS');
+    }
+
+    if (attempt < maxAttempts) {
+      await sleep(2000);
+    }
+  }
+  return null;
+};
+
 // Valid business categories
 const VALID_BUSINESS_CATEGORIES = [
   'tailor',
@@ -303,7 +335,8 @@ const getServedCitySuggestions = async (req, res, next) => {
  */
 const connectWhatsapp = async (req, res, next) => {
   try {
-    const { code, wabaId, phoneNumberId } = req.body;
+    const { code, wabaId } = req.body;
+    let { phoneNumberId } = req.body;
 
     // Validate required fields
     if (!code) {
@@ -314,14 +347,14 @@ const connectWhatsapp = async (req, res, next) => {
       return errorResponse(res, 400, 'WhatsApp Business Account ID is required');
     }
 
-    if (!phoneNumberId) {
-      return errorResponse(res, 400, 'Phone number ID is required');
-    }
-
-    // Check if phoneNumberId is already used by another business
-    const existingBusiness = await businessService.getBusinessByPhoneNumberId(phoneNumberId);
-    if (existingBusiness && existingBusiness.id !== req.user.businessId) {
-      return errorResponse(res, 409, 'This WhatsApp number is already connected to another business.');
+    // If the frontend already has phoneNumberId (the normal "production
+    // setup" / fresh-number path), keep the early duplicate check before
+    // hitting Meta at all.
+    if (phoneNumberId) {
+      const existingBusiness = await businessService.getBusinessByPhoneNumberId(phoneNumberId);
+      if (existingBusiness && existingBusiness.id !== req.user.businessId) {
+        return errorResponse(res, 409, 'This WhatsApp number is already connected to another business.');
+      }
     }
 
     // Exchange the OAuth code for an access token server-side (never trust a
@@ -343,6 +376,32 @@ const connectWhatsapp = async (req, res, next) => {
 
     if (!accessToken) {
       return errorResponse(res, 400, 'Meta did not return an access token');
+    }
+
+    // phoneNumberId is missing: this is the "connect existing WhatsApp
+    // Business app" (QR migration) path, where Meta's FINISH postMessage
+    // often fires before the number migration has finished server-side.
+    // Fetch it from the WABA directly now that we have an access token.
+    if (!phoneNumberId) {
+      try {
+        phoneNumberId = await resolvePhoneNumberIdForWaba(wabaId, accessToken);
+      } catch (error) {
+        if (error.message === 'MULTIPLE_PHONE_NUMBERS') {
+          logger.error(`Multiple phone numbers found for WABA ${wabaId} while connecting business ${req.user.businessId}; refusing to auto-select.`);
+          return errorResponse(res, 400, 'This WhatsApp Business Account has more than one phone number. Please contact support to complete this connection.');
+        }
+        logger.error('Error fetching phone numbers for WABA:', error.response?.data || error.message);
+        return errorResponse(res, 400, 'Failed to fetch WhatsApp phone number details from Meta');
+      }
+
+      if (!phoneNumberId) {
+        return errorResponse(res, 400, "WhatsApp number registration is still processing on Meta's side - please try reconnecting in a minute.");
+      }
+
+      const existingBusiness = await businessService.getBusinessByPhoneNumberId(phoneNumberId);
+      if (existingBusiness && existingBusiness.id !== req.user.businessId) {
+        return errorResponse(res, 409, 'This WhatsApp number is already connected to another business.');
+      }
     }
 
     // Fetch the phone number's display number and verified business name
