@@ -24,10 +24,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const resolvePhoneNumberIdForWaba = async (wabaId, accessToken) => {
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    logger.info('resolvePhoneNumberIdForWaba: starting attempt', { wabaId, attempt, maxAttempts });
+
     const response = await axios.get(`${META_GRAPH_BASE}/${wabaId}/phone_numbers`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const numbers = response.data.data || [];
+
+    logger.info('resolvePhoneNumberIdForWaba: Graph API returned phone numbers', {
+      wabaId,
+      attempt,
+      count: numbers.length
+    });
 
     if (numbers.length === 1) {
       return numbers[0].id;
@@ -38,6 +46,7 @@ const resolvePhoneNumberIdForWaba = async (wabaId, accessToken) => {
     }
 
     if (attempt < maxAttempts) {
+      logger.info('resolvePhoneNumberIdForWaba: no phone number yet, retrying', { wabaId, attempt, maxAttempts });
       await sleep(2000);
     }
   }
@@ -338,6 +347,13 @@ const connectWhatsapp = async (req, res, next) => {
     const { code, wabaId } = req.body;
     let { phoneNumberId } = req.body;
 
+    logger.info('connectWhatsapp: endpoint hit', {
+      businessId: req.user.businessId,
+      wabaId,
+      codePrefix: typeof code === 'string' ? code.slice(0, 10) : code,
+      phoneNumberIdPresent: !!phoneNumberId
+    });
+
     // Validate required fields
     if (!code) {
       return errorResponse(res, 400, 'Authorization code is required');
@@ -361,6 +377,11 @@ const connectWhatsapp = async (req, res, next) => {
     // client-supplied token)
     let accessToken;
     try {
+      logger.info('connectWhatsapp: exchanging code for access token with Meta', {
+        businessId: req.user.businessId,
+        wabaId
+      });
+
       const tokenResponse = await axios.get(`${META_GRAPH_BASE}/oauth/access_token`, {
         params: {
           client_id: config.META_APP_ID,
@@ -369,8 +390,18 @@ const connectWhatsapp = async (req, res, next) => {
         }
       });
       accessToken = tokenResponse.data.access_token;
+
+      logger.info('connectWhatsapp: access token received from Meta', {
+        businessId: req.user.businessId,
+        wabaId,
+        tokenReceived: !!accessToken
+      });
     } catch (error) {
-      logger.error('Error exchanging WhatsApp signup code:', error.response?.data || error.message);
+      logger.error('Error exchanging WhatsApp signup code:', {
+        businessId: req.user.businessId,
+        wabaId,
+        error: error.response?.data || error.message
+      });
       return errorResponse(res, 400, 'Failed to exchange authorization code with Meta');
     }
 
@@ -383,16 +414,34 @@ const connectWhatsapp = async (req, res, next) => {
     // often fires before the number migration has finished server-side.
     // Fetch it from the WABA directly now that we have an access token.
     if (!phoneNumberId) {
+      logger.info('connectWhatsapp: phoneNumberId missing, resolving via resolvePhoneNumberIdForWaba', {
+        businessId: req.user.businessId,
+        wabaId
+      });
+
       try {
         phoneNumberId = await resolvePhoneNumberIdForWaba(wabaId, accessToken);
       } catch (error) {
         if (error.message === 'MULTIPLE_PHONE_NUMBERS') {
-          logger.error(`Multiple phone numbers found for WABA ${wabaId} while connecting business ${req.user.businessId}; refusing to auto-select.`);
+          logger.error(`Multiple phone numbers found for WABA ${wabaId} while connecting business ${req.user.businessId}; refusing to auto-select.`, {
+            businessId: req.user.businessId,
+            wabaId
+          });
           return errorResponse(res, 400, 'This WhatsApp Business Account has more than one phone number. Please contact support to complete this connection.');
         }
-        logger.error('Error fetching phone numbers for WABA:', error.response?.data || error.message);
+        logger.error('Error fetching phone numbers for WABA:', {
+          businessId: req.user.businessId,
+          wabaId,
+          error: error.response?.data || error.message
+        });
         return errorResponse(res, 400, 'Failed to fetch WhatsApp phone number details from Meta');
       }
+
+      logger.info('connectWhatsapp: resolvePhoneNumberIdForWaba returned', {
+        businessId: req.user.businessId,
+        wabaId,
+        phoneNumberId
+      });
 
       if (!phoneNumberId) {
         return errorResponse(res, 400, "WhatsApp number registration is still processing on Meta's side - please try reconnecting in a minute.");
@@ -415,7 +464,12 @@ const connectWhatsapp = async (req, res, next) => {
       whatsappNumber = (phoneResponse.data.display_phone_number || '').replace(/[^0-9]/g, '');
       displayName = phoneResponse.data.verified_name;
     } catch (error) {
-      logger.error('Error fetching WhatsApp phone number details:', error.response?.data || error.message);
+      logger.error('Error fetching WhatsApp phone number details:', {
+        businessId: req.user.businessId,
+        wabaId,
+        phoneNumberId,
+        error: error.response?.data || error.message
+      });
       return errorResponse(res, 400, 'Failed to fetch WhatsApp phone number details from Meta');
     }
 
@@ -426,6 +480,12 @@ const connectWhatsapp = async (req, res, next) => {
     }
 
     // Connect WhatsApp (service encrypts the access token before saving)
+    logger.info('connectWhatsapp: saving connection via businessService.connectWhatsapp', {
+      businessId: req.user.businessId,
+      wabaId,
+      phoneNumberId
+    });
+
     const business = await businessService.connectWhatsapp(req.user.businessId, {
       phoneNumberId,
       wabaId,
@@ -442,9 +502,20 @@ const connectWhatsapp = async (req, res, next) => {
     const businessData = { ...business, _id: business.id };
     delete businessData.accessToken;
 
+    logger.info('connectWhatsapp: connection saved, returning success', {
+      businessId: req.user.businessId,
+      wabaId,
+      phoneNumberId
+    });
+
     return successResponse(res, 200, { business: businessData }, 'WhatsApp connected successfully');
   } catch (error) {
-    logger.error('Error in connectWhatsapp:', error);
+    logger.error('Error in connectWhatsapp:', {
+      businessId: req.user.businessId,
+      wabaId: req.body?.wabaId,
+      phoneNumberId: req.body?.phoneNumberId,
+      error: error.response?.data || error.message || error
+    });
     next(error);
   }
 };
