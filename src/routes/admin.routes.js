@@ -5,11 +5,11 @@ const router = express.Router();
 const { protect } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/role.middleware');
 const {
-  getShops,
-  getShopById,
-  toggleShop,
-  deleteShop,
-  changeShopPlan,
+  getBusinesses,
+  getBusinessById,
+  toggleBusiness,
+  deleteBusiness,
+  changeBusinessPlan,
   extendSubscription,
   grantSubscription,
   getSubscriptionHistory,
@@ -26,17 +26,17 @@ const {
 // All admin routes — superadmin only
 router.use(protect, requireRole('superadmin'));
 
-// Shops
-router.get('/shops',                getShops);
-router.get('/shops/:id',            getShopById);
-router.put('/shops/:id/toggle',     toggleShop);
-router.delete('/shops/:id',         deleteShop);
-router.put('/shops/:id/plan',       changeShopPlan);
-router.put('/shops/:id/extend',     extendSubscription);
+// Businesses
+router.get('/businesses',                getBusinesses);
+router.get('/businesses/:id',            getBusinessById);
+router.put('/businesses/:id/toggle',     toggleBusiness);
+router.delete('/businesses/:id',         deleteBusiness);
+router.put('/businesses/:id/plan',       changeBusinessPlan);
+router.put('/businesses/:id/extend',     extendSubscription);
 
 // Manual subscription grants (superadmin override — bypasses payment)
-router.post('/shops/:id/grant-subscription',     grantSubscription);
-router.get('/shops/:id/subscription-history',    getSubscriptionHistory);
+router.post('/businesses/:id/grant-subscription',     grantSubscription);
+router.get('/businesses/:id/subscription-history',    getSubscriptionHistory);
 
 // Stats & Revenue
 router.get('/stats',                getPlatformStats);

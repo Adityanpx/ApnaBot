@@ -28,10 +28,10 @@ const toCamelCaseDeep = (row, nestedKeys = []) => {
 };
 
 /**
- * GET /api/admin/shops
+ * GET /api/admin/businesses
  * List all businesses — paginated + searchable
  */
-const getShops = async (req, res, next) => {
+const getBusinesses = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, search, isActive, businessCategory } = req.query;
     const pageNum = parseInt(page);
@@ -58,25 +58,25 @@ const getShops = async (req, res, next) => {
       ownersById = Object.fromEntries((owners || []).map((o) => [o.id, o]));
     }
 
-    const shops = rows.map((b) => {
+    const businesses = rows.map((b) => {
       const { access_token, ...safeRow } = b; // never expose encrypted token
       const owner = ownersById[b.owner_user_id];
       return { ...toCamelCase(safeRow), ownerUserId: owner ? toCamelCase(owner) : b.owner_user_id };
     });
 
     const pagination = getPagination(count || 0, pageNum, limitNum);
-    return successResponse(res, 200, { shops, pagination });
+    return successResponse(res, 200, { businesses, pagination });
   } catch (error) {
-    logger.error('Error in getShops:', error);
+    logger.error('Error in getBusinesses:', error);
     next(error);
   }
 };
 
 /**
- * GET /api/admin/shops/:id
+ * GET /api/admin/businesses/:id
  * Get full business detail — includes subscription + usage + users + stats
  */
-const getShopById = async (req, res, next) => {
+const getBusinessById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -111,7 +111,7 @@ const getShopById = async (req, res, next) => {
     const subscription = subscriptionRow ? toCamelCaseDeep(subscriptionRow, ['plan']) : null;
 
     return successResponse(res, 200, {
-      shop: { ...toCamelCase(safeBusinessRow), ownerUserId: owner || safeBusinessRow.owner_user_id },
+      business: { ...toCamelCase(safeBusinessRow), ownerUserId: owner || safeBusinessRow.owner_user_id },
       subscription,
       plan: subscription?.plan || null,
       users,
@@ -120,16 +120,16 @@ const getShopById = async (req, res, next) => {
       bookingCount: bookingCountRes.count || 0
     });
   } catch (error) {
-    logger.error('Error in getShopById:', error);
+    logger.error('Error in getBusinessById:', error);
     next(error);
   }
 };
 
 /**
- * PUT /api/admin/shops/:id/toggle
+ * PUT /api/admin/businesses/:id/toggle
  * Activate or deactivate a business
  */
-const toggleShop = async (req, res, next) => {
+const toggleBusiness = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -148,13 +148,13 @@ const toggleShop = async (req, res, next) => {
 
     return successResponse(res, 200, { isActive: newIsActive }, `Business ${action} successfully`);
   } catch (error) {
-    logger.error('Error in toggleShop:', error);
+    logger.error('Error in toggleBusiness:', error);
     next(error);
   }
 };
 
 /**
- * DELETE /api/admin/shops/:id
+ * DELETE /api/admin/businesses/:id
  * Permanently delete a business and cascade-delete every row that belongs to it.
  *
  * customers, rules, bookings, vehicles, route_fares, rental_packages, messages,
@@ -174,7 +174,7 @@ const toggleShop = async (req, res, next) => {
  * NOT deleted: plans, business_type_templates, flow_packs, vehicle_type_catalog
  * (shared/global, not business-owned).
  */
-const deleteShop = async (req, res, next) => {
+const deleteBusiness = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -197,43 +197,43 @@ const deleteShop = async (req, res, next) => {
       .eq('business_id', id).eq('role', 'staff');
     if (staffCountErr) throw staffCountErr;
 
-    logger.info(`[deleteShop] business=${id} (${business.name}) — starting delete. Row counts: ${JSON.stringify({ ...cascadeCounts, staffUsers: staffCount || 0 })}`);
+    logger.info(`[deleteBusiness] business=${id} (${business.name}) — starting delete. Row counts: ${JSON.stringify({ ...cascadeCounts, staffUsers: staffCount || 0 })}`);
 
     // 1. Delete staff users tied to this business — nothing else references them
     const { error: staffDelErr } = await supabase
       .from('users').delete().eq('business_id', id).eq('role', 'staff');
     if (staffDelErr) {
-      logger.error(`[deleteShop] business=${id} — failed deleting staff users, nothing else was touched:`, staffDelErr);
+      logger.error(`[deleteBusiness] business=${id} — failed deleting staff users, nothing else was touched:`, staffDelErr);
       throw staffDelErr;
     }
-    logger.info(`[deleteShop] business=${id} — deleted ${staffCount || 0} staff user(s)`);
+    logger.info(`[deleteBusiness] business=${id} — deleted ${staffCount || 0} staff user(s)`);
 
     // 2. Unlink the owner so users.business_id no longer blocks deleting the business row
     const { error: ownerUnlinkErr } = await supabase
       .from('users').update({ business_id: null }).eq('id', business.owner_user_id);
     if (ownerUnlinkErr) {
-      logger.error(`[deleteShop] business=${id} — failed unlinking owner ${business.owner_user_id}, business row and owner user are untouched:`, ownerUnlinkErr);
+      logger.error(`[deleteBusiness] business=${id} — failed unlinking owner ${business.owner_user_id}, business row and owner user are untouched:`, ownerUnlinkErr);
       throw ownerUnlinkErr;
     }
-    logger.info(`[deleteShop] business=${id} — unlinked owner ${business.owner_user_id} from business`);
+    logger.info(`[deleteBusiness] business=${id} — unlinked owner ${business.owner_user_id} from business`);
 
     // 3. Delete the business row — cascades customers/rules/bookings/vehicles/
     // route_fares/rental_packages/messages/message_templates/broadcasts/usage/subscriptions
     const { error: bizDelErr } = await supabase.from('businesses').delete().eq('id', id);
     if (bizDelErr) {
-      logger.error(`[deleteShop] business=${id} — failed deleting business row. Owner ${business.owner_user_id} is now unlinked but not deleted — rerun or manually delete the owner user if this business is not recovered:`, bizDelErr);
+      logger.error(`[deleteBusiness] business=${id} — failed deleting business row. Owner ${business.owner_user_id} is now unlinked but not deleted — rerun or manually delete the owner user if this business is not recovered:`, bizDelErr);
       throw bizDelErr;
     }
-    logger.info(`[deleteShop] business=${id} — deleted business row (cascaded ${JSON.stringify(cascadeCounts)})`);
+    logger.info(`[deleteBusiness] business=${id} — deleted business row (cascaded ${JSON.stringify(cascadeCounts)})`);
 
     // 4. Delete the owner user row now that nothing references it
     const { error: ownerDelErr } = await supabase
       .from('users').delete().eq('id', business.owner_user_id);
     if (ownerDelErr) {
-      logger.error(`[deleteShop] business=${id} — business row and all its data are deleted, but failed deleting owner user ${business.owner_user_id}. Orphaned unlinked user needs manual cleanup:`, ownerDelErr);
+      logger.error(`[deleteBusiness] business=${id} — business row and all its data are deleted, but failed deleting owner user ${business.owner_user_id}. Orphaned unlinked user needs manual cleanup:`, ownerDelErr);
       throw ownerDelErr;
     }
-    logger.info(`[deleteShop] business=${id} — deleted owner user ${business.owner_user_id}`);
+    logger.info(`[deleteBusiness] business=${id} — deleted owner user ${business.owner_user_id}`);
 
     // Flush caches for this business
     await invalidateRulesCache(id);
@@ -254,16 +254,16 @@ const deleteShop = async (req, res, next) => {
       }
     }, 'Business and all related data deleted successfully');
   } catch (error) {
-    logger.error('Error in deleteShop:', error);
+    logger.error('Error in deleteBusiness:', error);
     next(error);
   }
 };
 
 /**
- * PUT /api/admin/shops/:id/plan
+ * PUT /api/admin/businesses/:id/plan
  * Manually change a business's subscription plan
  */
-const changeShopPlan = async (req, res, next) => {
+const changeBusinessPlan = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { planId } = req.body;
@@ -298,13 +298,13 @@ const changeShopPlan = async (req, res, next) => {
     logger.info(`Business ${id} plan changed to ${plan.name} by superadmin`);
     return successResponse(res, 200, { subscription: toCamelCaseDeep(populated, ['plan']) }, 'Plan changed successfully');
   } catch (error) {
-    logger.error('Error in changeShopPlan:', error);
+    logger.error('Error in changeBusinessPlan:', error);
     next(error);
   }
 };
 
 /**
- * PUT /api/admin/shops/:id/extend
+ * PUT /api/admin/businesses/:id/extend
  * Extend a business's subscription expiry by N days
  */
 const extendSubscription = async (req, res, next) => {
@@ -349,7 +349,7 @@ const extendSubscription = async (req, res, next) => {
 };
 
 /**
- * POST /api/admin/shops/:id/grant-subscription
+ * POST /api/admin/businesses/:id/grant-subscription
  * Manually grant/override a subscription for a business — superadmin-only,
  * bypasses payment entirely. Full control over status and duration; does not
  * touch auto_renew or razorpay_* columns, which stay at their table defaults
@@ -412,7 +412,7 @@ const grantSubscription = async (req, res, next) => {
 };
 
 /**
- * GET /api/admin/shops/:id/subscription-history
+ * GET /api/admin/businesses/:id/subscription-history
  * List all subscription rows for a business, newest first
  */
 const getSubscriptionHistory = async (req, res, next) => {
@@ -644,11 +644,11 @@ const updateTemplate = async (req, res, next) => {
 };
 
 module.exports = {
-  getShops,
-  getShopById,
-  toggleShop,
-  deleteShop,
-  changeShopPlan,
+  getBusinesses,
+  getBusinessById,
+  toggleBusiness,
+  deleteBusiness,
+  changeBusinessPlan,
   extendSubscription,
   grantSubscription,
   getSubscriptionHistory,
