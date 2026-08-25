@@ -41,6 +41,10 @@ const createSavedFlow = async (req, res, next) => {
       .single();
     if (insertErr) throw insertErr;
 
+    const { error: businessUpdateErr } = await supabase
+      .from('businesses').update({ active_saved_flow_id: saved.id, active_flow_pack_id: null }).eq('id', businessId);
+    if (businessUpdateErr) throw businessUpdateErr;
+
     return successResponse(res, 201, toCamelCase(saved), `Saved current rules as '${name}'`);
   } catch (error) {
     logger.error('Error in createSavedFlow:', error);
