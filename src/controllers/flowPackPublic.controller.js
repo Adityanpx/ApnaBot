@@ -81,7 +81,7 @@ const importFlowPack = async (req, res, next) => {
     }
 
     const { error: businessUpdateErr } = await supabase
-      .from('businesses').update({ active_flow_pack_id: pack.id }).eq('id', businessId);
+      .from('businesses').update({ active_flow_pack_id: pack.id, active_saved_flow_id: null }).eq('id', businessId);
     if (businessUpdateErr) throw businessUpdateErr;
 
     await invalidateRulesCache(businessId);

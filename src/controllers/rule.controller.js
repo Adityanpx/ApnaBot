@@ -15,10 +15,10 @@ const logger = require('../utils/logger');
  */
 const clearActiveFlowPack = (businessId) => {
   supabase
-    .from('businesses').update({ active_flow_pack_id: null }).eq('id', businessId)
+    .from('businesses').update({ active_flow_pack_id: null, active_saved_flow_id: null }).eq('id', businessId)
     .then(({ error }) => {
       if (error) {
-        logger.error(`Failed to clear active_flow_pack_id for business ${businessId}:`, error);
+        logger.error(`Failed to clear active_flow_pack_id/active_saved_flow_id for business ${businessId}:`, error);
       }
     });
 };
