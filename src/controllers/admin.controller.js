@@ -111,7 +111,7 @@ const getShopById = async (req, res, next) => {
     const subscription = subscriptionRow ? toCamelCaseDeep(subscriptionRow, ['plan']) : null;
 
     return successResponse(res, 200, {
-      shop: toCamelCase(safeBusinessRow),
+      shop: { ...toCamelCase(safeBusinessRow), ownerUserId: owner || safeBusinessRow.owner_user_id },
       subscription,
       plan: subscription?.plan || null,
       users,
