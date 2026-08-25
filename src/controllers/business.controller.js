@@ -494,6 +494,35 @@ const connectWhatsapp = async (req, res, next) => {
       displayName
     });
 
+    // Subscribe the app to this WABA's webhook events. This is a separate,
+    // per-WABA opt-in Meta requires in addition to the app-level webhook
+    // fields configured in the Meta App Dashboard - without it, Meta never
+    // sends webhook POSTs for messages on this number even though the
+    // connection itself succeeds. Not fatal: a business should still be
+    // considered connected even if this call fails, but it must be visible
+    // in logs since it silently breaks inbound messaging otherwise.
+    try {
+      logger.info('connectWhatsapp: subscribing app to WABA webhook events', {
+        businessId: req.user.businessId,
+        wabaId
+      });
+
+      await axios.post(`${META_GRAPH_BASE}/${wabaId}/subscribed_apps`, null, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+
+      logger.info('connectWhatsapp: subscribed app to WABA webhook events', {
+        businessId: req.user.businessId,
+        wabaId
+      });
+    } catch (error) {
+      logger.error('connectWhatsapp: failed to subscribe app to WABA webhook events - inbound messages will not be received until this is fixed', {
+        businessId: req.user.businessId,
+        wabaId,
+        error: error.response?.data || error.message
+      });
+    }
+
     // Invalidate caches after connecting so the new connection takes effect immediately
     await subscriptionService.invalidateSubscriptionCache(req.user.businessId.toString());
     await tenantService.invalidateTenantCache(phoneNumberId);
