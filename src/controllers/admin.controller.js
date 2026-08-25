@@ -349,6 +349,97 @@ const extendSubscription = async (req, res, next) => {
 };
 
 /**
+ * POST /api/admin/shops/:id/grant-subscription
+ * Manually grant/override a subscription for a business — superadmin-only,
+ * bypasses payment entirely. Full control over status and duration; does not
+ * touch auto_renew or razorpay_* columns, which stay at their table defaults
+ * (auto_renew=true, razorpay ids null) so manual grants are distinguishable
+ * from Razorpay-paid subscriptions.
+ */
+const VALID_SUBSCRIPTION_STATUSES = ['trial', 'active', 'expired', 'cancelled'];
+
+const grantSubscription = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { planId, status, durationDays } = req.body;
+
+    if (!planId) return errorResponse(res, 400, 'planId is required');
+    if (!VALID_SUBSCRIPTION_STATUSES.includes(status)) {
+      return errorResponse(res, 400, `status must be one of: ${VALID_SUBSCRIPTION_STATUSES.join(', ')}`);
+    }
+    if (!Number.isInteger(durationDays) || durationDays <= 0) {
+      return errorResponse(res, 400, 'durationDays must be a positive integer');
+    }
+
+    const { data: business, error: bizErr } = await supabase
+      .from('businesses').select('id, phone_number_id').eq('id', id).maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return errorResponse(res, 404, 'Business not found');
+
+    const { data: plan, error: planErr } = await supabase
+      .from('plans').select('id').eq('id', planId).maybeSingle();
+    if (planErr) throw planErr;
+    if (!plan) return errorResponse(res, 404, 'Plan not found');
+
+    const startDate = new Date();
+    const endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+
+    const { data: subscription, error } = await supabase
+      .from('subscriptions')
+      .insert({
+        business_id: id,
+        plan_id: planId,
+        status,
+        start_date: startDate.toISOString(),
+        end_date: endDate.toISOString()
+      })
+      .select('*, plan:plans(*)')
+      .single();
+    if (error) throw error;
+
+    // Clear cached subscription status so the grant takes effect immediately
+    await subscriptionService.invalidateSubscriptionCache(id);
+    if (business.phone_number_id) {
+      await tenantService.invalidateTenantCache(business.phone_number_id);
+    }
+
+    logger.info(`Subscription manually granted for business ${id} — plan ${planId}, status ${status}, ${durationDays}d by superadmin`);
+    return successResponse(res, 201, { subscription: toCamelCaseDeep(subscription, ['plan']) }, 'Subscription granted successfully');
+  } catch (error) {
+    logger.error('Error in grantSubscription:', error);
+    next(error);
+  }
+};
+
+/**
+ * GET /api/admin/shops/:id/subscription-history
+ * List all subscription rows for a business, newest first
+ */
+const getSubscriptionHistory = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const { data: business, error: bizErr } = await supabase
+      .from('businesses').select('id').eq('id', id).maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return errorResponse(res, 404, 'Business not found');
+
+    const { data: subscriptions, error } = await supabase
+      .from('subscriptions').select('*, plan:plans(*)')
+      .eq('business_id', id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    return successResponse(res, 200, {
+      subscriptions: (subscriptions || []).map((s) => toCamelCaseDeep(s, ['plan']))
+    });
+  } catch (error) {
+    logger.error('Error in getSubscriptionHistory:', error);
+    next(error);
+  }
+};
+
+/**
  * GET /api/admin/stats
  * Platform-wide statistics
  */
@@ -559,6 +650,8 @@ module.exports = {
   deleteShop,
   changeShopPlan,
   extendSubscription,
+  grantSubscription,
+  getSubscriptionHistory,
   getPlatformStats,
   getRevenueReport,
   getPlans,

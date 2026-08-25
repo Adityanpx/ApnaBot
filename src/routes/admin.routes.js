@@ -11,6 +11,8 @@ const {
   deleteShop,
   changeShopPlan,
   extendSubscription,
+  grantSubscription,
+  getSubscriptionHistory,
   getPlatformStats,
   getRevenueReport,
   getPlans,
@@ -31,6 +33,10 @@ router.put('/shops/:id/toggle',     toggleShop);
 router.delete('/shops/:id',         deleteShop);
 router.put('/shops/:id/plan',       changeShopPlan);
 router.put('/shops/:id/extend',     extendSubscription);
+
+// Manual subscription grants (superadmin override — bypasses payment)
+router.post('/shops/:id/grant-subscription',     grantSubscription);
+router.get('/shops/:id/subscription-history',    getSubscriptionHistory);
 
 // Stats & Revenue
 router.get('/stats',                getPlatformStats);
