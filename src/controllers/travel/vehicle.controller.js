@@ -16,7 +16,16 @@ const getVehicleCatalogForBusiness = async (req, res, next) => {
       .eq('is_active', true)
       .order('order', { ascending: true });
     if (error) throw error;
-    return successResponse(res, 200, { catalog });
+
+    const mappedCatalog = (catalog || []).map((row) => ({
+      _id: row.id,
+      name: row.name,
+      type: row.type,
+      photoUrl: row.photo_url,
+      seats: row.seats
+    }));
+
+    return successResponse(res, 200, { catalog: mappedCatalog });
   } catch (error) {
     logger.error('Error in getVehicleCatalogForBusiness:', error);
     next(error);
