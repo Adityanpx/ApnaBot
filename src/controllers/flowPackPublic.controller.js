@@ -80,6 +80,10 @@ const importFlowPack = async (req, res, next) => {
       createdRules = inserted || [];
     }
 
+    const { error: businessUpdateErr } = await supabase
+      .from('businesses').update({ active_flow_pack_id: pack.id }).eq('id', businessId);
+    if (businessUpdateErr) throw businessUpdateErr;
+
     await invalidateRulesCache(businessId);
 
     return successResponse(

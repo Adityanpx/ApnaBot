@@ -9,6 +9,21 @@ const { toCamelCase } = require('../utils/caseConvert');
 const logger = require('../utils/logger');
 
 /**
+ * Manual rule edits mean the business's rules have diverged from whatever
+ * flow pack was last imported, so clear the marker. Fire-and-forget: never
+ * block the CRUD response on this.
+ */
+const clearActiveFlowPack = (businessId) => {
+  supabase
+    .from('businesses').update({ active_flow_pack_id: null }).eq('id', businessId)
+    .then(({ error }) => {
+      if (error) {
+        logger.error(`Failed to clear active_flow_pack_id for business ${businessId}:`, error);
+      }
+    });
+};
+
+/**
  * GET /api/rules
  * List all rules for business (paginated)
  */
@@ -149,6 +164,7 @@ const createRule = async (req, res, next) => {
 
     // Invalidate cache
     await invalidateRulesCache(businessId);
+    clearActiveFlowPack(businessId);
 
     return successResponse(res, 201, toCamelCase(rule));
   } catch (error) {
@@ -265,6 +281,7 @@ const updateRule = async (req, res, next) => {
 
     // Invalidate cache
     await invalidateRulesCache(businessId);
+    clearActiveFlowPack(businessId);
 
     return successResponse(res, 200, toCamelCase(updatedRule));
   } catch (error) {
@@ -296,6 +313,7 @@ const deleteRule = async (req, res, next) => {
 
     // Invalidate cache
     await invalidateRulesCache(businessId);
+    clearActiveFlowPack(businessId);
 
     return successResponse(res, 200, null, 'Rule deleted successfully');
   } catch (error) {
