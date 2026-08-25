@@ -65,7 +65,7 @@ const createMessageTemplate = async (req, res, next) => {
       business_id: businessId,
       name,
       category: category || 'MARKETING',
-      language: language || 'en',
+      language: language || 'en_US',
       body_text: bodyText,
       variable_count: variableCount,
       variable_samples: variableSamples !== undefined ? variableSamples : null
