@@ -477,7 +477,7 @@ const getPlans = async (req, res, next) => {
     const { data: plans, error } = await supabase
       .from('plans').select('*').order('price', { ascending: true });
     if (error) throw error;
-    return successResponse(res, 200, { plans });
+    return successResponse(res, 200, { plans: (plans || []).map(toCamelCase) });
   } catch (error) {
     logger.error('Error in getPlans:', error);
     next(error);
@@ -518,7 +518,7 @@ const createPlan = async (req, res, next) => {
     if (error) throw error;
 
     logger.info(`Plan ${plan.name} created by superadmin`);
-    return successResponse(res, 201, plan, 'Plan created successfully');
+    return successResponse(res, 201, toCamelCase(plan), 'Plan created successfully');
   } catch (error) {
     logger.error('Error in createPlan:', error);
     next(error);
@@ -556,8 +556,8 @@ const updatePlan = async (req, res, next) => {
       .from('plans').update(updates).eq('id', id).select().single();
     if (error) throw error;
 
-    logger.info(`Plan ${id} updated by superadmin`); 
-    return successResponse(res, 200, plan, 'Plan updated successfully');
+    logger.info(`Plan ${id} updated by superadmin`);
+    return successResponse(res, 200, toCamelCase(plan), 'Plan updated successfully');
   } catch (error) {
     logger.error('Error in updatePlan:', error);
     next(error);
@@ -607,7 +607,7 @@ const getTemplates = async (req, res, next) => {
       .select('*')
       .order('business_category', { ascending: true });
     if (error) throw error;
-    return successResponse(res, 200, { templates });
+    return successResponse(res, 200, { templates: (templates || []).map(toCamelCase) });
   } catch (error) {
     logger.error('Error in getTemplates:', error);
     next(error);
@@ -636,7 +636,7 @@ const updateTemplate = async (req, res, next) => {
     if (error) throw error;
 
     logger.info(`Template ${id} updated by superadmin`);
-    return successResponse(res, 200, template, 'Template updated successfully');
+    return successResponse(res, 200, toCamelCase(template), 'Template updated successfully');
   } catch (error) {
     logger.error('Error in updateTemplate:', error);
     next(error);
