@@ -1,6 +1,7 @@
 const supabase = require('../../config/supabase');
 const r2 = require('../../services/r2.service');
 const { successResponse, errorResponse } = require('../../utils/response');
+const { toCamelCase } = require('../../utils/caseConvert');
 const logger = require('../../utils/logger');
 
 /**
@@ -15,7 +16,7 @@ const getVehicleCatalog = async (req, res, next) => {
       .order('order', { ascending: true })
       .order('name', { ascending: true });
     if (error) throw error;
-    return successResponse(res, 200, { catalog });
+    return successResponse(res, 200, { catalog: (catalog || []).map(toCamelCase) });
   } catch (error) {
     logger.error('Error in getVehicleCatalog:', error);
     next(error);
@@ -49,7 +50,7 @@ const createVehicleCatalogEntry = async (req, res, next) => {
     if (error) throw error;
 
     logger.info(`Vehicle catalog entry ${entry.id} created by superadmin`);
-    return successResponse(res, 201, entry, 'Vehicle catalog entry created successfully');
+    return successResponse(res, 201, toCamelCase(entry), 'Vehicle catalog entry created successfully');
   } catch (error) {
     logger.error('Error in createVehicleCatalogEntry:', error);
     next(error);
@@ -84,7 +85,7 @@ const updateVehicleCatalogEntry = async (req, res, next) => {
     if (error) throw error;
 
     logger.info(`Vehicle catalog entry ${id} updated by superadmin`);
-    return successResponse(res, 200, entry, 'Vehicle catalog entry updated successfully');
+    return successResponse(res, 200, toCamelCase(entry), 'Vehicle catalog entry updated successfully');
   } catch (error) {
     logger.error('Error in updateVehicleCatalogEntry:', error);
     next(error);
