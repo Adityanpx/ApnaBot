@@ -1,5 +1,6 @@
 const { Worker } = require('bullmq');
 const whatsappService = require('../services/whatsapp.service');
+const walletService = require('../services/wallet.service');
 const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 
@@ -37,7 +38,7 @@ const resolveRecipientComponents = (variableMapping, recipient) => {
 };
 
 const worker = new Worker('broadcast-outbound', async (job) => {
-  const { broadcastId, businessId, phoneNumberId, encryptedAccessToken, templateName, language, components, variableMapping, recipients } = job.data;
+  const { broadcastId, businessId, phoneNumberId, encryptedAccessToken, templateName, language, components, variableMapping, ratePerMessage, recipients } = job.data;
 
   let sent = 0;
   let failed = 0;
@@ -57,6 +58,14 @@ const worker = new Worker('broadcast-outbound', async (job) => {
       logger.error(`Broadcast ${broadcastId}: failed to send to ${recipient.whatsappNumber}`, {
         error: error.response?.data || error.message
       });
+
+      if (ratePerMessage > 0) {
+        try {
+          await walletService.refundToWallet(businessId, ratePerMessage, broadcastId, `Refund: failed broadcast message to ${recipient.whatsappNumber}`);
+        } catch (refundErr) {
+          logger.error(`Broadcast ${broadcastId}: failed to refund ${ratePerMessage} paise for ${recipient.whatsappNumber}`, refundErr);
+        }
+      }
     }
   }
 

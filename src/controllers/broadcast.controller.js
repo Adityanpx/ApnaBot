@@ -1,6 +1,8 @@
 const supabase = require('../config/supabase');
 const { toCamelCase } = require('../utils/caseConvert');
 const businessService = require('../services/business.service');
+const walletService = require('../services/wallet.service');
+const rateCardService = require('../services/rateCard.service');
 const { addToBroadcastQueue } = require('../queues/broadcast.queue');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
@@ -159,6 +161,30 @@ const sendBroadcast = async (req, res, next) => {
       return errorResponse(res, 400, `This broadcast has ${customers.length} eligible recipients, which exceeds the current limit of ${MAX_BROADCAST_RECIPIENTS}. Contact support to send larger broadcasts.`);
     }
 
+    // India-only for now — the rate_cards table only has IN rows today;
+    // this hardcode goes away once other countries are seeded.
+    const countryCode = 'IN';
+    const category = templateRow.category.toLowerCase();
+    const ratePerMessage = await rateCardService.getRateForMessage(countryCode, category);
+    const estimatedCostPaise = ratePerMessage * customers.length;
+
+    if (estimatedCostPaise > 0) {
+      try {
+        await walletService.debitWallet(
+          businessId,
+          estimatedCostPaise,
+          id,
+          `Broadcast ${id}: ${customers.length} × ${category} message(s) @ ₹${(ratePerMessage / 100).toFixed(2)}`
+        );
+      } catch (debitErr) {
+        if (debitErr.message && debitErr.message.includes('Insufficient wallet balance')) {
+          const wallet = await walletService.getOrCreateWallet(businessId);
+          return errorResponse(res, 400, `Insufficient wallet balance: need ₹${(estimatedCostPaise / 100).toFixed(2)}, have ₹${(wallet.balance_paise / 100).toFixed(2)}`);
+        }
+        throw debitErr;
+      }
+    }
+
     const { data: updatedBroadcast, error: updateErr } = await supabase.from('broadcasts').update({
       total_recipients: customers.length,
       status: 'sending',
@@ -181,6 +207,7 @@ const sendBroadcast = async (req, res, next) => {
       language: templateRow.language,
       components,
       variableMapping: broadcastRow.variable_mapping || null,
+      ratePerMessage,
       recipients: batch.map((c) => ({ customerId: c.id, whatsappNumber: c.whatsapp_number, customer: { name: c.name } }))
     })));
 

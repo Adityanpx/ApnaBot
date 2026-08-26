@@ -29,6 +29,7 @@ const rentalPackageRoutes = require('./routes/rentalPackage.routes');
 const messageTemplateRoutes = require('./routes/messageTemplate.routes');
 const broadcastRoutes = require('./routes/broadcast.routes');
 const walletRoutes = require('./routes/wallet.routes');
+const rateCardRoutes = require('./routes/rateCard.routes');
 
 const app = express();
 
@@ -100,6 +101,7 @@ app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/admin/vehicle-catalog', vehicleCatalogRoutes);
 app.use('/api/admin/flow-packs', flowPackRoutes);
+app.use('/api/admin/rate-cards', rateCardRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/flow-packs', flowPackPublicRoutes);
 app.use('/api/saved-flows', savedFlowRoutes);
