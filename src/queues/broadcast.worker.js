@@ -24,7 +24,13 @@ const resolveRecipientComponents = (variableMapping, recipient) => {
       const text = entry.source === 'customer.name'
         ? recipient.customer?.name
         : entry.value;
-      return { type: 'text', text: String(text || '') };
+      const trimmed = text === null || text === undefined ? '' : String(text).trim();
+      if (!trimmed) {
+        throw new Error(entry.source === 'customer.name'
+          ? 'recipient has no name on file'
+          : 'variable mapping has an empty static value');
+      }
+      return { type: 'text', text: String(text) };
     });
 
   return parameters.length > 0 ? [{ type: 'body', parameters }] : [];

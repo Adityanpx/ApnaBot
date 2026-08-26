@@ -147,6 +147,14 @@ const sendBroadcast = async (req, res, next) => {
       return errorResponse(res, 400, 'No opted-in customers to send this broadcast to');
     }
 
+    const usesCustomerNameMapping = (broadcastRow.variable_mapping || []).some((entry) => entry.source === 'customer.name');
+    if (usesCustomerNameMapping) {
+      const missingNameCount = customers.filter((c) => !c.name || !c.name.trim()).length;
+      if (missingNameCount > 0) {
+        return errorResponse(res, 400, `${missingNameCount} of ${customers.length} eligible recipients have no name on file, which this broadcast's template variable mapping requires. Update their customer records or change the variable mapping before sending.`);
+      }
+    }
+
     if (customers.length > MAX_BROADCAST_RECIPIENTS) {
       return errorResponse(res, 400, `This broadcast has ${customers.length} eligible recipients, which exceeds the current limit of ${MAX_BROADCAST_RECIPIENTS}. Contact support to send larger broadcasts.`);
     }
