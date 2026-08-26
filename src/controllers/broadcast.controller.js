@@ -23,6 +23,12 @@ const chunk = (arr, size) => {
   return batches;
 };
 
+const countTemplateVariables = (bodyText) => {
+  const matches = (bodyText || '').match(/\{\{\s*\d+\s*\}\}/g) || [];
+  const numbers = new Set(matches.map((m) => m.replace(/\D/g, '')));
+  return numbers.size;
+};
+
 /**
  * GET /api/broadcasts
  * List business's broadcasts
@@ -63,6 +69,15 @@ const createBroadcast = async (req, res, next) => {
     }
     if (templateRow.status !== 'approved') {
       return errorResponse(res, 400, 'Only approved templates can be used for a broadcast');
+    }
+
+    const requiredVariableCount = countTemplateVariables(templateRow.body_text);
+    if (requiredVariableCount > 0) {
+      const providedCount = (templateVariables || []).length;
+      const mappingCount = (variableMapping || []).length;
+      if (providedCount !== requiredVariableCount && mappingCount !== requiredVariableCount) {
+        return errorResponse(res, 400, `This template requires ${requiredVariableCount} variable(s); provide templateVariables or variableMapping with exactly ${requiredVariableCount} entr${requiredVariableCount === 1 ? 'y' : 'ies'}`);
+      }
     }
 
     const { data: broadcast, error } = await supabase.from('broadcasts').insert({
@@ -107,6 +122,15 @@ const sendBroadcast = async (req, res, next) => {
     if (templateErr) throw templateErr;
     if (!templateRow || templateRow.status !== 'approved') {
       return errorResponse(res, 400, 'This broadcast\'s template is no longer approved');
+    }
+
+    const requiredVariableCount = countTemplateVariables(templateRow.body_text);
+    if (requiredVariableCount > 0) {
+      const providedCount = (broadcastRow.template_variables || []).length;
+      const mappingCount = (broadcastRow.variable_mapping || []).length;
+      if (providedCount !== requiredVariableCount && mappingCount !== requiredVariableCount) {
+        return errorResponse(res, 400, `This template requires ${requiredVariableCount} variable(s), but this broadcast has ${providedCount || mappingCount} set. Recreate the broadcast with the correct variables.`);
+      }
     }
 
     const business = await businessService.getBusinessById(businessId);
