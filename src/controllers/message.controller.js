@@ -4,6 +4,7 @@ const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const { toCamelCase } = require('../utils/caseConvert');
+const { withWindowExpiresAt } = require('./customer.controller');
 const logger = require('../utils/logger');
 
 /**
@@ -86,7 +87,7 @@ const getChatHistory = async (req, res, next) => {
 
     const pagination = getPagination(count, pageNum, limitNum);
     return successResponse(res, 200, {
-      customer: toCamelCase(customerRow),
+      customer: withWindowExpiresAt(toCamelCase(customerRow)),
       messages: (messages || []).map(toCamelCase).reverse(), // return in chronological order
       pagination
     });

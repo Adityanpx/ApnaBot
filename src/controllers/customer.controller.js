@@ -226,5 +226,6 @@ module.exports = {
   updateCustomer,
   blockCustomer,
   unblockCustomer,
-  toggleCustomerOptIn
+  toggleCustomerOptIn,
+  withWindowExpiresAt
 };
