@@ -15,6 +15,7 @@ const getRateForMessage = async (countryCode, category) => {
     .eq('category', category)
     .lte('effective_from', today)
     .order('effective_from', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) throw error;

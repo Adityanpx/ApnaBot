@@ -14,7 +14,8 @@ const getRateCards = async (req, res, next) => {
       .from('rate_cards').select('*')
       .order('country_code', { ascending: true })
       .order('category', { ascending: true })
-      .order('effective_from', { ascending: false });
+      .order('effective_from', { ascending: false })
+      .order('created_at', { ascending: false });
     if (error) throw error;
 
     return successResponse(res, 200, { rateCards: (data || []).map(toCamelCase) });
