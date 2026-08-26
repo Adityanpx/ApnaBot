@@ -61,9 +61,10 @@ const createMessageSoft = async (fields, context) => {
  * double-taps from the same customer, acceptable at current traffic.
  * @param {string} businessId
  * @param {string} customerNumber
+ * @param {string} [profileName] - WhatsApp profile name from the webhook's contacts array
  * @returns {Promise<Object>} camelCase customer row
  */
-const upsertCustomerForInboundMessage = async (businessId, customerNumber) => {
+const upsertCustomerForInboundMessage = async (businessId, customerNumber, profileName) => {
   const { data: existing, error: findErr } = await supabase
     .from('customers').select('*')
     .eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
@@ -72,10 +73,17 @@ const upsertCustomerForInboundMessage = async (businessId, customerNumber) => {
   const nowIso = new Date().toISOString();
 
   if (existing) {
-    const { data, error } = await supabase.from('customers').update({
+    const updateFields = {
       last_message_at: nowIso,
       total_messages: (existing.total_messages || 0) + 1
-    }).eq('id', existing.id).select().single();
+    };
+    // Only backfill the name from WhatsApp if we don't already have one —
+    // a business owner's manual edit must win over a self-reported profile
+    // name that the customer can change at any time.
+    if (!existing.name && profileName) {
+      updateFields.name = profileName;
+    }
+    const { data, error } = await supabase.from('customers').update(updateFields).eq('id', existing.id).select().single();
     if (error) throw error;
     return toCamelCase(data);
   }
@@ -83,6 +91,7 @@ const upsertCustomerForInboundMessage = async (businessId, customerNumber) => {
   const { data, error } = await supabase.from('customers').insert({
     business_id: businessId,
     whatsapp_number: customerNumber,
+    name: profileName || null,
     first_seen_at: nowIso,
     last_message_at: nowIso,
     total_messages: 1
@@ -304,6 +313,9 @@ const receiveWebhook = async (req, res) => {
     const listReplyId = message.interactive?.list_reply?.id || null;
     const messageText = message.text?.body || buttonReplyId || listReplyId || '';
     const phoneNumberId = value.metadata.phone_number_id;
+    // Meta includes the sender's current WhatsApp display name alongside each
+    // inbound message via the contacts array — capture it for first contact.
+    const profileName = value.contacts?.[0]?.profile?.name || null;
 
     // Step 4 - Resolve tenant
     const tenant = await tenantService.resolveBusinessByPhoneNumberId(phoneNumberId);
@@ -333,7 +345,7 @@ const receiveWebhook = async (req, res) => {
     }
 
     // Step 8 - Upsert customer
-    const customer = await upsertCustomerForInboundMessage(tenant.businessId, customerNumber);
+    const customer = await upsertCustomerForInboundMessage(tenant.businessId, customerNumber, profileName);
 
     if (customer.isBlocked) {
       logger.warn(`Blocked customer ${customerNumber}`);
