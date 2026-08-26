@@ -85,7 +85,15 @@ const updateCustomer = async (req, res, next) => {
     if (!existing) return errorResponse(res, 404, 'Customer not found');
 
     const updateData = {};
-    if (name !== undefined) updateData.name = name.trim();
+    if (name !== undefined) {
+      if (name === null) {
+        updateData.name = null;
+      } else if (typeof name === 'string' && name.trim()) {
+        updateData.name = name.trim();
+      } else {
+        return errorResponse(res, 400, 'name must be a non-empty string or null');
+      }
+    }
     if (tags !== undefined) {
       if (!Array.isArray(tags)) return errorResponse(res, 400, 'Tags must be an array');
       updateData.tags = tags.map(t => t.trim()).filter(Boolean);
