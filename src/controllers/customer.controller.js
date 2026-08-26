@@ -4,6 +4,16 @@ const { getPagination } = require('../utils/pagination');
 const { toCamelCase } = require('../utils/caseConvert');
 const logger = require('../utils/logger');
 
+const WINDOW_DURATION_MS = 24 * 60 * 60 * 1000;
+
+// windowExpiresAt is derived, not stored — recomputed at read time from last_message_at
+const withWindowExpiresAt = (customer) => ({
+  ...customer,
+  windowExpiresAt: customer.lastMessageAt
+    ? new Date(new Date(customer.lastMessageAt).getTime() + WINDOW_DURATION_MS).toISOString()
+    : null
+});
+
 /**
  * GET /api/customers
  * List all customers for business — paginated + searchable by name or number
@@ -33,7 +43,7 @@ const getCustomers = async (req, res, next) => {
     if (error) throw error;
 
     const pagination = getPagination(count, pageNum, limitNum);
-    return successResponse(res, 200, { customers: (data || []).map(toCamelCase), pagination });
+    return successResponse(res, 200, { customers: (data || []).map(toCamelCase).map(withWindowExpiresAt), pagination });
   } catch (error) {
     logger.error('Error in getCustomers:', error);
     next(error);
@@ -60,7 +70,7 @@ const getCustomerById = async (req, res, next) => {
     if (msgErr) throw msgErr;
 
     return successResponse(res, 200, {
-      customer: toCamelCase(customer),
+      customer: withWindowExpiresAt(toCamelCase(customer)),
       messages: (messages || []).map(toCamelCase).reverse()
     });
   } catch (error) {

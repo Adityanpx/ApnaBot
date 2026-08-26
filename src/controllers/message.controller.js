@@ -119,6 +119,8 @@ const markAsRead = async (req, res, next) => {
   }
 };
 
+const FREE_FORM_WINDOW_MS = 24 * 60 * 60 * 1000; // WhatsApp's 24h customer service window
+
 /**
  * POST /api/messages/send
  * Manually send a WhatsApp message to a customer.
@@ -143,29 +145,25 @@ const sendMessage = async (req, res, next) => {
       return errorResponse(res, 400, 'WhatsApp is not connected to this business');
     }
 
-    // Upsert customer record (read-then-write — Supabase has no
-    // upsert-with-$setOnInsert; a tiny race under concurrent sends is
-    // acceptable at current traffic, same tradeoff as the webhook path)
     const { data: existingCustomer, error: findErr } = await supabase
       .from('customers').select('*').eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
     if (findErr) throw findErr;
 
-    let customer;
-    if (existingCustomer) {
-      const { data, error } = await supabase.from('customers')
-        .update({ last_message_at: new Date().toISOString() }).eq('id', existingCustomer.id).select().single();
-      if (error) throw error;
-      customer = toCamelCase(data);
-    } else {
-      const { data, error } = await supabase.from('customers').insert({
-        business_id: businessId,
-        whatsapp_number: customerNumber,
-        first_seen_at: new Date().toISOString(),
-        last_message_at: new Date().toISOString()
-      }).select().single();
-      if (error) throw error;
-      customer = toCamelCase(data);
+    // 24h free-form window is opened/extended only by inbound messages
+    // (see upsertCustomerForInboundMessage in webhook.controller.js) — a
+    // customer who has never messaged in, or hasn't in 24h, has no open
+    // window. This send path is free-form only (no template branch exists
+    // in this controller), so the gate applies unconditionally here.
+    const windowExpiresAt = existingCustomer?.last_message_at
+      ? new Date(existingCustomer.last_message_at).getTime() + FREE_FORM_WINDOW_MS
+      : null;
+    if (!windowExpiresAt || Date.now() >= windowExpiresAt) {
+      return errorResponse(res, 400, 'The 24-hour free messaging window for this customer has closed. Use a message template to reach them, or wait for them to message you again.');
     }
+
+    // existingCustomer is guaranteed non-null here — the window check
+    // above already rejects any customer with no last_message_at.
+    const customer = toCamelCase(existingCustomer);
 
     // Save outbound message to DB
     const { data: outboundMsgRow, error: msgErr } = await supabase.from('messages').insert({
