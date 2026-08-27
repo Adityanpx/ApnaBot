@@ -313,7 +313,7 @@ const receiveWebhook = async (req, res) => {
     // A tapped list-message row arrives as type 'interactive' too, with its
     // id in list_reply instead of button_reply (see sendListMessage).
     const listReplyId = message.interactive?.list_reply?.id || null;
-    const messageText = message.text?.body || buttonReplyId || listReplyId || '';
+    let messageText = message.text?.body || buttonReplyId || listReplyId || '';
     const phoneNumberId = value.metadata.phone_number_id;
     // Meta includes the sender's current WhatsApp display name alongside each
     // inbound message via the contacts array — capture it for first contact.
@@ -910,8 +910,14 @@ const receiveWebhook = async (req, res) => {
 
     if (buttonReplyId && buttonReplyId.startsWith('lang_')) {
       // Customer tapped a language-picker button - validate (defends
-      // against a stale/tampered id), persist, then send the welcome
-      // message immediately in their chosen language.
+      // against a stale/tampered id), persist, then fall through to the
+      // greeting/rule-matching flow below as if the customer had just said
+      // "hi" - the language picker only ever fires on a new customer's
+      // first-ever message (Step 12.6 only runs when preferredLanguage is
+      // null), so treating the tap as a greeting reproduces the normal
+      // "hi" experience (menu, rules, buttons and all) via Step 12.5 /
+      // Step 13, instead of sending a separate, simpler welcome message
+      // that skips rule matching.
       const tappedCode = buttonReplyId.slice('lang_'.length);
       const langBusinessDoc = await businessService.getBusinessById(tenant.businessId);
       const enabledLanguages = langBusinessDoc?.enabledLanguages?.length ? langBusinessDoc.enabledLanguages : ['en'];
@@ -930,55 +936,12 @@ const receiveWebhook = async (req, res) => {
       if (langErr) throw langErr;
       customer.preferredLanguage = toCamelCase(updatedCustomer).preferredLanguage;
 
-      const hasMenu = !!(langBusinessDoc?.isMenuEnabled && langBusinessDoc.menuItems?.length > 0);
-      let welcomeReplyText = getLocalizedText(langBusinessDoc, 'welcomeMessage', tappedCode) || '';
-      let menuListOptions = [];
-
-      if (hasMenu) {
-        menuListOptions = await buildMenuListOptions(langBusinessDoc.menuItems);
-        if (!welcomeReplyText) {
-          welcomeReplyText = 'How can we help you today?';
-        }
-      }
-
-      welcomeReplyText = applyMessageTemplate(welcomeReplyText, tenant);
-
-      const welcomeOutboundMsg = await saveMessage({
-        business_id: tenant.businessId,
-        customer_id: customer.id,
-        customer_number: customerNumber,
-        direction: 'outbound',
-        type: 'text',
-        content: welcomeReplyText,
-        status: 'sent',
-        is_read: true
-      });
-      await addToWhatsappQueue({
-        businessId: tenant.businessId,
-        phoneNumberId: tenant.phoneNumberId,
-        encryptedAccessToken: tenant.accessToken,
-        to: customerNumber,
-        message: welcomeReplyText,
-        type: 'text',
-        listOptions: menuListOptions,
-        listButtonLabel: 'Menu',
-        messageId: welcomeOutboundMsg.id
-      });
-      usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
-        logger.error('Error incrementing outbound usage:', err)
-      );
-      try {
-        socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
-          customer,
-          message: welcomeOutboundMsg,
-          customerNumber
-        });
-      } catch (socketError) {
-        logger.error('Error emitting socket event:', socketError);
-      }
-
-      logger.info(`Set preferred language ${tappedCode} and sent welcome message for business ${tenant.businessId}, customer ${customerNumber}`);
-      return; // Do not run rule matching this turn
+      logger.info(`Set preferred language ${tappedCode} for business ${tenant.businessId}, customer ${customerNumber}; falling through to greeting`);
+      messageText = 'hi';
+      // No return - fall through to Step 12.5 / Step 13 below, which will
+      // greet with the business's welcomeMessage/menu if configured, or
+      // otherwise run rule matching against 'hi' exactly like a real
+      // greeting message would.
     }
 
     // Step 12.5 - Greeting -> welcome message / menu (exact match only, so
