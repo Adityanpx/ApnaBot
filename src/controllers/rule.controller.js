@@ -6,7 +6,33 @@ const r2 = require('../services/r2.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const { toCamelCase } = require('../utils/caseConvert');
+const { isValidLanguageCode } = require('../utils/languageCatalog');
 const logger = require('../utils/logger');
+
+/**
+ * Validates a translations map ({ languageCode: text }) shared by
+ * reply_translations and the buttons/list_options titleTranslations,
+ * labelTranslations and descriptionTranslations keys. Returns an error
+ * message naming the offending language code, or null if valid.
+ */
+const validateTranslationsMap = (translations, fieldLabel, maxLen) => {
+  if (translations === null || translations === undefined) return null;
+  if (typeof translations !== 'object' || Array.isArray(translations)) {
+    return `${fieldLabel} must be an object.`;
+  }
+  for (const [code, value] of Object.entries(translations)) {
+    if (!isValidLanguageCode(code)) {
+      return `${fieldLabel} has an invalid language code "${code}".`;
+    }
+    if (typeof value !== 'string') {
+      return `${fieldLabel} values must be strings.`;
+    }
+    if (maxLen !== undefined && value.length > maxLen) {
+      return `${fieldLabel} for language "${code}" must be ${maxLen} characters or less.`;
+    }
+  }
+  return null;
+};
 
 /**
  * Manual rule edits mean the business's rules have diverged from whatever
@@ -60,7 +86,8 @@ const getRules = async (req, res, next) => {
 const createRule = async (req, res, next) => {
   try {
     const { keyword, matchType = 'contains', replyType = 'text',
-            replyImageUrl = null, buttons = [], listOptions = [], hindiAliases = [] } = req.body;
+            replyImageUrl = null, buttons = [], listOptions = [], hindiAliases = [],
+            replyTranslations = null } = req.body;
     let { reply } = req.body;
     const businessId = req.user.businessId;
 
@@ -70,6 +97,10 @@ const createRule = async (req, res, next) => {
     }
     if (hindiAliases !== undefined && !Array.isArray(hindiAliases)) {
       return errorResponse(res, 400, 'hindiAliases must be an array of strings.');
+    }
+    const replyTranslationsError = validateTranslationsMap(replyTranslations, 'replyTranslations');
+    if (replyTranslationsError) {
+      return errorResponse(res, 400, replyTranslationsError);
     }
     if (Array.isArray(buttons)) {
       if (buttons.length > 3) {
@@ -81,6 +112,10 @@ const createRule = async (req, res, next) => {
         }
         if (b.title.length > 20) {
           return errorResponse(res, 400, 'Button titles must be 20 characters or less.');
+        }
+        const titleTranslationsError = validateTranslationsMap(b.titleTranslations, 'Button titleTranslations', 20);
+        if (titleTranslationsError) {
+          return errorResponse(res, 400, titleTranslationsError);
         }
       }
     }
@@ -97,6 +132,14 @@ const createRule = async (req, res, next) => {
         }
         if (o.description && o.description.length > 72) {
           return errorResponse(res, 400, 'List option descriptions must be 72 characters or less.');
+        }
+        const labelTranslationsError = validateTranslationsMap(o.labelTranslations, 'List option labelTranslations', 24);
+        if (labelTranslationsError) {
+          return errorResponse(res, 400, labelTranslationsError);
+        }
+        const descriptionTranslationsError = validateTranslationsMap(o.descriptionTranslations, 'List option descriptionTranslations', 72);
+        if (descriptionTranslationsError) {
+          return errorResponse(res, 400, descriptionTranslationsError);
         }
       }
     }
@@ -147,14 +190,18 @@ const createRule = async (req, res, next) => {
       reply,
       reply_type: replyType,
       reply_image_url: replyImageUrl || null,
+      reply_translations: replyTranslations || null,
       buttons: (buttons || []).map(b => ({
         title: b.title.trim(),
-        nextKeyword: b.nextKeyword.toLowerCase().trim()
+        nextKeyword: b.nextKeyword.toLowerCase().trim(),
+        titleTranslations: b.titleTranslations || null
       })),
       list_options: (listOptions || []).map(o => ({
         label: o.label.trim(),
         description: (o.description || '').trim(),
-        nextKeyword: o.nextKeyword.toLowerCase().trim()
+        nextKeyword: o.nextKeyword.toLowerCase().trim(),
+        labelTranslations: o.labelTranslations || null,
+        descriptionTranslations: o.descriptionTranslations || null
       })),
       hindi_aliases: (hindiAliases || []).map(a => a.trim()).filter(Boolean),
       is_active: true,
@@ -180,7 +227,7 @@ const createRule = async (req, res, next) => {
 const updateRule = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { keyword, matchType, reply, replyType, isActive, replyImageUrl, buttons, listOptions, hindiAliases } = req.body;
+    const { keyword, matchType, reply, replyType, isActive, replyImageUrl, buttons, listOptions, hindiAliases, replyTranslations } = req.body;
     const businessId = req.user.businessId;
 
     // Find rule
@@ -193,6 +240,11 @@ const updateRule = async (req, res, next) => {
 
     if (hindiAliases !== undefined && !Array.isArray(hindiAliases)) {
       return errorResponse(res, 400, 'hindiAliases must be an array of strings.');
+    }
+
+    const replyTranslationsError = validateTranslationsMap(replyTranslations, 'replyTranslations');
+    if (replyTranslationsError) {
+      return errorResponse(res, 400, replyTranslationsError);
     }
 
     if (buttons !== undefined) {
@@ -208,6 +260,10 @@ const updateRule = async (req, res, next) => {
         }
         if (b.title.length > 20) {
           return errorResponse(res, 400, 'Button titles must be 20 characters or less.');
+        }
+        const titleTranslationsError = validateTranslationsMap(b.titleTranslations, 'Button titleTranslations', 20);
+        if (titleTranslationsError) {
+          return errorResponse(res, 400, titleTranslationsError);
         }
       }
     }
@@ -228,6 +284,14 @@ const updateRule = async (req, res, next) => {
         }
         if (o.description && o.description.length > 72) {
           return errorResponse(res, 400, 'List option descriptions must be 72 characters or less.');
+        }
+        const labelTranslationsError = validateTranslationsMap(o.labelTranslations, 'List option labelTranslations', 24);
+        if (labelTranslationsError) {
+          return errorResponse(res, 400, labelTranslationsError);
+        }
+        const descriptionTranslationsError = validateTranslationsMap(o.descriptionTranslations, 'List option descriptionTranslations', 72);
+        if (descriptionTranslationsError) {
+          return errorResponse(res, 400, descriptionTranslationsError);
         }
       }
     }
@@ -258,17 +322,21 @@ const updateRule = async (req, res, next) => {
     if (replyType) updateData.reply_type = replyType;
     if (isActive !== undefined) updateData.is_active = isActive;
     if (replyImageUrl !== undefined) updateData.reply_image_url = replyImageUrl || null;
+    if (replyTranslations !== undefined) updateData.reply_translations = replyTranslations || null;
     if (buttons !== undefined) {
       updateData.buttons = buttons.map(b => ({
         title: b.title.trim(),
-        nextKeyword: b.nextKeyword.toLowerCase().trim()
+        nextKeyword: b.nextKeyword.toLowerCase().trim(),
+        titleTranslations: b.titleTranslations || null
       }));
     }
     if (listOptions !== undefined) {
       updateData.list_options = listOptions.map(o => ({
         label: o.label.trim(),
         description: (o.description || '').trim(),
-        nextKeyword: o.nextKeyword.toLowerCase().trim()
+        nextKeyword: o.nextKeyword.toLowerCase().trim(),
+        labelTranslations: o.labelTranslations || null,
+        descriptionTranslations: o.descriptionTranslations || null
       }));
     }
     if (hindiAliases !== undefined) {
