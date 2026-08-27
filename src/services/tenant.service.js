@@ -82,7 +82,27 @@ const invalidateTenantCache = async (phoneNumberId) => {
   }
 };
 
+/**
+ * Flush every cached tenant entry. Used when platform-level content shared
+ * across many businesses changes (e.g. a business_type_templates row) —
+ * unlike invalidateTenantCache, we don't have a single phoneNumberId to
+ * target, so clear all tenant:* keys rather than wait out the 1hr TTL.
+ */
+const flushAllTenantCache = async () => {
+  try {
+    const keys = await redis.keys('tenant:*');
+    if (keys.length > 0) {
+      await redis.del(...keys);
+      logger.info(`Flushed ${keys.length} tenant:* cache key(s)`);
+    }
+  } catch (error) {
+    logger.error('Error in flushAllTenantCache:', error);
+    throw error;
+  }
+};
+
 module.exports = {
   resolveBusinessByPhoneNumberId,
-  invalidateTenantCache
+  invalidateTenantCache,
+  flushAllTenantCache
 };

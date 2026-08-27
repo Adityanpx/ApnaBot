@@ -6,7 +6,30 @@ const adminService = require('../services/admin.service');
 const { invalidateRulesCache } = require('../services/chatbot.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
+const { isValidLanguageCode } = require('../utils/languageCatalog');
 const logger = require('../utils/logger');
+
+/**
+ * Validates a labelTranslations map ({ languageCode: text }) on a booking
+ * field or option. Returns an error message naming the offending language
+ * code, or null if valid. 'en' is rejected — translations are only for
+ * non-English languages, the field/option's own label/value carries English.
+ */
+const validateLabelTranslations = (translations, fieldLabel) => {
+  if (translations === null || translations === undefined) return null;
+  if (typeof translations !== 'object' || Array.isArray(translations)) {
+    return `${fieldLabel} must be an object.`;
+  }
+  for (const [code, value] of Object.entries(translations)) {
+    if (code === 'en' || !isValidLanguageCode(code)) {
+      return `${fieldLabel} has an invalid language code "${code}".`;
+    }
+    if (typeof value !== 'string') {
+      return `${fieldLabel} values must be strings.`;
+    }
+  }
+  return null;
+};
 
 // Tables with business_id and ON DELETE CASCADE on the businesses FK (see
 // supabase/migrations/20260819213717_init_schema.sql) — deleting the business
@@ -627,6 +650,24 @@ const updateTemplate = async (req, res, next) => {
       .from('business_type_templates').select('id').eq('id', id).maybeSingle();
     if (!existing) return errorResponse(res, 404, 'Template not found');
 
+    if (bookingFields !== undefined) {
+      for (const field of bookingFields) {
+        const fieldErr = validateLabelTranslations(
+          field.labelTranslations, `Field "${field.fieldKey}" labelTranslations`
+        );
+        if (fieldErr) return errorResponse(res, 400, fieldErr);
+
+        for (const opt of field.options || []) {
+          if (opt && typeof opt === 'object') {
+            const optErr = validateLabelTranslations(
+              opt.labelTranslations, `Option "${opt.value}" labelTranslations`
+            );
+            if (optErr) return errorResponse(res, 400, optErr);
+          }
+        }
+      }
+    }
+
     const updates = {};
     if (defaultRules !== undefined) updates.default_rules = defaultRules;
     if (bookingFields !== undefined) updates.booking_fields = bookingFields;
@@ -634,6 +675,17 @@ const updateTemplate = async (req, res, next) => {
     const { data: template, error } = await supabase
       .from('business_type_templates').update(updates).eq('id', id).select().single();
     if (error) throw error;
+
+    if (bookingFields !== undefined) {
+      // booking_fields is shared by every business in this category — a
+      // single phoneNumberId-keyed invalidation can't target them all, so
+      // flush the whole tenant cache rather than wait out the 1hr TTL.
+      try {
+        await tenantService.flushAllTenantCache();
+      } catch (cacheErr) {
+        logger.error(`Failed to flush tenant cache after template ${id} update:`, cacheErr);
+      }
+    }
 
     logger.info(`Template ${id} updated by superadmin`);
     return successResponse(res, 200, toCamelCase(template), 'Template updated successfully');
