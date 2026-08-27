@@ -34,6 +34,15 @@ router.post(
   ruleController.uploadRuleImage
 );
 
+// POST /translate - Draft AI translations for rule text (stateless, no DB writes)
+router.post(
+  '/translate',
+  protect,
+  requireBusiness,
+  requireRole('owner'),
+  ruleController.translateRules
+);
+
 // POST / - Create rule
 router.post('/', protect, requireBusiness, requireRole('owner'), ruleController.createRule);
 

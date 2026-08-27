@@ -3,6 +3,7 @@ const businessService = require('../services/business.service');
 const subscriptionService = require('../services/subscription.service');
 const { invalidateRulesCache } = require('../services/chatbot.service');
 const r2 = require('../services/r2.service');
+const translateService = require('../services/translate.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const { toCamelCase } = require('../utils/caseConvert');
@@ -554,6 +555,63 @@ const uploadRuleImage = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/rules/translate
+ * Draft AI translations for rule reply/button/list text. Stateless - writes
+ * nothing to the database; the owner reviews the result and saves through
+ * the normal rule update paths.
+ */
+const translateRules = async (req, res, next) => {
+  try {
+    if (!translateService.isAvailable()) {
+      return errorResponse(res, 503, 'Translation is not available right now.');
+    }
+
+    const { fields, targetLanguages } = req.body;
+
+    if (!Array.isArray(fields) || fields.length === 0) {
+      return errorResponse(res, 400, 'fields must be a non-empty array.');
+    }
+    if (fields.length > 30) {
+      return errorResponse(res, 400, 'fields can contain at most 30 entries.');
+    }
+    for (const f of fields) {
+      if (!f || typeof f.id !== 'string' || !f.id || typeof f.text !== 'string' || !f.text) {
+        return errorResponse(res, 400, 'Each field needs an id and text.');
+      }
+      if (f.maxLength !== undefined && f.maxLength !== null && typeof f.maxLength !== 'number') {
+        return errorResponse(res, 400, 'maxLength must be a number or null.');
+      }
+    }
+
+    if (!Array.isArray(targetLanguages) || targetLanguages.length === 0) {
+      return errorResponse(res, 400, 'targetLanguages must be a non-empty array.');
+    }
+    for (const code of targetLanguages) {
+      if (!isValidLanguageCode(code) || code === 'en') {
+        return errorResponse(res, 400, `Invalid target language code "${code}".`);
+      }
+    }
+
+    const businessId = req.user.businessId;
+    const business = await businessService.getBusinessById(businessId);
+    if (!business) {
+      return errorResponse(res, 404, 'Business not found');
+    }
+
+    const result = await translateService.translateFields({
+      fields: fields.map(f => ({ id: f.id, text: f.text, maxLength: f.maxLength ?? null })),
+      targetLanguages,
+      businessName: business.name
+    });
+
+    return successResponse(res, 200, result);
+  } catch (error) {
+    logger.error('Error in translateRules:', error);
+    next(error);
+  }
+};
+
 module.exports = {
   getRules,
   createRule,
@@ -562,5 +620,6 @@ module.exports = {
   toggleRule,
   getTemplates,
   bulkImportRules,
-  uploadRuleImage
+  uploadRuleImage,
+  translateRules
 };
