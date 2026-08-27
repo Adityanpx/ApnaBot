@@ -847,9 +847,12 @@ const receiveWebhook = async (req, res) => {
     // Step 12.6 - Dynamic language selection. Runs only once Step 12's
     // booking-session handling has fallen through (no active session, or it
     // just expired) so an in-progress booking is never hijacked mid-flow.
+    // TEMP DIAGNOSTIC - remove after root cause confirmed
+    logger.info(`[LANG-DIAG] tenant.businessId=${tenant.businessId} customerId=${customer.id} preferredLanguage=${JSON.stringify(customer.preferredLanguage)} typeof=${typeof customer.preferredLanguage} hasKey=${Object.prototype.hasOwnProperty.call(customer, 'preferredLanguage')} buttonReplyId=${JSON.stringify(buttonReplyId)}`);
     if (customer.preferredLanguage === null && !(buttonReplyId && buttonReplyId.startsWith('lang_'))) {
       const languageBusinessDoc = await businessService.getBusinessById(tenant.businessId);
       const enabledLanguages = languageBusinessDoc?.enabledLanguages?.length ? languageBusinessDoc.enabledLanguages : ['en'];
+      logger.info(`[LANG-DIAG] businessDocId=${languageBusinessDoc?.id} rawEnabled=${JSON.stringify(languageBusinessDoc?.enabledLanguages)} resolved=${JSON.stringify(enabledLanguages)}`);
 
       if (enabledLanguages.length === 1) {
         // Nothing to ask - set it directly and fall through to greeting/rule
@@ -862,6 +865,7 @@ const receiveWebhook = async (req, res) => {
           .single();
         if (langErr) throw langErr;
         customer.preferredLanguage = toCamelCase(updatedCustomer).preferredLanguage;
+        logger.info(`[LANG-DIAG] auto-set single language "${enabledLanguages[0]}" for customer ${customerNumber} - falling through, NO picker sent`);
       } else {
         // 2 or 3 languages enabled - ask, then wait for the reply.
         const languageButtons = enabledLanguages.map((code) => ({
