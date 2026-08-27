@@ -599,11 +599,19 @@ const translateRules = async (req, res, next) => {
       return errorResponse(res, 404, 'Business not found');
     }
 
-    const result = await translateService.translateFields({
-      fields: fields.map(f => ({ id: f.id, text: f.text, maxLength: f.maxLength ?? null })),
-      targetLanguages,
-      businessName: business.name
-    });
+    let result;
+    try {
+      result = await translateService.translateFields({
+        fields: fields.map(f => ({ id: f.id, text: f.text, maxLength: f.maxLength ?? null })),
+        targetLanguages,
+        businessName: business.name
+      });
+    } catch (error) {
+      if (error instanceof translateService.TranslationUnavailableError) {
+        return errorResponse(res, 503, error.message);
+      }
+      throw error;
+    }
 
     return successResponse(res, 200, result);
   } catch (error) {

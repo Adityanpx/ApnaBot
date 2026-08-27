@@ -16,6 +16,13 @@ const getClient = () => {
 
 const isAvailable = () => getClient() !== null;
 
+class TranslationUnavailableError extends Error {
+  constructor() {
+    super('Auto-translate is temporarily unavailable. You can still type translations manually.');
+    this.name = 'TranslationUnavailableError';
+  }
+}
+
 const PLACEHOLDER_RE = /\{\{[^}]+\}\}/g;
 
 const extractPlaceholders = (text) => new Set((text || '').match(PLACEHOLDER_RE) || []);
@@ -69,12 +76,22 @@ const translateFields = async ({ fields, targetLanguages, businessName }) => {
 
   const systemPrompt = buildSystemPrompt({ fields, targetLanguages, businessName });
 
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 4096,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: 'Return the JSON translations now.' }]
-  });
+  let response;
+  try {
+    response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: 'Return the JSON translations now.' }]
+    });
+  } catch (error) {
+    logger.error('translateFields: Anthropic API call failed', {
+      message: error.message,
+      status: error.status,
+      request_id: error.request_id
+    });
+    throw new TranslationUnavailableError();
+  }
 
   const textBlock = response.content?.find(block => block.type === 'text');
   const raw = textBlock?.text?.trim() || '';
@@ -132,5 +149,6 @@ const translateFields = async ({ fields, targetLanguages, businessName }) => {
 
 module.exports = {
   translateFields,
-  isAvailable
+  isAvailable,
+  TranslationUnavailableError
 };
