@@ -11,6 +11,8 @@ const businessService = require('../services/business.service');
 const supabase = require('../config/supabase');
 const { toCamelCase } = require('../utils/caseConvert');
 const { applyMessageTemplate } = require('../utils/messageTemplating');
+const { LANGUAGE_CATALOG, isValidLanguageCode } = require('../utils/languageCatalog');
+const { getLocalizedText } = require('../utils/localization');
 const logger = require('../utils/logger');
 
 // Exact-match greeting keywords that trigger the welcome message / menu.
@@ -444,7 +446,7 @@ const receiveWebhook = async (req, res) => {
         if (escapeHasMenu) {
           const menuListOptions = await buildMenuListOptions(escapeBusinessDoc.menuItems);
           const menuReplyText = applyMessageTemplate(
-            escapeBusinessDoc.welcomeMessage || 'How can we help you today?',
+            getLocalizedText(escapeBusinessDoc, 'welcomeMessage', customer.preferredLanguage) || 'How can we help you today?',
             tenant
           );
 
@@ -842,6 +844,143 @@ const receiveWebhook = async (req, res) => {
       }
     }
 
+    // Step 12.6 - Dynamic language selection. Runs only once Step 12's
+    // booking-session handling has fallen through (no active session, or it
+    // just expired) so an in-progress booking is never hijacked mid-flow.
+    if (customer.preferredLanguage === null && !(buttonReplyId && buttonReplyId.startsWith('lang_'))) {
+      const languageBusinessDoc = await businessService.getBusinessById(tenant.businessId);
+      const enabledLanguages = languageBusinessDoc?.enabledLanguages?.length ? languageBusinessDoc.enabledLanguages : ['en'];
+
+      if (enabledLanguages.length === 1) {
+        // Nothing to ask - set it directly and fall through to greeting/rule
+        // matching this same turn.
+        const { data: updatedCustomer, error: langErr } = await supabase
+          .from('customers')
+          .update({ preferred_language: enabledLanguages[0] })
+          .eq('id', customer.id)
+          .select()
+          .single();
+        if (langErr) throw langErr;
+        customer.preferredLanguage = toCamelCase(updatedCustomer).preferredLanguage;
+      } else {
+        // 2 or 3 languages enabled - ask, then wait for the reply.
+        const languageButtons = enabledLanguages.map((code) => ({
+          title: (LANGUAGE_CATALOG[code]?.name || code).slice(0, 20),
+          nextKeyword: `lang_${code}`
+        }));
+        const languagePromptText = 'Choose your language / अपनी भाषा चुनें';
+
+        const languagePromptMsg = await saveMessage({
+          business_id: tenant.businessId,
+          customer_id: customer.id,
+          customer_number: customerNumber,
+          direction: 'outbound',
+          type: 'text',
+          content: languagePromptText,
+          status: 'sent',
+          is_read: true
+        });
+        await addToWhatsappQueue({
+          businessId: tenant.businessId,
+          phoneNumberId: tenant.phoneNumberId,
+          encryptedAccessToken: tenant.accessToken,
+          to: customerNumber,
+          message: languagePromptText,
+          type: 'text',
+          buttons: languageButtons,
+          messageId: languagePromptMsg.id
+        });
+        usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+          logger.error('Error incrementing outbound usage:', err)
+        );
+        try {
+          socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+            customer,
+            message: languagePromptMsg,
+            customerNumber
+          });
+        } catch (socketError) {
+          logger.error('Error emitting socket event:', socketError);
+        }
+
+        logger.info(`Sent language picker for business ${tenant.businessId}, customer ${customerNumber}`);
+        return; // Do not run greeting or rule matching this turn
+      }
+    }
+
+    if (buttonReplyId && buttonReplyId.startsWith('lang_')) {
+      // Customer tapped a language-picker button - validate (defends
+      // against a stale/tampered id), persist, then send the welcome
+      // message immediately in their chosen language.
+      const tappedCode = buttonReplyId.slice('lang_'.length);
+      const langBusinessDoc = await businessService.getBusinessById(tenant.businessId);
+      const enabledLanguages = langBusinessDoc?.enabledLanguages?.length ? langBusinessDoc.enabledLanguages : ['en'];
+
+      if (!isValidLanguageCode(tappedCode) || !enabledLanguages.includes(tappedCode)) {
+        logger.warn(`Ignoring language selection tap with invalid/stale code "${tappedCode}" for business ${tenant.businessId}, customer ${customerNumber}`);
+        return; // Do not run rule matching
+      }
+
+      const { data: updatedCustomer, error: langErr } = await supabase
+        .from('customers')
+        .update({ preferred_language: tappedCode })
+        .eq('id', customer.id)
+        .select()
+        .single();
+      if (langErr) throw langErr;
+      customer.preferredLanguage = toCamelCase(updatedCustomer).preferredLanguage;
+
+      const hasMenu = !!(langBusinessDoc?.isMenuEnabled && langBusinessDoc.menuItems?.length > 0);
+      let welcomeReplyText = getLocalizedText(langBusinessDoc, 'welcomeMessage', tappedCode) || '';
+      let menuListOptions = [];
+
+      if (hasMenu) {
+        menuListOptions = await buildMenuListOptions(langBusinessDoc.menuItems);
+        if (!welcomeReplyText) {
+          welcomeReplyText = 'How can we help you today?';
+        }
+      }
+
+      welcomeReplyText = applyMessageTemplate(welcomeReplyText, tenant);
+
+      const welcomeOutboundMsg = await saveMessage({
+        business_id: tenant.businessId,
+        customer_id: customer.id,
+        customer_number: customerNumber,
+        direction: 'outbound',
+        type: 'text',
+        content: welcomeReplyText,
+        status: 'sent',
+        is_read: true
+      });
+      await addToWhatsappQueue({
+        businessId: tenant.businessId,
+        phoneNumberId: tenant.phoneNumberId,
+        encryptedAccessToken: tenant.accessToken,
+        to: customerNumber,
+        message: welcomeReplyText,
+        type: 'text',
+        listOptions: menuListOptions,
+        listButtonLabel: 'Menu',
+        messageId: welcomeOutboundMsg.id
+      });
+      usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+        logger.error('Error incrementing outbound usage:', err)
+      );
+      try {
+        socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+          customer,
+          message: welcomeOutboundMsg,
+          customerNumber
+        });
+      } catch (socketError) {
+        logger.error('Error emitting socket event:', socketError);
+      }
+
+      logger.info(`Set preferred language ${tappedCode} and sent welcome message for business ${tenant.businessId}, customer ${customerNumber}`);
+      return; // Do not run rule matching this turn
+    }
+
     // Step 12.5 - Greeting -> welcome message / menu (exact match only, so
     // real rule keywords still take priority over this).
     const normalizedText = (messageText || '').trim().toLowerCase();
@@ -849,9 +988,10 @@ const receiveWebhook = async (req, res) => {
       const businessDoc = await businessService.getBusinessById(tenant.businessId);
 
       const hasMenu = !!(businessDoc?.isMenuEnabled && businessDoc.menuItems?.length > 0);
+      const localizedWelcomeMessage = getLocalizedText(businessDoc, 'welcomeMessage', customer.preferredLanguage);
 
-      if (businessDoc && (businessDoc.welcomeMessage || hasMenu)) {
-        let greetingReplyText = businessDoc.welcomeMessage || '';
+      if (businessDoc && (localizedWelcomeMessage || hasMenu)) {
+        let greetingReplyText = localizedWelcomeMessage || '';
         let menuListOptions = [];
 
         if (hasMenu) {

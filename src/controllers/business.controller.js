@@ -9,6 +9,7 @@ const { generateTokens, saveTokenToRedis } = require('../services/auth.service')
 const logger = require('../utils/logger');
 const r2 = require('../services/r2.service');
 const config = require('../config/env');
+const { isValidLanguageCode, LANGUAGE_CATALOG } = require('../utils/languageCatalog');
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 
@@ -202,6 +203,21 @@ const updateBusiness = async (req, res, next) => {
 
       if (invalidFieldKeys.length > 0) {
         return errorResponse(res, 400, `Cannot disable field(s): ${invalidFieldKeys.join(', ')}. Each must be an optional field defined in the ${currentBusiness.businessCategory} booking template.`);
+      }
+    }
+
+    if (req.body.enabledLanguages !== undefined) {
+      const { enabledLanguages } = req.body;
+      if (!Array.isArray(enabledLanguages) || enabledLanguages.length < 1 || enabledLanguages.length > 3) {
+        return errorResponse(res, 400, 'enabledLanguages must include between 1 and 3 languages.');
+      }
+      const invalidCodes = enabledLanguages.filter(code => !isValidLanguageCode(code));
+      if (invalidCodes.length > 0) {
+        return errorResponse(res, 400, `Invalid language code(s): ${invalidCodes.join(', ')}. Must be one of: ${Object.keys(LANGUAGE_CATALOG).join(', ')}`);
+      }
+      const uniqueCodes = new Set(enabledLanguages);
+      if (uniqueCodes.size !== enabledLanguages.length) {
+        return errorResponse(res, 400, 'enabledLanguages must not contain duplicate language codes.');
       }
     }
 

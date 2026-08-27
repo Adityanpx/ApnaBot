@@ -10,7 +10,8 @@ const businessFieldMap = {
   welcomeMessage: 'welcome_message', isMenuEnabled: 'is_menu_enabled', menuItems: 'menu_items',
   enableDistanceFares: 'enable_distance_fares', enableSmartFallback: 'enable_smart_fallback',
   roundTripPerDayKm: 'round_trip_per_day_km', roundTripDriverDaEnabled: 'round_trip_driver_da_enabled',
-  roundTripDriverDaAmount: 'round_trip_driver_da_amount', disabledBookingFields: 'disabled_booking_fields'
+  roundTripDriverDaAmount: 'round_trip_driver_da_amount', disabledBookingFields: 'disabled_booking_fields',
+  enabledLanguages: 'enabled_languages', welcomeMessageTranslations: 'welcome_message_translations'
 };
 
 /**
