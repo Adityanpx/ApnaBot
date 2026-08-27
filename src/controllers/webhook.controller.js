@@ -107,9 +107,10 @@ const upsertCustomerForInboundMessage = async (businessId, customerNumber, profi
  * {label, nextKeyword} shape sendRuleListMessage expects. Shared by the
  * Step 12.5 greeting handler and the "no rule matched" fallback.
  * @param {Array} menuItems - business.menuItems
+ * @param {string} [languageCode] - customer.preferredLanguage
  * @returns {Promise<Array<{label: string, nextKeyword: string}>>}
  */
-const buildMenuListOptions = async (menuItems) => {
+const buildMenuListOptions = async (menuItems, languageCode) => {
   const sortedItems = [...menuItems]
     .sort((a, b) => a.order - b.order)
     .slice(0, 10);
@@ -121,7 +122,7 @@ const buildMenuListOptions = async (menuItems) => {
   return sortedItems
     .filter(item => keywordByRuleId.has(item.ruleId.toString()))
     .map(item => ({
-      label: item.label,
+      label: getLocalizedText(item, 'label', languageCode),
       nextKeyword: keywordByRuleId.get(item.ruleId.toString())
     }));
 };
@@ -444,7 +445,7 @@ const receiveWebhook = async (req, res) => {
         // If the business has a menu, follow up with the same welcome/menu send
         // Step 12.5 does for a greeting.
         if (escapeHasMenu) {
-          const menuListOptions = await buildMenuListOptions(escapeBusinessDoc.menuItems);
+          const menuListOptions = await buildMenuListOptions(escapeBusinessDoc.menuItems, customer.preferredLanguage);
           const menuReplyText = applyMessageTemplate(
             getLocalizedText(escapeBusinessDoc, 'welcomeMessage', customer.preferredLanguage) || 'How can we help you today?',
             tenant
@@ -963,7 +964,7 @@ const receiveWebhook = async (req, res) => {
         let menuListOptions = [];
 
         if (hasMenu) {
-          menuListOptions = await buildMenuListOptions(businessDoc.menuItems);
+          menuListOptions = await buildMenuListOptions(businessDoc.menuItems, customer.preferredLanguage);
 
           if (!greetingReplyText) {
             greetingReplyText = 'How can we help you today?';
@@ -1075,7 +1076,7 @@ const receiveWebhook = async (req, res) => {
       const fallbackHasMenu = !!(fallbackBusinessDoc?.isMenuEnabled && fallbackBusinessDoc.menuItems?.length > 0);
 
       if (fallbackHasMenu) {
-        fallbackMenuListOptions = await buildMenuListOptions(fallbackBusinessDoc.menuItems);
+        fallbackMenuListOptions = await buildMenuListOptions(fallbackBusinessDoc.menuItems, customer.preferredLanguage);
       }
     }
 
