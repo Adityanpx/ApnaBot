@@ -29,6 +29,7 @@ const createSavedFlow = async (req, res, next) => {
       reply: rule.reply,
       replyType: rule.reply_type,
       replyImageUrl: rule.reply_image_url,
+      replyTranslations: rule.reply_translations || null,
       buttons: rule.buttons || [],
       listOptions: rule.list_options || [],
       hindiAliases: rule.hindi_aliases || []
@@ -100,14 +101,18 @@ const restoreSavedFlow = async (req, res, next) => {
           reply: rule.reply || '',
           reply_type: rule.replyType || 'text',
           reply_image_url: rule.replyImageUrl || null,
+          reply_translations: rule.replyTranslations || null,
           buttons: (rule.buttons || []).map(b => ({
             title: b.title,
-            nextKeyword: b.nextKeyword
+            nextKeyword: b.nextKeyword,
+            titleTranslations: b.titleTranslations || null
           })),
           list_options: (rule.listOptions || []).map(o => ({
             label: o.label,
             description: o.description || '',
-            nextKeyword: o.nextKeyword
+            nextKeyword: o.nextKeyword,
+            labelTranslations: o.labelTranslations || null,
+            descriptionTranslations: o.descriptionTranslations || null
           })),
           hindi_aliases: rule.hindiAliases || [],
           is_active: true,
