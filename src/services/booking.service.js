@@ -11,6 +11,20 @@ const logger = require('../utils/logger');
 const tripTypeMap = { 'One Way': 'oneway', 'Round Trip': 'round_trip', 'Local Rental': 'local' };
 
 /**
+ * Normalize a 'buttons'/'list' field's option entry to a {value, label,
+ * labelTranslations} shape. Plain strings (every seeded row today) become
+ * their own value and label. VALUE is what gets written into
+ * session.collected (and so must stay English — tripTypeMap and the other
+ * 'Other'/'Other date'/'Other time' sentinel checks key off it); LABEL is
+ * what gets rendered into buttons/list rows shown to the customer.
+ */
+const normalizeOption = (opt) =>
+  typeof opt === 'string'
+    ? { value: opt, label: opt, labelTranslations: null }
+    : { value: opt.value, label: opt.label ?? opt.value,
+        labelTranslations: opt.labelTranslations ?? null };
+
+/**
  * Format a Date as DD/MM/YYYY, matching the format customers are asked to
  * type manually when they answer the travelDate question with free text.
  */
@@ -439,11 +453,7 @@ const applyServedCitiesFields = (fields, servedCities) => {
       return field;
     }
     return {
-      fieldKey: field.fieldKey,
-      label: field.label,
-      summaryLabel: field.summaryLabel,
-      required: field.required,
-      order: field.order,
+      ...field,
       fieldType: 'list',
       options: cityOptions
     };
@@ -631,7 +641,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         session.collected[currentField.fieldKey] = session.collected.vehicleName;
       }
     } else if (fieldType === 'buttons' || fieldType === 'list') {
-      const options = currentField.options || [];
+      const options = (currentField.options || []).map(normalizeOption);
       const trimmedReply = (customerReply || '').trim();
 
       // (a) typed number matching an option's 1-based position
@@ -641,20 +651,24 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         resolvedOption = options[asNumber - 1];
       }
 
-      // (b) text matching an option case-insensitively — this also covers
+      // (b) text matching an option's label OR value case-insensitively —
+      // label covers the customer typing what they were shown, value covers
       // (c) interactive selections, since webhook.controller.js resolves
-      // those to the option text before calling this function.
+      // those to the option's value before calling this function.
       if (!resolvedOption) {
-        resolvedOption = options.find(opt => opt.toLowerCase() === trimmedReply.toLowerCase()) || null;
+        resolvedOption = options.find(opt =>
+          opt.label.toLowerCase() === trimmedReply.toLowerCase() ||
+          opt.value.toLowerCase() === trimmedReply.toLowerCase()
+        ) || null;
       }
 
       if (!resolvedOption) {
         // No match - re-prompt without advancing the step
         await saveBookingSession(businessId, customerNumber, session);
-        return 'Please choose one of: ' + options.join(', ');
+        return 'Please choose one of: ' + options.map(opt => opt.label).join(', ');
       }
 
-      if (currentField.fieldKey === 'travelDate' && resolvedOption === 'Other date') {
+      if (currentField.fieldKey === 'travelDate' && resolvedOption.value === 'Other date') {
         // Customer wants to type their own date — swap this step's field for
         // a plain-text sub-question in place, without advancing session.step,
         // so their next reply is captured as free text (same pattern as
@@ -670,7 +684,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         return otherDateField;
       }
 
-      if ((currentField.fieldKey === 'pickupLocation' || currentField.fieldKey === 'dropLocation') && resolvedOption === 'Other') {
+      if ((currentField.fieldKey === 'pickupLocation' || currentField.fieldKey === 'dropLocation') && resolvedOption.value === 'Other') {
         // Customer's city isn't in the servedCities list — swap this step's
         // field for a plain-text sub-question in place, without advancing
         // session.step, so their next reply is captured as free text (same
@@ -688,7 +702,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         return otherLocationField;
       }
 
-      if (currentField.fieldKey === 'pickupTime' && resolvedOption === 'Other time') {
+      if (currentField.fieldKey === 'pickupTime' && resolvedOption.value === 'Other time') {
         // Customer wants to type their own time — swap this step's field for
         // a plain-text sub-question in place, without advancing session.step
         // (same pattern as the travelDate "Other date" swap above).
@@ -704,8 +718,8 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
       }
 
       session.collected[currentField.fieldKey] = currentField.fieldKey === 'travelDate'
-        ? resolveTravelDateOption(resolvedOption)
-        : resolvedOption;
+        ? resolveTravelDateOption(resolvedOption.value)
+        : resolvedOption.value;
     } else {
       session.collected[currentField.fieldKey] = customerReply.trim();
     }
@@ -1070,5 +1084,6 @@ module.exports = {
   getAllBookingFields,
   getVehicleCarouselPreview,
   getPreviewCreditsStatus,
-  checkAndConsumeManualPreviewCredit
+  checkAndConsumeManualPreviewCredit,
+  normalizeOption
 };
