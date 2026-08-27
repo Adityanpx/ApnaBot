@@ -324,19 +324,21 @@ const updateRule = async (req, res, next) => {
     if (replyImageUrl !== undefined) updateData.reply_image_url = replyImageUrl || null;
     if (replyTranslations !== undefined) updateData.reply_translations = replyTranslations || null;
     if (buttons !== undefined) {
-      updateData.buttons = buttons.map(b => ({
+      const existingButtons = rule.buttons || [];
+      updateData.buttons = buttons.map((b, i) => ({
         title: b.title.trim(),
         nextKeyword: b.nextKeyword.toLowerCase().trim(),
-        titleTranslations: b.titleTranslations || null
+        titleTranslations: b.titleTranslations !== undefined ? b.titleTranslations : (existingButtons[i]?.titleTranslations ?? null)
       }));
     }
     if (listOptions !== undefined) {
-      updateData.list_options = listOptions.map(o => ({
+      const existingListOptions = rule.list_options || [];
+      updateData.list_options = listOptions.map((o, i) => ({
         label: o.label.trim(),
         description: (o.description || '').trim(),
         nextKeyword: o.nextKeyword.toLowerCase().trim(),
-        labelTranslations: o.labelTranslations || null,
-        descriptionTranslations: o.descriptionTranslations || null
+        labelTranslations: o.labelTranslations !== undefined ? o.labelTranslations : (existingListOptions[i]?.labelTranslations ?? null),
+        descriptionTranslations: o.descriptionTranslations !== undefined ? o.descriptionTranslations : (existingListOptions[i]?.descriptionTranslations ?? null)
       }));
     }
     if (hindiAliases !== undefined) {
