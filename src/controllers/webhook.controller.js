@@ -508,7 +508,7 @@ const receiveWebhook = async (req, res) => {
         // "Other time" are both index 2), so a bare index would let a stale
         // tap from an earlier, already-answered question get misresolved
         // against whatever field is currently active.
-        const options = currentField.options || [];
+        const options = (currentField.options || []).map(bookingService.normalizeOption);
         const sepIdx = replyId.indexOf(':');
         const tappedStep = sepIdx === -1 ? NaN : parseInt(replyId.slice(0, sepIdx), 10);
         const tappedIndex = sepIdx === -1 ? NaN : parseInt(replyId.slice(sepIdx + 1), 10);
@@ -541,9 +541,9 @@ const receiveWebhook = async (req, res) => {
             messageId: resendMsg.id
           };
           if (currentField.fieldType === 'buttons') {
-            resendJobData.interactiveButtons = options;
+            resendJobData.interactiveButtons = options.map(opt => opt.label);
           } else {
-            resendJobData.interactiveList = options;
+            resendJobData.interactiveList = options.map(opt => opt.label);
             resendJobData.listButtonLabel = 'Choose';
           }
           await addToWhatsappQueue(resendJobData);
@@ -566,7 +566,7 @@ const receiveWebhook = async (req, res) => {
         }
 
         if (!Number.isNaN(tappedIndex) && options[tappedIndex] !== undefined) {
-          resolvedReply = options[tappedIndex];
+          resolvedReply = options[tappedIndex].value;
         }
       }
 
@@ -816,10 +816,11 @@ const receiveWebhook = async (req, res) => {
           // inbound resolution will later compare against session.step.
           const stepSession = await bookingService.getBookingSession(tenant.businessId, customerNumber);
           outboundJobData.step = stepSession ? stepSession.step : activeSession.step;
+          const nextFieldLabels = (nextField.options || []).map(bookingService.normalizeOption).map(opt => opt.label);
           if (nextField.fieldType === 'buttons') {
-            outboundJobData.interactiveButtons = nextField.options || [];
+            outboundJobData.interactiveButtons = nextFieldLabels;
           } else {
-            outboundJobData.interactiveList = nextField.options || [];
+            outboundJobData.interactiveList = nextFieldLabels;
             outboundJobData.listButtonLabel = 'Choose';
           }
         }
@@ -1124,10 +1125,11 @@ const receiveWebhook = async (req, res) => {
     if (bookingField && (bookingField.fieldType === 'buttons' || bookingField.fieldType === 'list')) {
       // startBookingSession always creates the session at step 0.
       outboundJobData.step = 0;
+      const bookingFieldLabels = (bookingField.options || []).map(bookingService.normalizeOption).map(opt => opt.label);
       if (bookingField.fieldType === 'buttons') {
-        outboundJobData.interactiveButtons = bookingField.options || [];
+        outboundJobData.interactiveButtons = bookingFieldLabels;
       } else {
-        outboundJobData.interactiveList = bookingField.options || [];
+        outboundJobData.interactiveList = bookingFieldLabels;
         outboundJobData.listButtonLabel = 'Choose';
       }
     }
