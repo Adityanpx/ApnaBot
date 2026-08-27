@@ -219,6 +219,9 @@ const updateBusiness = async (req, res, next) => {
       if (uniqueCodes.size !== enabledLanguages.length) {
         return errorResponse(res, 400, 'enabledLanguages must not contain duplicate language codes.');
       }
+      if (!enabledLanguages.includes('en')) {
+        return errorResponse(res, 400, 'English cannot be removed from enabled languages.');
+      }
     }
 
     const business = await businessService.updateBusiness(businessId, req.body);

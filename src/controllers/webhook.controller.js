@@ -868,7 +868,12 @@ const receiveWebhook = async (req, res) => {
           title: (LANGUAGE_CATALOG[code]?.name || code).slice(0, 20),
           nextKeyword: `lang_${code}`
         }));
-        const languagePromptText = 'Choose your language / अपनी भाषा चुनें';
+        const languageChoiceLine = 'Choose your language / अपनी भाषा चुनें';
+        const welcomeMessage = getLocalizedText(languageBusinessDoc, 'welcomeMessage', 'en');
+        const languagePromptText = applyMessageTemplate(
+          welcomeMessage ? `${welcomeMessage}\n\n${languageChoiceLine}` : languageChoiceLine,
+          tenant
+        );
 
         const languagePromptMsg = await saveMessage({
           business_id: tenant.businessId,
