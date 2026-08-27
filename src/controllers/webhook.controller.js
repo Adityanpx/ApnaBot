@@ -519,13 +519,15 @@ const receiveWebhook = async (req, res) => {
           // it and re-send the current question's prompt so the customer
           // sees the bot is still waiting here, without advancing
           // session.step or touching session.collected.
+          const localizedFieldLabel = getLocalizedText(currentField, 'label', customer.preferredLanguage);
+          const localizedOptionLabels = options.map(opt => getLocalizedText(opt, 'label', customer.preferredLanguage));
           const resendMsg = await saveMessage({
             business_id: tenant.businessId,
             customer_id: customer.id,
             customer_number: customerNumber,
             direction: 'outbound',
             type: 'text',
-            content: currentField.label,
+            content: localizedFieldLabel,
             status: 'sent',
             triggered_rule_id: activeSession.ruleId,
             is_read: true
@@ -535,15 +537,15 @@ const receiveWebhook = async (req, res) => {
             phoneNumberId: tenant.phoneNumberId,
             encryptedAccessToken: tenant.accessToken,
             to: customerNumber,
-            message: currentField.label,
+            message: localizedFieldLabel,
             type: 'text',
             step: activeSession.step,
             messageId: resendMsg.id
           };
           if (currentField.fieldType === 'buttons') {
-            resendJobData.interactiveButtons = options.map(opt => opt.label);
+            resendJobData.interactiveButtons = localizedOptionLabels;
           } else {
-            resendJobData.interactiveList = options.map(opt => opt.label);
+            resendJobData.interactiveList = localizedOptionLabels;
             resendJobData.listButtonLabel = 'Choose';
           }
           await addToWhatsappQueue(resendJobData);
@@ -575,7 +577,8 @@ const receiveWebhook = async (req, res) => {
         tenant.businessId,
         customerNumber,
         resolvedReply,
-        tenant
+        tenant,
+        customer.preferredLanguage
       );
 
       if (stepResult === null) {
@@ -1043,7 +1046,8 @@ const receiveWebhook = async (req, res) => {
         const firstField = await bookingService.startBookingSession(
           tenant.businessId,
           customerNumber,
-          matchedRule.id
+          matchedRule.id,
+          customer.preferredLanguage
         );
         bookingField = firstField;
         replyText = firstField.label;

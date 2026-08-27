@@ -1,6 +1,7 @@
 const redis = require('../config/redis');
 const supabase = require('../config/supabase');
 const { toCamelCase } = require('../utils/caseConvert');
+const { getLocalizedText } = require('../utils/localization');
 const businessService = require('./business.service');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const usageService = require('./usage.service');
@@ -23,6 +24,33 @@ const normalizeOption = (opt) =>
     ? { value: opt, label: opt, labelTranslations: null }
     : { value: opt.value, label: opt.label ?? opt.value,
         labelTranslations: opt.labelTranslations ?? null };
+
+/**
+ * Build the customer-facing copy of a field, with label/option labels
+ * resolved to the customer's language. Only 'buttons'/'list' fields are
+ * translated (decided on runtime fieldType, not fieldKey, since
+ * applyServedCitiesFields turns pickupLocation/dropLocation into 'list'
+ * fields for businesses with servedCities configured) — free-text fields
+ * are returned untouched. session.fields itself is never mutated: matching
+ * a later reply needs the raw options (value + labelTranslations), so this
+ * always returns a new object rather than localizing in place.
+ * @param {Object} field
+ * @param {string|null|undefined} languageCode
+ * @returns {Object}
+ */
+const localizeField = (field, languageCode) => {
+  if (!field || (field.fieldType !== 'buttons' && field.fieldType !== 'list')) {
+    return field;
+  }
+  return {
+    ...field,
+    label: getLocalizedText(field, 'label', languageCode),
+    options: (field.options || []).map(opt => {
+      const normalized = normalizeOption(opt);
+      return { ...normalized, label: getLocalizedText(normalized, 'label', languageCode) };
+    })
+  };
+};
 
 /**
  * Format a Date as DD/MM/YYYY, matching the format customers are asked to
@@ -319,7 +347,7 @@ const getCarouselOptionsForSession = async (businessId, session) => {
  * either refresh the carousel in place or drop to the generic vehicleType
  * list if nothing is left to offer.
  */
-const rebuildCarouselOrFallback = async (businessId, customerNumber, session, currentField) => {
+const rebuildCarouselOrFallback = async (businessId, customerNumber, session, currentField, languageCode) => {
   const freshOptions = await getCarouselOptionsForSession(businessId, session);
 
   if (freshOptions.length > 0) {
@@ -330,7 +358,7 @@ const rebuildCarouselOrFallback = async (businessId, customerNumber, session, cu
 
   const genericVehicleField = await fallbackToGenericVehicleField(businessId, session);
   await saveBookingSession(businessId, customerNumber, session);
-  return genericVehicleField;
+  return localizeField(genericVehicleField, languageCode);
 };
 
 /**
@@ -465,9 +493,11 @@ const applyServedCitiesFields = (fields, servedCities) => {
  * @param {string} businessId
  * @param {string} customerNumber
  * @param {string} ruleId
+ * @param {string} [languageCode] - customer.preferredLanguage; when set, the returned
+ *   field's label/option labels are resolved to this language (buttons/list fields only)
  * @returns {Promise<Object>} First field object (fieldKey, label, required, order, fieldType, options)
  */
-const startBookingSession = async (businessId, customerNumber, ruleId) => {
+const startBookingSession = async (businessId, customerNumber, ruleId, languageCode) => {
   try {
     // Step 1: Load booking fields for business's businessCategory
     const business = await businessService.getBusinessById(businessId);
@@ -501,7 +531,7 @@ const startBookingSession = async (businessId, customerNumber, ruleId) => {
     await saveBookingSession(businessId, customerNumber, sessionData);
 
     // Step 4: Return first question field
-    return activeFields[0];
+    return localizeField(activeFields[0], languageCode);
   } catch (error) {
     logger.error('Error starting booking session:', error);
     throw error;
@@ -514,10 +544,12 @@ const startBookingSession = async (businessId, customerNumber, ruleId) => {
  * @param {string} customerNumber
  * @param {string} customerReply
  * @param {Object} tenant - business info from tenant service
+ * @param {string} [languageCode] - customer.preferredLanguage; when set, any field returned
+ *   below has its label/option labels resolved to this language (buttons/list fields only)
  * @returns {Promise<Object|string|null>} Next question field object, or a plain string
  *   (re-prompt on invalid choice, or final confirmation text), or null if session expired
  */
-const processBookingStep = async (businessId, customerNumber, customerReply, tenant) => {
+const processBookingStep = async (businessId, customerNumber, customerReply, tenant, languageCode) => {
   try {
     // Step 1: Get current session
     const session = await getBookingSession(businessId, customerNumber);
@@ -545,7 +577,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
         // (and failing) to parse "other" as a numeric index.
         const genericVehicleField = await fallbackToGenericVehicleField(businessId, session);
         await saveBookingSession(businessId, customerNumber, session);
-        return genericVehicleField;
+        return localizeField(genericVehicleField, languageCode);
       }
 
       const asNumber = Number(trimmedReply);
@@ -573,7 +605,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
           freshVehicle.per_km_rate === null || freshVehicle.per_km_rate === undefined;
 
         if (isStale) {
-          const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField);
+          const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField, languageCode);
           return result;
         }
 
@@ -605,7 +637,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
           !freshRentalPackage.vehicle || !freshRentalPackage.vehicle.is_active;
 
         if (isStale) {
-          const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField);
+          const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField, languageCode);
           return result;
         }
 
@@ -628,7 +660,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
           !freshRouteFare.vehicle || !freshRouteFare.vehicle.is_active;
 
         if (isStale) {
-          const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField);
+          const result = await rebuildCarouselOrFallback(businessId, customerNumber, session, currentField, languageCode);
           return result;
         }
 
@@ -652,20 +684,29 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
       }
 
       // (b) text matching an option's label OR value case-insensitively —
-      // label covers the customer typing what they were shown, value covers
-      // (c) interactive selections, since webhook.controller.js resolves
-      // those to the option's value before calling this function.
+      // English label covers the customer typing what they were shown pre-
+      // translation, value covers (c) interactive selections (since
+      // webhook.controller.js resolves those to the option's value before
+      // calling this function), and every labelTranslations entry covers a
+      // customer typing the localized label they were actually shown — they
+      // may type in either script, so all languages are checked, not just
+      // the active one.
       if (!resolvedOption) {
         resolvedOption = options.find(opt =>
           opt.label.toLowerCase() === trimmedReply.toLowerCase() ||
-          opt.value.toLowerCase() === trimmedReply.toLowerCase()
+          opt.value.toLowerCase() === trimmedReply.toLowerCase() ||
+          Object.values(opt.labelTranslations || {}).some(
+            translated => (translated || '').toLowerCase() === trimmedReply.toLowerCase()
+          )
         ) || null;
       }
 
       if (!resolvedOption) {
-        // No match - re-prompt without advancing the step
+        // No match - re-prompt without advancing the step, using the labels
+        // the customer was actually shown.
         await saveBookingSession(businessId, customerNumber, session);
-        return 'Please choose one of: ' + options.map(opt => opt.label).join(', ');
+        const localizedLabels = options.map(opt => getLocalizedText(opt, 'label', languageCode));
+        return 'Please choose one of: ' + localizedLabels.join(', ');
       }
 
       if (currentField.fieldKey === 'travelDate' && resolvedOption.value === 'Other date') {
@@ -821,7 +862,7 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
       await saveBookingSession(businessId, customerNumber, session);
 
       // Return next question field
-      return session.fields[session.step];
+      return localizeField(session.fields[session.step], languageCode);
     }
 
     // Step 6: All fields collected - create booking
