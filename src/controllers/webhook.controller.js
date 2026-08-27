@@ -847,12 +847,9 @@ const receiveWebhook = async (req, res) => {
     // Step 12.6 - Dynamic language selection. Runs only once Step 12's
     // booking-session handling has fallen through (no active session, or it
     // just expired) so an in-progress booking is never hijacked mid-flow.
-    // TEMP DIAGNOSTIC - remove after root cause confirmed
-    logger.info(`[LANG-DIAG] tenant.businessId=${tenant.businessId} customerId=${customer.id} preferredLanguage=${JSON.stringify(customer.preferredLanguage)} typeof=${typeof customer.preferredLanguage} hasKey=${Object.prototype.hasOwnProperty.call(customer, 'preferredLanguage')} buttonReplyId=${JSON.stringify(buttonReplyId)}`);
     if (customer.preferredLanguage === null && !(buttonReplyId && buttonReplyId.startsWith('lang_'))) {
       const languageBusinessDoc = await businessService.getBusinessById(tenant.businessId);
       const enabledLanguages = languageBusinessDoc?.enabledLanguages?.length ? languageBusinessDoc.enabledLanguages : ['en'];
-      logger.info(`[LANG-DIAG] businessDocId=${languageBusinessDoc?.id} rawEnabled=${JSON.stringify(languageBusinessDoc?.enabledLanguages)} resolved=${JSON.stringify(enabledLanguages)}`);
 
       if (enabledLanguages.length === 1) {
         // Nothing to ask - set it directly and fall through to greeting/rule
@@ -865,7 +862,6 @@ const receiveWebhook = async (req, res) => {
           .single();
         if (langErr) throw langErr;
         customer.preferredLanguage = toCamelCase(updatedCustomer).preferredLanguage;
-        logger.info(`[LANG-DIAG] auto-set single language "${enabledLanguages[0]}" for customer ${customerNumber} - falling through, NO picker sent`);
       } else {
         // 2 or 3 languages enabled - ask, then wait for the reply.
         const languageButtons = enabledLanguages.map((code) => ({
@@ -1037,7 +1033,8 @@ const receiveWebhook = async (req, res) => {
 
       if (matchedRule.replyType === 'text') {
         // Simple text reply (may also carry an image and/or buttons).
-        replyText = applyMessageTemplate(matchedRule.reply, tenant);
+        const localizedReply = getLocalizedText(matchedRule, 'reply', customer.preferredLanguage);
+        replyText = applyMessageTemplate(localizedReply, tenant);
 
       } else if (matchedRule.replyType === 'booking_trigger') {
         // Start booking flow — ask first question
@@ -1095,7 +1092,19 @@ const receiveWebhook = async (req, res) => {
       is_read: true
     });
 
-    // Step 16 - Queue outbound message
+    // Step 16 - Queue outbound message. Localize matchedRule's buttons/list
+    // options display text only — nextKeyword is untouched, it's the
+    // matching key that comes back as button_reply.id/list_reply.id.
+    const localizedButtons = (matchedRule?.buttons || []).map(b => ({
+      ...b,
+      title: getLocalizedText(b, 'title', customer.preferredLanguage)
+    }));
+    const localizedListOptions = (matchedRule?.listOptions || []).map(o => ({
+      ...o,
+      label: getLocalizedText(o, 'label', customer.preferredLanguage),
+      description: getLocalizedText(o, 'description', customer.preferredLanguage)
+    }));
+
     const outboundJobData = {
       businessId: tenant.businessId,
       phoneNumberId: tenant.phoneNumberId,
@@ -1104,8 +1113,8 @@ const receiveWebhook = async (req, res) => {
       message: replyText,
       type: 'text',
       imageUrl: matchedRule?.replyImageUrl || null,
-      buttons: matchedRule?.buttons || [],
-      listOptions: fallbackMenuListOptions || matchedRule?.listOptions || [],
+      buttons: localizedButtons,
+      listOptions: fallbackMenuListOptions || localizedListOptions,
       messageId: outboundMsg.id
     };
     if (fallbackMenuListOptions) {
