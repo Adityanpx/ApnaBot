@@ -280,6 +280,29 @@ const templates = [
       { fieldKey: 'tollParkingIncluded', label: 'Should toll & parking be included in the fare? Reply Yes or No', summaryLabel: 'Toll & Parking', required: false, order: 8, fieldType: 'buttons', options: ['Yes', 'No'] },
       { fieldKey: 'vehicleType', label: "Vehicle preference? Hatchback / Sedan / SUV / Luxury / Tempo / Mini Bus / Bus (or say 'any')", summaryLabel: 'Vehicle', required: true, order: 9, fieldType: 'list', options: ['Hatchback', 'Sedan', 'SUV', 'Luxury', 'Tempo', 'Mini Bus', 'Bus'] }
     ]
+  },
+  {
+    businessCategory: 'software_it',
+    defaultRules: [
+      { keyword: 'services', matchType: 'contains', reply: "Let's figure out exactly what you need!", replyType: 'booking_trigger' },
+      { keyword: 'price', matchType: 'contains', reply: "Pricing depends on scope — websites start from ₹15,000, apps from ₹40,000, and chatbots/automation from ₹10,000. Reply 'services' and we'll get you an exact quote!", replyType: 'text' },
+      { keyword: 'cost', matchType: 'contains', reply: "Pricing depends on scope — websites start from ₹15,000, apps from ₹40,000, and chatbots/automation from ₹10,000. Reply 'services' and we'll get you an exact quote!", replyType: 'text' },
+      { keyword: 'rate', matchType: 'contains', reply: "Pricing depends on scope — websites start from ₹15,000, apps from ₹40,000, and chatbots/automation from ₹10,000. Reply 'services' and we'll get you an exact quote!", replyType: 'text' },
+      { keyword: 'portfolio', matchType: 'contains', reply: "Check out our recent work here: [portfolio/website link]. Reply 'services' to discuss your project!", replyType: 'text' },
+      { keyword: 'samples', matchType: 'contains', reply: "Check out our recent work here: [portfolio/website link]. Reply 'services' to discuss your project!", replyType: 'text' },
+      { keyword: 'how long', matchType: 'contains', reply: 'Typical timelines: chatbots 1-2 weeks, websites 3-4 weeks, apps 6-10 weeks depending on scope.', replyType: 'text' },
+      { keyword: 'duration', matchType: 'contains', reply: 'Typical timelines: chatbots 1-2 weeks, websites 3-4 weeks, apps 6-10 weeks depending on scope.', replyType: 'text' },
+      { keyword: 'timeline', matchType: 'contains', reply: 'Typical timelines: chatbots 1-2 weeks, websites 3-4 weeks, apps 6-10 weeks depending on scope.', replyType: 'text' },
+      { keyword: 'call', matchType: 'contains', reply: 'No problem — our team will call you back shortly. Feel free to share a good time to reach you!', replyType: 'text' },
+      { keyword: 'human', matchType: 'contains', reply: 'No problem — our team will call you back shortly. Feel free to share a good time to reach you!', replyType: 'text' }
+    ],
+    bookingFields: [
+      { fieldKey: 'service', label: "What are you looking for help with? Website development / Mobile app / WhatsApp chatbot / Business automation / Custom software", summaryLabel: 'Service', required: true, order: 1, fieldType: 'list', options: ['Website development', 'Mobile app', 'WhatsApp chatbot', 'Business automation', 'Custom software'] },
+      { fieldKey: 'businessName', label: 'What is your business name?', summaryLabel: 'Business Name', required: true, order: 2 },
+      { fieldKey: 'industry', label: 'What does your business do? (industry / brief description)', summaryLabel: 'Industry', required: true, order: 3 },
+      { fieldKey: 'budget', label: "What's your budget for this? Reply: Under 25k / 25k - 1L / 1L+", summaryLabel: 'Budget', required: true, order: 4, fieldType: 'buttons', options: ['Under 25k', '25k - 1L', '1L+'] },
+      { fieldKey: 'timeline', label: "What's your timeline? Reply: This month / 1-3 months / Just exploring", summaryLabel: 'Timeline', required: true, order: 5, fieldType: 'buttons', options: ['This month', '1-3 months', 'Just exploring'] }
+    ]
   }
 ];
 
