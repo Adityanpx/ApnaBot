@@ -5,6 +5,7 @@ const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 const { toCamelCase } = require('../utils/caseConvert');
 const { withWindowExpiresAt } = require('./customer.controller');
+const { INDEFINITE_PAUSE_SENTINEL, isIndefinitePause } = require('../utils/botPause');
 const logger = require('../utils/logger');
 
 /**
@@ -197,11 +198,16 @@ const sendMessage = async (req, res, next) => {
 
     // A staff reply implies the bot should stay quiet for this customer for
     // a while — pause it the same way the explicit pause endpoint does.
-    const botPausedUntil = new Date(Date.now() + BOT_PAUSE_DURATION_MS).toISOString();
-    const { error: pauseErr } = await supabase
-      .from('customers').update({ bot_paused_until: botPausedUntil }).eq('id', customer.id);
-    if (pauseErr) {
-      logger.error('Error pausing bot after manual send:', pauseErr);
+    // An indefinite pause (set via the pause endpoint) must not be
+    // shortened to 24h by a manual send, so leave it untouched.
+    let botPausedUntil = customer.botPausedUntil;
+    if (!isIndefinitePause(botPausedUntil)) {
+      botPausedUntil = new Date(Date.now() + BOT_PAUSE_DURATION_MS).toISOString();
+      const { error: pauseErr } = await supabase
+        .from('customers').update({ bot_paused_until: botPausedUntil }).eq('id', customer.id);
+      if (pauseErr) {
+        logger.error('Error pausing bot after manual send:', pauseErr);
+      }
     }
 
     return successResponse(res, 201, { ...outboundMsg, botPausedUntil }, 'Message queued for delivery');
@@ -218,14 +224,19 @@ const sendMessage = async (req, res, next) => {
 const setBotPause = async (req, res, next) => {
   try {
     const { customerId } = req.params;
-    const { paused } = req.body;
+    const { paused, duration } = req.body;
     const businessId = req.user.businessId;
 
     if (typeof paused !== 'boolean') {
       return errorResponse(res, 400, 'paused (boolean) is required');
     }
+    if (paused && duration !== undefined && duration !== '24h' && duration !== 'forever') {
+      return errorResponse(res, 400, 'duration must be "24h" or "forever"');
+    }
 
-    const botPausedUntil = paused ? new Date(Date.now() + BOT_PAUSE_DURATION_MS).toISOString() : null;
+    const botPausedUntil = paused
+      ? (duration === 'forever' ? INDEFINITE_PAUSE_SENTINEL : new Date(Date.now() + BOT_PAUSE_DURATION_MS).toISOString())
+      : null;
 
     const { data: updatedCustomer, error } = await supabase
       .from('customers')
