@@ -9,14 +9,16 @@ const {
   getConversations,
   getChatHistory,
   markAsRead,
-  sendMessage
+  sendMessage,
+  setBotPause
 } = require('../controllers/message.controller');
 
 router.use(protect, requireBusiness);
 
-// IMPORTANT: /send must be declared BEFORE /:customerId
-// otherwise Express treats the string 'send' as a customerId param
+// IMPORTANT: /send and /customer/:customerId/pause must be declared BEFORE
+// /:customerId otherwise Express treats 'send'/'customer' as a customerId param
 router.post('/send',           requireRole('owner', 'superadmin'),          sendMessage);
+router.patch('/customer/:customerId/pause', requireRole('owner', 'superadmin'), setBotPause);
 
 router.get('/',                requireRole('owner', 'staff', 'superadmin'), getConversations);
 router.get('/:customerId',     requireRole('owner', 'staff', 'superadmin'), getChatHistory);

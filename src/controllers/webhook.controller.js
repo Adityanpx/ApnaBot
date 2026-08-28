@@ -355,6 +355,15 @@ const receiveWebhook = async (req, res) => {
       return;
     }
 
+    // Bot pause: a business owner can silence the bot for this customer
+    // (see message.controller.js sendMessage / the pause endpoint) without
+    // blocking them outright. The inbound message is still recorded and
+    // usage still counted below — only the language/greeting/booking/rule
+    // matching that would generate a reply is skipped. The booking session
+    // in Redis (if any) is deliberately left untouched: it expires on its
+    // own TTL, so if the pause lifts first the customer resumes mid-flow.
+    const isBotPaused = !!customer.botPausedUntil && new Date(customer.botPausedUntil).getTime() > Date.now();
+
     // Step 9 - Save inbound message
     const inboundMsg = await saveMessage({
       business_id: tenant.businessId,
@@ -380,6 +389,11 @@ const receiveWebhook = async (req, res) => {
         });
       })
       .catch(err => logger.error('Error emitting usage_update:', err));
+
+    if (isBotPaused) {
+      logger.info(`Bot paused for ${customerNumber} until ${customer.botPausedUntil}, skipping reply`);
+      return;
+    }
 
     // Step 11 - Skip non-text messages, EXCEPT interactive button taps (which
     // carry a keyword in button_reply.id and must chain to the next rule).

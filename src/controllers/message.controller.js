@@ -48,6 +48,7 @@ const getConversations = async (req, res, next) => {
         lastMessageAt: lastMsg?.created_at ?? customer.lastMessageAt,
         lastDirection: lastMsg?.direction ?? null,
         unreadCount: unreadCount || 0,
+        botPausedUntil: customer.botPausedUntil ?? null,
         customer
       };
     }));
@@ -121,6 +122,7 @@ const markAsRead = async (req, res, next) => {
 };
 
 const FREE_FORM_WINDOW_MS = 24 * 60 * 60 * 1000; // WhatsApp's 24h customer service window
+const BOT_PAUSE_DURATION_MS = 24 * 60 * 60 * 1000; // How long a pause (manual or implied by a staff reply) lasts
 
 /**
  * POST /api/messages/send
@@ -192,9 +194,50 @@ const sendMessage = async (req, res, next) => {
     });
 
     logger.info(`Manual message queued to ${customerNumber} for business ${businessId}`);
-    return successResponse(res, 201, outboundMsg, 'Message queued for delivery');
+
+    // A staff reply implies the bot should stay quiet for this customer for
+    // a while — pause it the same way the explicit pause endpoint does.
+    const botPausedUntil = new Date(Date.now() + BOT_PAUSE_DURATION_MS).toISOString();
+    const { error: pauseErr } = await supabase
+      .from('customers').update({ bot_paused_until: botPausedUntil }).eq('id', customer.id);
+    if (pauseErr) {
+      logger.error('Error pausing bot after manual send:', pauseErr);
+    }
+
+    return successResponse(res, 201, { ...outboundMsg, botPausedUntil }, 'Message queued for delivery');
   } catch (error) {
     logger.error('Error in sendMessage:', error);
+    next(error);
+  }
+};
+
+/**
+ * PATCH /api/messages/customer/:customerId/pause
+ * Manually pause or resume the bot for one customer.
+ */
+const setBotPause = async (req, res, next) => {
+  try {
+    const { customerId } = req.params;
+    const { paused } = req.body;
+    const businessId = req.user.businessId;
+
+    if (typeof paused !== 'boolean') {
+      return errorResponse(res, 400, 'paused (boolean) is required');
+    }
+
+    const botPausedUntil = paused ? new Date(Date.now() + BOT_PAUSE_DURATION_MS).toISOString() : null;
+
+    const { data: updatedCustomer, error } = await supabase
+      .from('customers')
+      .update({ bot_paused_until: botPausedUntil })
+      .eq('id', customerId).eq('business_id', businessId)
+      .select().maybeSingle();
+    if (error) throw error;
+    if (!updatedCustomer) return errorResponse(res, 404, 'Customer not found');
+
+    return successResponse(res, 200, toCamelCase(updatedCustomer), paused ? 'Bot paused for customer' : 'Bot resumed for customer');
+  } catch (error) {
+    logger.error('Error in setBotPause:', error);
     next(error);
   }
 };
@@ -203,5 +246,6 @@ module.exports = {
   getConversations,
   getChatHistory,
   markAsRead,
-  sendMessage
+  sendMessage,
+  setBotPause
 };
