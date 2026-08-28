@@ -74,7 +74,8 @@ const VALID_BUSINESS_CATEGORIES = [
   'electronics_repair',
   'real_estate',
   'driving_school',
-  'travels'
+  'travels',
+  'software_it'
 ];
 
 /**
