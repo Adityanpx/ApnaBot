@@ -1039,7 +1039,9 @@ const receiveWebhook = async (req, res) => {
     }
 
     // Step 13 - Run rule matching
-    const matchedRule = await chatbotService.findMatchingRule(tenant.businessId, messageText);
+    const matchResult = await chatbotService.findMatchingRule(tenant.businessId, messageText);
+    const matchedNode = matchResult?.node || null;
+    const matchedEdges = matchResult?.edges || [];
 
     // Step 14 — Prepare reply based on rule type
     let replyText = null;
@@ -1047,27 +1049,27 @@ const receiveWebhook = async (req, res) => {
     let bookingField = null; // set when booking_trigger fires, for interactive rendering below
     let fallbackMenuListOptions = null; // set when no rule matched and business has an enabled menu
 
-    if (matchedRule) {
-      triggeredRuleId = matchedRule.id;
+    if (matchedNode) {
+      triggeredRuleId = matchedNode.id;
 
-      if (matchedRule.replyType === 'text') {
+      if (matchedNode.replyKind === 'text') {
         // Simple text reply (may also carry an image and/or buttons).
-        const localizedReply = getLocalizedText(matchedRule, 'reply', customer.preferredLanguage);
+        const localizedReply = getLocalizedText(matchedNode, 'label', customer.preferredLanguage);
         replyText = applyMessageTemplate(localizedReply, tenant);
 
-      } else if (matchedRule.replyType === 'booking_trigger') {
+      } else if (matchedNode.replyKind === 'booking_trigger') {
         // Start booking flow — ask first question
         const firstField = await bookingService.startBookingSession(
           tenant.businessId,
           customerNumber,
-          matchedRule.id,
+          matchedNode.id,
           customer.preferredLanguage
         );
         bookingField = firstField;
         replyText = firstField.label;
 
-      } else if (matchedRule.replyType === 'payment_trigger') {
-        replyText = applyMessageTemplate(matchedRule.reply, tenant) || 'Please complete your payment.';
+      } else if (matchedNode.replyKind === 'payment_trigger') {
+        replyText = applyMessageTemplate(matchedNode.label, tenant) || 'Please complete your payment.';
       }
     } else {
       // No rule matched — try an AI-generated fallback (opt-in per business),
@@ -1112,18 +1114,24 @@ const receiveWebhook = async (req, res) => {
       is_read: true
     });
 
-    // Step 16 - Queue outbound message. Localize matchedRule's buttons/list
-    // options display text only — nextKeyword is untouched, it's the
-    // matching key that comes back as button_reply.id/list_reply.id.
-    const localizedButtons = (matchedRule?.buttons || []).map(b => ({
-      ...b,
-      title: getLocalizedText(b, 'title', customer.preferredLanguage)
-    }));
-    const localizedListOptions = (matchedRule?.listOptions || []).map(o => ({
-      ...o,
-      label: getLocalizedText(o, 'label', customer.preferredLanguage),
-      description: getLocalizedText(o, 'description', customer.preferredLanguage)
-    }));
+    // Step 16 - Queue outbound message. matchedNode's buttons/list options
+    // are built from its outgoing flow_edges — nextKeyword (resolved by
+    // chatbotService.findMatchingRule from each edge's target node) is
+    // untouched, it's still the matching key that comes back as
+    // button_reply.id/list_reply.id.
+    const localizedButtons = matchedNode?.contentType === 'buttons'
+      ? matchedEdges.map(edge => ({
+          nextKeyword: edge.nextKeyword,
+          title: getLocalizedText(edge, 'label', customer.preferredLanguage)
+        }))
+      : [];
+    const localizedListOptions = matchedNode?.contentType === 'list'
+      ? matchedEdges.map(edge => ({
+          nextKeyword: edge.nextKeyword,
+          label: getLocalizedText(edge, 'label', customer.preferredLanguage),
+          description: getLocalizedText(edge, 'description', customer.preferredLanguage)
+        }))
+      : [];
 
     const outboundJobData = {
       businessId: tenant.businessId,
@@ -1132,7 +1140,7 @@ const receiveWebhook = async (req, res) => {
       to: customerNumber,
       message: replyText,
       type: 'text',
-      imageUrl: matchedRule?.replyImageUrl || null,
+      imageUrl: matchedNode?.imageUrl || null,
       buttons: localizedButtons,
       listOptions: fallbackMenuListOptions || localizedListOptions,
       messageId: outboundMsg.id

@@ -39,7 +39,7 @@ const getSmartFallbackReply = async (businessId, customerMessage) => {
 
     const activeRules = (rules || []).filter(rule => rule.isActive);
     const ruleSummaries = activeRules.map(rule => {
-      const label = (rule.reply || '').slice(0, 40).replace(/\s+/g, ' ').trim();
+      const label = (rule.label || '').slice(0, 40).replace(/\s+/g, ' ').trim();
       return `- "${rule.keyword}": ${label}`;
     });
 

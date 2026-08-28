@@ -1,0 +1,12 @@
+-- messages.triggered_rule_id had a hard FK to rules(id). chatbot.service.js's
+-- findMatchingRule now matches against flow_nodes (20260829140000_flow_nodes_edges.sql),
+-- so every triggered_rule_id written going forward is a flow_nodes.id, not a
+-- rules.id — inserting one against this constraint raises a foreign key
+-- violation and breaks message saving (and therefore the whole reply) on
+-- every matched keyword. There's no single table that's correct here during
+-- (and after) the rules -> flow_nodes transition: repointing the FK at
+-- flow_nodes instead would itself fail immediately, since adding a
+-- constraint validates every existing row and all the historical rows in
+-- this column reference the old rules table. triggered_rule_id becomes a
+-- plain historical-attribution uuid, no longer referentially enforced.
+alter table messages drop constraint messages_triggered_rule_id_fkey;

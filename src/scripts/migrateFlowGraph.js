@@ -490,15 +490,27 @@ async function main() {
   const { error: insertNodesErr } = await supabase.from('flow_nodes').insert(nodeRows);
   if (insertNodesErr) throw insertNodesErr;
 
-  const edgeRows = edges.map(e => ({
-    business_id: business.id,
-    from_node_id: idByKey.get(e.from),
-    to_node_id: idByKey.get(e.to),
-    label: e.label || null,
-    label_translations: e.label_translations || null,
-    description: e.description || null,
-    condition: e.condition || null
-  }));
+  // display_order = the edge's position within its from_node's outgoing
+  // edges, in the order this script already built them above (0-indexed) —
+  // not a semantic ranking, just a stable persisted order so
+  // getOutgoingEdges doesn't have to rely on created_at for rows inserted
+  // in the same batch.
+  const displayOrderByFromKey = new Map();
+  const edgeRows = edges.map(e => {
+    const displayOrder = displayOrderByFromKey.get(e.from) || 0;
+    displayOrderByFromKey.set(e.from, displayOrder + 1);
+
+    return {
+      business_id: business.id,
+      from_node_id: idByKey.get(e.from),
+      to_node_id: idByKey.get(e.to),
+      label: e.label || null,
+      label_translations: e.label_translations || null,
+      description: e.description || null,
+      condition: e.condition || null,
+      display_order: displayOrder
+    };
+  });
   const { error: insertEdgesErr } = await supabase.from('flow_edges').insert(edgeRows);
   if (insertEdgesErr) throw insertEdgesErr;
 
