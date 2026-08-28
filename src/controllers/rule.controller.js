@@ -433,22 +433,23 @@ const getTemplates = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
-    // Get business to find business category
     const business = await businessService.getBusinessById(businessId);
     if (!business) {
       return errorResponse(res, 404, 'Business not found');
     }
 
-    // Find template
-    const { data: template } = await supabase
-      .from('business_type_templates').select('default_rules, booking_fields').eq('business_category', business.businessCategory).maybeSingle();
-    if (!template) {
+    // Reads this business's own business_flows row, not the shared
+    // business_type_templates row — business_type_templates is only used
+    // as the starting point at business creation now.
+    const { data: flow } = await supabase
+      .from('business_flows').select('rules, booking_fields').eq('business_id', businessId).maybeSingle();
+    if (!flow) {
       return successResponse(res, 200, { defaultRules: [], bookingFields: [] });
     }
 
     return successResponse(res, 200, {
-      defaultRules: template.default_rules || [],
-      bookingFields: template.booking_fields || []
+      defaultRules: flow.rules || [],
+      bookingFields: flow.booking_fields || []
     });
   } catch (error) {
     logger.error('Error in getTemplates:', error);
@@ -465,17 +466,17 @@ const bulkImportRules = async (req, res, next) => {
     const { replaceExisting = false } = req.body;
     const businessId = req.user.businessId;
 
-    // Get business to find business category
-    const business = await businessService.getBusinessById(businessId);
-    if (!business) {
-      return errorResponse(res, 404, 'Business not found');
-    }
-
-    // Find template
-    const { data: template } = await supabase
-      .from('business_type_templates').select('default_rules').eq('business_category', business.businessCategory).maybeSingle();
-    if (!template || !template.default_rules) {
-      return errorResponse(res, 404, 'No template found for this business type');
+    // Reads this business's own business_flows.rules (its current/last-saved
+    // flow) rather than the shared business_type_templates row — this makes
+    // the button an "undo my changes back to my saved flow" action. A
+    // separate "reset to category factory defaults" action (reading
+    // business_type_templates directly) may be added later as its own
+    // button; don't repoint this one to do double duty for that.
+    const { data: flow, error: flowErr } = await supabase
+      .from('business_flows').select('rules').eq('business_id', businessId).maybeSingle();
+    if (flowErr) throw flowErr;
+    if (!flow || !flow.rules || flow.rules.length === 0) {
+      return errorResponse(res, 404, 'No saved flow found for this business');
     }
 
     // If replaceExisting, delete all existing rules
@@ -486,7 +487,7 @@ const bulkImportRules = async (req, res, next) => {
 
     // Import rules that don't already exist
     let createdCount = 0;
-    for (const rule of template.default_rules) {
+    for (const rule of flow.rules) {
       const { data: existingRule, error: existingErr } = await supabase
         .from('rules').select('id').eq('business_id', businessId).eq('keyword', rule.keyword).maybeSingle();
       if (existingErr) throw existingErr;

@@ -96,11 +96,32 @@ const createBusiness = async (ownerUserId, data) => {
       .from('users').update({ business_id: business.id }).eq('id', ownerUserId);
     if (userErr) throw userErr;
 
-    // Copy default rules from BusinessTypeTemplate (Supabase — migrated earlier).
+    // Copy default rules + booking fields from BusinessTypeTemplate into a
+    // business_flows row — the new per-business source of truth for the
+    // flow editor and all booking-field reads (see booking.service.js,
+    // rule.controller.js). business_type_templates itself is only read here,
+    // at creation time; existing businesses never read it again.
     const { data: template, error: templateErr } = await supabase
-      .from('business_type_templates').select('default_rules').eq('business_category', businessCategory).maybeSingle();
+      .from('business_type_templates').select('default_rules, booking_fields').eq('business_category', businessCategory).maybeSingle();
     if (templateErr) throw templateErr;
 
+    if (template) {
+      try {
+        const { error: flowErr } = await supabase.from('business_flows').insert({
+          business_id: business.id,
+          rules: template.default_rules || [],
+          booking_fields: template.booking_fields || []
+        });
+        if (flowErr) throw flowErr;
+        logger.info(`Created business_flows row for business ${business.id}`);
+      } catch (flowError) {
+        logger.error(`FAILED to create business_flows row for business ${business.id}:`, flowError);
+      }
+    }
+
+    // Also mirror default_rules into the rules table — chatbot.service.js
+    // (the keyword-matching engine) reads directly from rules, not
+    // business_flows, so both need to stay populated.
     if (template && template.default_rules && template.default_rules.length > 0) {
       try {
         const rulesToCreate = template.default_rules.map(rule => ({

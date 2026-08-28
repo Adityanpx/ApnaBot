@@ -368,10 +368,9 @@ const rebuildCarouselOrFallback = async (businessId, customerNumber, session, cu
  * the customer explicitly asks to see options outside the carousel.
  */
 const fallbackToGenericVehicleField = async (businessId, session) => {
-  const business = await businessService.getBusinessById(businessId);
-  const { data: template } = await supabase
-    .from('business_type_templates').select('booking_fields').eq('business_category', business.businessCategory).maybeSingle();
-  const genericVehicleField = template.booking_fields.find(f => f.fieldKey === 'vehicleType');
+  const { data: flow } = await supabase
+    .from('business_flows').select('booking_fields').eq('business_id', businessId).maybeSingle();
+  const genericVehicleField = flow.booking_fields.find(f => f.fieldKey === 'vehicleType');
   session.fields[session.step] = genericVehicleField;
   return genericVehicleField;
 };
@@ -505,14 +504,14 @@ const startBookingSession = async (businessId, customerNumber, ruleId, languageC
       throw new Error('Business not found');
     }
 
-    const { data: template } = await supabase
-      .from('business_type_templates').select('booking_fields').eq('business_category', business.businessCategory).maybeSingle();
-    if (!template || !template.booking_fields || template.booking_fields.length === 0) {
+    const { data: flow } = await supabase
+      .from('business_flows').select('booking_fields').eq('business_id', businessId).maybeSingle();
+    if (!flow || !flow.booking_fields || flow.booking_fields.length === 0) {
       throw new Error('No booking fields configured for this business type');
     }
 
     // Sort booking fields by order field
-    const sortedFields = [...template.booking_fields].sort((a, b) => a.order - b.order);
+    const sortedFields = [...flow.booking_fields].sort((a, b) => a.order - b.order);
 
     const disabledFieldKeys = business.disabledBookingFields || [];
     let activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
@@ -972,13 +971,13 @@ const getBookingFieldsPreview = async (businessId) => {
     throw new Error('Business not found');
   }
 
-  const { data: template } = await supabase
-    .from('business_type_templates').select('booking_fields').eq('business_category', business.businessCategory).maybeSingle();
-  if (!template || !template.booking_fields || template.booking_fields.length === 0) {
+  const { data: flow } = await supabase
+    .from('business_flows').select('booking_fields').eq('business_id', businessId).maybeSingle();
+  if (!flow || !flow.booking_fields || flow.booking_fields.length === 0) {
     throw new Error('No booking fields configured for this business type');
   }
 
-  const sortedFields = [...template.booking_fields].sort((a, b) => a.order - b.order);
+  const sortedFields = [...flow.booking_fields].sort((a, b) => a.order - b.order);
 
   const disabledFieldKeys = business.disabledBookingFields || [];
   let activeFields = filterActiveBookingFields(sortedFields, disabledFieldKeys, businessId);
@@ -1001,13 +1000,13 @@ const getAllBookingFields = async (businessId) => {
     throw new Error('Business not found');
   }
 
-  const { data: template } = await supabase
-    .from('business_type_templates').select('booking_fields').eq('business_category', business.businessCategory).maybeSingle();
-  if (!template || !template.booking_fields || template.booking_fields.length === 0) {
+  const { data: flow } = await supabase
+    .from('business_flows').select('booking_fields').eq('business_id', businessId).maybeSingle();
+  if (!flow || !flow.booking_fields || flow.booking_fields.length === 0) {
     throw new Error('No booking fields configured for this business type');
   }
 
-  const sortedFields = [...template.booking_fields].sort((a, b) => a.order - b.order);
+  const sortedFields = [...flow.booking_fields].sort((a, b) => a.order - b.order);
 
   return { fields: sortedFields };
 };

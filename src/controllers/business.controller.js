@@ -189,21 +189,24 @@ const updateBusiness = async (req, res, next) => {
     }
 
     if (req.body.disabledBookingFields !== undefined) {
-      const currentBusiness = await businessService.getBusinessById(businessId);
-      const { data: template } = await supabase
-        .from('business_type_templates')
+      // Validate against this business's own business_flows.booking_fields,
+      // not the shared business_type_templates row — a business's flow can
+      // diverge from its category template after creation, so that's the
+      // only correct source of "what fields does this business actually have".
+      const { data: flow } = await supabase
+        .from('business_flows')
         .select('booking_fields')
-        .eq('business_category', currentBusiness.businessCategory)
+        .eq('business_id', businessId)
         .maybeSingle();
-      const templateFieldsByKey = new Map((template?.booking_fields || []).map(field => [field.fieldKey, field]));
+      const flowFieldsByKey = new Map((flow?.booking_fields || []).map(field => [field.fieldKey, field]));
 
       const invalidFieldKeys = req.body.disabledBookingFields.filter(fieldKey => {
-        const templateField = templateFieldsByKey.get(fieldKey);
-        return !templateField || templateField.required === true;
+        const flowField = flowFieldsByKey.get(fieldKey);
+        return !flowField || flowField.required === true;
       });
 
       if (invalidFieldKeys.length > 0) {
-        return errorResponse(res, 400, `Cannot disable field(s): ${invalidFieldKeys.join(', ')}. Each must be an optional field defined in the ${currentBusiness.businessCategory} booking template.`);
+        return errorResponse(res, 400, `Cannot disable field(s): ${invalidFieldKeys.join(', ')}. Each must be an optional field defined in this business's booking flow.`);
       }
     }
 
