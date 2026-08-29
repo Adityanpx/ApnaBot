@@ -306,6 +306,16 @@ const startGraphSession = async (businessId, replyNodeId, languageCode) => {
   const session = {
     currentNodeId: entryNode.id,
     collected: {},
+    // Ordered, label-snapshotted-at-answer-time record of every field
+    // actually answered this session — needed because `collected` alone
+    // can't reconstruct confirmation-text lines: it also holds non-display
+    // bookkeeping keys (vehicleId, fareSource, distanceKm, routeFareId,
+    // driverDaTotal, ...) interleaved with real field answers, and has no
+    // notion of order or label/summaryLabel. Snapshotting the label here
+    // (rather than re-reading flow_nodes at finalize time) also matches the
+    // old engine's behavior: the confirmation shows the label as it was
+    // when asked, not as it might have since been edited.
+    answeredFields: [],
     ruleId: replyNodeId,
     startedAt: new Date().toISOString(),
     localRentalUnconfigured: false,
@@ -335,7 +345,19 @@ const advanceGraphSession = async ({ businessId, session, reply, languageCode })
   const nodeById = new Map(nodes.map(n => [n.id, n]));
   const currentNode = nodeById.get(session.currentNodeId);
   if (!currentNode) {
-    logger.error('bookingGraph: session.currentNodeId not found among flow_nodes', { businessId, currentNodeId: session.currentNodeId });
+    if (!session.currentNodeId) {
+      // No currentNodeId at all (as opposed to one that's set but unresolvable)
+      // means this session predates the graph-engine cutover — it's an old
+      // {step, fields} shaped session from booking.service.js's engine, read
+      // by the new engine because Redis doesn't know the shape changed.
+      // Logged distinctly from the branch below so a real graph problem
+      // (missing/renamed node) isn't confused with this one-time transition
+      // artifact, and so it isn't confused with an ordinary TTL expiry either
+      // (the caller currently maps both to the same "expired" behavior).
+      logger.warn('bookingGraph: session has no currentNodeId — likely a pre-cutover {step,fields} session hitting the new engine, treating as expired', { businessId });
+    } else {
+      logger.error('bookingGraph: session.currentNodeId not found among flow_nodes', { businessId, currentNodeId: session.currentNodeId });
+    }
     return { session, result: null };
   }
 
@@ -465,6 +487,16 @@ const advanceGraphSession = async ({ businessId, session, reply, languageCode })
     session.collected[currentNode.fieldKey] = trimmedReply;
   }
 
+  // Every branch above that falls through to here (rather than returning
+  // early — the OTHER_SENTINELS redirect and the various stale-tap
+  // fallbacks all return before this point) just collected a real answer
+  // for currentNode.fieldKey this turn. Record it once, in order.
+  session.answeredFields.push({
+    fieldKey: currentNode.fieldKey,
+    label: currentNode.label,
+    summaryLabel: currentNode.summaryLabel
+  });
+
   // ---- advance ----
   const nextNodeId = pickNextNodeId(nodes, edges, currentNode.id, session.collected, disabledFieldKeys);
   if (nextNodeId === null) {
@@ -511,9 +543,38 @@ const advanceGraphSession = async ({ businessId, session, reply, languageCode })
   return { session, result: nodeToFieldLocalized(nextNode, servedCities, null, languageCode) };
 };
 
+/**
+ * Resolve session.currentNodeId to its current, localized field shape —
+ * label/fieldType/options exactly as advanceGraphSession would return them
+ * for a "next question" turn. Used by webhook.controller.js's stale-tap
+ * handling: when an inbound id's node_id doesn't match session.currentNodeId,
+ * the caller needs to re-render the question the customer is actually still
+ * on, without duplicating loadGraph/resolveOptionsForNode here a second time.
+ * @param {string} businessId
+ * @param {Object} session
+ * @param {string} [languageCode]
+ * @returns {Promise<Object|null>} localized field object, or null if
+ *   session.currentNodeId doesn't resolve (mirrors advanceGraphSession's own
+ *   defensive check — same "treat as expired" contract for the caller)
+ */
+const getCurrentNodeField = async (businessId, session, languageCode) => {
+  const { nodes } = await loadGraph(businessId);
+  const business = await businessService.getBusinessById(businessId);
+  if (!business) throw new Error('Business not found');
+
+  const currentNode = nodes.find(n => n.id === session.currentNodeId);
+  if (!currentNode) {
+    logger.error('bookingGraph: getCurrentNodeField could not resolve session.currentNodeId among flow_nodes', { businessId, currentNodeId: session.currentNodeId });
+    return null;
+  }
+
+  return nodeToFieldLocalized(currentNode, business.servedCities || [], session.currentNodeComputedOptions, languageCode);
+};
+
 module.exports = {
   loadGraph,
   pickNextNodeId,
+  getCurrentNodeField,
   startGraphSession,
   advanceGraphSession
 };

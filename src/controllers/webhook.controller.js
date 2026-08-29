@@ -5,6 +5,7 @@ const chatbotService = require('../services/chatbot.service');
 const smartFallbackService = require('../services/smartFallback.service');
 const usageService = require('../services/usage.service');
 const bookingService = require('../services/booking.service');
+const bookingGraphService = require('../services/bookingGraph.service');
 const socketService = require('../services/socket.service');
 const { addToWhatsappQueue, addToWhatsappQueueAndWait } = require('../queues/whatsapp.queue');
 const businessService = require('../services/business.service');
@@ -125,6 +126,260 @@ const buildMenuListOptions = async (menuItems, languageCode) => {
       label: getLocalizedText(item, 'label', languageCode),
       nextKeyword: keywordByRuleId.get(item.ruleId.toString())
     }));
+};
+
+/**
+ * Send a booking-session field's prompt to the customer: plain text for a
+ * 'text' field, a single message with an interactive attachment for
+ * 'buttons'/'list', or the full intro + one-message-per-vehicle + "Other
+ * options" carousel for 'vehicle_carousel'. Shared by the graph-engine
+ * booking flow's normal turn-advance send and its stale-tap re-send (same
+ * question, not advanced) — both need identical rendering, so this exists
+ * once instead of duplicating the carousel multi-message block a second
+ * time.
+ *
+ * WhatsApp interaction ids under the graph engine's scheme (see
+ * 20260829140000_flow_nodes_edges.sql's header comment): every id a booking
+ * session sees is options-backed — "{node_id}:{index}" for a 'buttons'/
+ * 'list' field's rows (built via the worker/whatsapp.service `step`
+ * job-data field, repurposed here to carry a node id string instead of a
+ * numeric step — the worker only ever template-interpolates it, so this
+ * needed no changes there) and, for vehicle_carousel, "{node_id}:{index}"
+ * per vehicle plus the reserved "{node_id}:other" sentinel for the
+ * standalone "Other options" button, both built directly below.
+ * @param {Object} ctx - { tenant, customer, customerNumber, triggeredRuleId }
+ * @param {Object} field - localized field (nodeId/fieldType/label/options)
+ * @param {string} [introTextOverride] - vehicle_carousel only: send this as
+ *   the intro message instead of field.label — used when re-rendering the
+ *   carousel after a tap-time re-verification refreshed it in place
+ *   (mirrors the old engine's rebuildCarouselOrFallback status string)
+ */
+const sendFieldPrompt = async (ctx, field, introTextOverride = null) => {
+  const { tenant, customer, customerNumber, triggeredRuleId } = ctx;
+
+  if (field.fieldType === 'vehicle_carousel') {
+    try {
+      const introText = introTextOverride || field.label;
+      const introMsg = await createMessageSoft({
+        business_id: tenant.businessId,
+        customer_id: customer.id,
+        customer_number: customerNumber,
+        direction: 'outbound',
+        type: 'text',
+        content: introText,
+        status: 'sent',
+        triggered_rule_id: triggeredRuleId,
+        is_read: true
+      }, 'carousel intro');
+
+      // Awaited-to-completion (not just enqueued) so this intro message is
+      // guaranteed to land at WhatsApp before the vehicle messages below,
+      // even though the worker processes jobs with concurrency: 5.
+      try {
+        await addToWhatsappQueueAndWait({
+          businessId: tenant.businessId,
+          phoneNumberId: tenant.phoneNumberId,
+          encryptedAccessToken: tenant.accessToken,
+          to: customerNumber,
+          message: introText,
+          type: 'text',
+          messageId: introMsg.id
+        });
+      } catch (sendError) {
+        logger.error('Error sending carousel intro message', {
+          businessId: tenant.businessId,
+          customerNumber,
+          message: sendError.message,
+          stack: sendError.stack
+        });
+      }
+
+      usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+        logger.error('Error incrementing outbound usage:', err)
+      );
+      try {
+        socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+          customer,
+          message: introMsg,
+          customerNumber
+        });
+      } catch (socketError) {
+        logger.error('Error emitting socket event:', socketError);
+      }
+
+      // One message per vehicle option: image + caption + "Book this" button
+      logger.info('Sending vehicle carousel', { businessId: tenant.businessId, customerNumber, optionCount: field.options.length });
+      let sentCount = 0;
+      for (const option of field.options) {
+        const captionParts = [option.name];
+        if (option.seats) captionParts.push(`${option.seats} seats`);
+        captionParts.push(`₹${option.fare}`);
+        const caption = captionParts.join(' • ');
+
+        const vehicleMsg = await createMessageSoft({
+          business_id: tenant.businessId,
+          customer_id: customer.id,
+          customer_number: customerNumber,
+          direction: 'outbound',
+          type: 'text',
+          content: caption,
+          status: 'sent',
+          triggered_rule_id: triggeredRuleId,
+          is_read: true
+        }, 'carousel vehicle');
+
+        // Awaited-to-completion so vehicle messages send in the same order
+        // they're constructed, regardless of worker concurrency.
+        try {
+          await addToWhatsappQueueAndWait({
+            businessId: tenant.businessId,
+            phoneNumberId: tenant.phoneNumberId,
+            encryptedAccessToken: tenant.accessToken,
+            to: customerNumber,
+            message: caption,
+            type: 'text',
+            imageUrl: option.photoUrl || null,
+            buttons: [{ title: 'Book this', nextKeyword: `${field.nodeId}:${option.index}` }],
+            messageId: vehicleMsg.id
+          });
+          sentCount++;
+        } catch (sendError) {
+          logger.error('Error sending carousel vehicle message', {
+            businessId: tenant.businessId,
+            customerNumber,
+            optionIndex: option.index,
+            optionName: option.name,
+            message: sendError.message,
+            stack: sendError.stack
+          });
+        }
+
+        usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+          logger.error('Error incrementing outbound usage:', err)
+        );
+        try {
+          socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+            customer,
+            message: vehicleMsg,
+            customerNumber
+          });
+        } catch (socketError) {
+          logger.error('Error emitting socket event:', socketError);
+        }
+      }
+
+      logger.info('Vehicle carousel send complete', {
+        businessId: tenant.businessId,
+        customerNumber,
+        totalOptions: field.options.length,
+        sentCount
+      });
+
+      // Escape hatch: let the customer opt out of the carousel if their
+      // preferred vehicle isn't listed.
+      const otherOptionsText = "Don't see the vehicle you want?";
+      const otherOptionsMsg = await createMessageSoft({
+        business_id: tenant.businessId,
+        customer_id: customer.id,
+        customer_number: customerNumber,
+        direction: 'outbound',
+        type: 'text',
+        content: otherOptionsText,
+        status: 'sent',
+        triggered_rule_id: triggeredRuleId,
+        is_read: true
+      }, 'carousel other-options');
+
+      // Awaited-to-completion so this message lands after the last vehicle
+      // message, preserving the constructed order.
+      try {
+        await addToWhatsappQueueAndWait({
+          businessId: tenant.businessId,
+          phoneNumberId: tenant.phoneNumberId,
+          encryptedAccessToken: tenant.accessToken,
+          to: customerNumber,
+          message: otherOptionsText,
+          type: 'text',
+          buttons: [{ title: 'Other options', nextKeyword: `${field.nodeId}:other` }],
+          messageId: otherOptionsMsg.id
+        });
+      } catch (sendError) {
+        logger.error('Error sending carousel "other options" message', {
+          businessId: tenant.businessId,
+          customerNumber,
+          message: sendError.message,
+          stack: sendError.stack
+        });
+      }
+
+      usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+        logger.error('Error incrementing outbound usage:', err)
+      );
+      try {
+        socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+          customer,
+          message: otherOptionsMsg,
+          customerNumber
+        });
+      } catch (socketError) {
+        logger.error('Error emitting socket event:', socketError);
+      }
+    } catch (error) {
+      logger.error('Fatal error in vehicle carousel send block', {
+        businessId: tenant.businessId,
+        customerNumber,
+        message: error.message,
+        stack: error.stack
+      });
+    }
+    return;
+  }
+
+  const outboundMsg = await saveMessage({
+    business_id: tenant.businessId,
+    customer_id: customer.id,
+    customer_number: customerNumber,
+    direction: 'outbound',
+    type: 'text',
+    content: field.label,
+    status: 'sent',
+    triggered_rule_id: triggeredRuleId,
+    is_read: true
+  });
+
+  const outboundJobData = {
+    businessId: tenant.businessId,
+    phoneNumberId: tenant.phoneNumberId,
+    encryptedAccessToken: tenant.accessToken,
+    to: customerNumber,
+    message: field.label,
+    type: 'text',
+    messageId: outboundMsg.id
+  };
+  if (field.fieldType === 'buttons' || field.fieldType === 'list') {
+    outboundJobData.step = field.nodeId;
+    const labels = (field.options || []).map(opt => opt.label);
+    if (field.fieldType === 'buttons') {
+      outboundJobData.interactiveButtons = labels;
+    } else {
+      outboundJobData.interactiveList = labels;
+      outboundJobData.listButtonLabel = 'Choose';
+    }
+  }
+  await addToWhatsappQueue(outboundJobData);
+
+  usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+    logger.error('Error incrementing outbound usage:', err)
+  );
+  try {
+    socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+      customer,
+      message: outboundMsg,
+      customerNumber
+    });
+  } catch (socketError) {
+    logger.error('Error emitting socket event:', socketError);
+  }
 };
 
 /**
@@ -504,351 +759,97 @@ const receiveWebhook = async (req, res) => {
         return; // Do not process booking step, greeting, or rule matching
       }
 
-      // If the customer tapped a button/list row for the current choice
-      // field, resolve its id back to the option's text before handing off.
-      // Plain text answers pass through untouched.
+      // Decode an inbound button/list tap's id. Under the graph engine's
+      // scheme (20260829140000_flow_nodes_edges.sql), a booking session only
+      // ever sees options-backed ids — "{node_id}:{index}" or
+      // "{node_id}:other" — never flow_edges.id (that scheme belongs solely
+      // to reply-node buttons/lists, Step 13-16's rule-matching path, which
+      // never runs while a booking session is active). So this is a single,
+      // unambiguous parse, not a lookup-and-see: split on the LAST ':'
+      // (node ids are UUIDs, which never contain one). Only fetched for an
+      // actual tap (replyId !== null) — a plain-text reply never needs the
+      // current node resolved, so this skips an otherwise-wasted
+      // loadGraph+business round trip on every free-text answer.
       let resolvedReply = messageText;
-      const currentField = activeSession.fields[activeSession.step];
       const replyId = listReplyId !== null ? listReplyId : buttonReplyId;
-      if (currentField && currentField.fieldType === 'vehicle_carousel' && buttonReplyId && buttonReplyId.startsWith('vehicle_')) {
-        // Tapped "Book this" on a vehicle carousel message — id is
-        // 'vehicle_<index>'; pass the bare index straight through.
-        resolvedReply = buttonReplyId.slice('vehicle_'.length);
-      } else if (currentField && (currentField.fieldType === 'buttons' || currentField.fieldType === 'list') && replyId !== null) {
-        // id is "{step}:{index}" (see sendInteractiveButtons/sendListMessage
-        // mapping in the worker) — the step it was generated for, not just
-        // the option's index. Two different questions can have an option at
-        // the same index (e.g. travelDate's "Other date" and pickupTime's
-        // "Other time" are both index 2), so a bare index would let a stale
-        // tap from an earlier, already-answered question get misresolved
-        // against whatever field is currently active.
-        const options = (currentField.options || []).map(bookingService.normalizeOption);
-        const sepIdx = replyId.indexOf(':');
-        const tappedStep = sepIdx === -1 ? NaN : parseInt(replyId.slice(0, sepIdx), 10);
-        const tappedIndex = sepIdx === -1 ? NaN : parseInt(replyId.slice(sepIdx + 1), 10);
+      if (replyId !== null) {
+        const currentField = await bookingGraphService.getCurrentNodeField(tenant.businessId, activeSession, customer.preferredLanguage);
 
-        if (tappedStep !== activeSession.step) {
-          // Stale tap from an earlier question (or a malformed id) — don't
-          // resolve it as an answer to the current question. Silently ignore
-          // it and re-send the current question's prompt so the customer
-          // sees the bot is still waiting here, without advancing
-          // session.step or touching session.collected.
-          const localizedFieldLabel = getLocalizedText(currentField, 'label', customer.preferredLanguage);
-          const localizedOptionLabels = options.map(opt => getLocalizedText(opt, 'label', customer.preferredLanguage));
-          const resendMsg = await saveMessage({
-            business_id: tenant.businessId,
-            customer_id: customer.id,
-            customer_number: customerNumber,
-            direction: 'outbound',
-            type: 'text',
-            content: localizedFieldLabel,
-            status: 'sent',
-            triggered_rule_id: activeSession.ruleId,
-            is_read: true
-          });
-          const resendJobData = {
-            businessId: tenant.businessId,
-            phoneNumberId: tenant.phoneNumberId,
-            encryptedAccessToken: tenant.accessToken,
-            to: customerNumber,
-            message: localizedFieldLabel,
-            type: 'text',
-            step: activeSession.step,
-            messageId: resendMsg.id
-          };
-          if (currentField.fieldType === 'buttons') {
-            resendJobData.interactiveButtons = localizedOptionLabels;
+        if (currentField &&
+            (currentField.fieldType === 'buttons' || currentField.fieldType === 'list' || currentField.fieldType === 'vehicle_carousel')) {
+          const lastColonIdx = replyId.lastIndexOf(':');
+          const tappedNodeId = lastColonIdx === -1 ? null : replyId.slice(0, lastColonIdx);
+          const suffix = lastColonIdx === -1 ? null : replyId.slice(lastColonIdx + 1);
+
+          if (tappedNodeId === null || tappedNodeId !== activeSession.currentNodeId) {
+            // Stale tap from an already-answered question (or a malformed
+            // id) — don't resolve it as an answer to the current question.
+            // Silently ignore it and re-send the current question's prompt
+            // so the customer sees the bot is still waiting here, without
+            // advancing the session. Unlike the old {step}/vehicle_ scheme,
+            // this check now also covers vehicle_carousel taps.
+            await sendFieldPrompt(
+              { tenant, customer, customerNumber, triggeredRuleId: activeSession.ruleId },
+              currentField
+            );
+            logger.info(`Ignored stale tap for ${customerNumber} (tapped node ${tappedNodeId}, current node ${activeSession.currentNodeId})`);
+            return; // Do not advance the session or run rule matching
+          }
+
+          if (currentField.fieldType === 'vehicle_carousel') {
+            // Carousel options are options-backed but aren't label/value
+            // pairs — advanceGraphSession expects the raw index (or 'other')
+            // as text, not a resolved value.
+            resolvedReply = suffix;
           } else {
-            resendJobData.interactiveList = localizedOptionLabels;
-            resendJobData.listButtonLabel = 'Choose';
+            const tappedIndex = parseInt(suffix, 10);
+            if (!Number.isNaN(tappedIndex) && currentField.options[tappedIndex] !== undefined) {
+              resolvedReply = currentField.options[tappedIndex].value;
+            }
           }
-          await addToWhatsappQueue(resendJobData);
-
-          usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
-            logger.error('Error incrementing outbound usage:', err)
-          );
-          try {
-            socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
-              customer,
-              message: resendMsg,
-              customerNumber
-            });
-          } catch (socketError) {
-            logger.error('Error emitting socket event:', socketError);
-          }
-
-          logger.info(`Ignored stale button/list tap for ${customerNumber} (tapped step ${tappedStep}, current step ${activeSession.step})`);
-          return; // Do not advance the session or run rule matching
-        }
-
-        if (!Number.isNaN(tappedIndex) && options[tappedIndex] !== undefined) {
-          resolvedReply = options[tappedIndex].value;
         }
       }
 
-      // Process booking step
-      const stepResult = await bookingService.processBookingStep(
-        tenant.businessId,
-        customerNumber,
-        resolvedReply,
-        tenant,
-        customer.preferredLanguage
-      );
+      // Advance the graph. advanceGraphSession is side-effect-free by
+      // design — the caller (here) owns persisting the returned session.
+      const { session: updatedSession, result } = await bookingGraphService.advanceGraphSession({
+        businessId: tenant.businessId,
+        session: activeSession,
+        reply: resolvedReply,
+        languageCode: customer.preferredLanguage
+      });
 
-      if (stepResult === null) {
-        // Session expired - fall through to rule matching below
+      if (result === null) {
+        // Session expired — or, per bookingGraph.service.js's distinguishing
+        // log line, an old-shape session from before the graph-engine
+        // cutover. Either way, fall through to rule matching below.
         logger.info(`Booking session expired for ${customerNumber}`);
-      } else {
-        // stepResult is either the next field object (choice/text question),
-        // a plain string (re-prompt on bad input, or final confirmation), or
-        // — specifically — the stale-vehicle re-prompt string, which needs a
-        // freshly-rebuilt carousel resent alongside it.
-        const nextField = typeof stepResult === 'object' ? stepResult : null;
+      } else if (result.done) {
+        const confirmationText = await bookingService.finalizeGraphBooking(tenant.businessId, customerNumber, updatedSession);
 
-        let carouselOptions = null;
-        if (nextField && nextField.fieldType === 'vehicle_carousel') {
-          carouselOptions = nextField.options || [];
-        } else if (typeof stepResult === 'string' && stepResult.startsWith('Sorry, that vehicle is no longer available')) {
-          const refreshedSession = await bookingService.getBookingSession(tenant.businessId, customerNumber);
-          const refreshedField = refreshedSession?.fields[refreshedSession.step];
-          if (refreshedField && refreshedField.fieldType === 'vehicle_carousel') {
-            carouselOptions = refreshedField.options || [];
-          }
-        }
-
-        if (carouselOptions) {
-          let sentCount = 0;
-          try {
-            // Intro message (question text or the stale-vehicle re-prompt)
-            const introText = nextField ? nextField.label : stepResult;
-            const introMsg = await createMessageSoft({
-              business_id: tenant.businessId,
-              customer_id: customer.id,
-              customer_number: customerNumber,
-              direction: 'outbound',
-              type: 'text',
-              content: introText,
-              status: 'sent',
-              triggered_rule_id: activeSession.ruleId,
-              is_read: true
-            }, 'carousel intro');
-
-            // Awaited-to-completion (not just enqueued) so this intro message
-            // is guaranteed to land at WhatsApp before the vehicle messages
-            // below, even though the worker processes jobs with concurrency: 5.
-            try {
-              await addToWhatsappQueueAndWait({
-                businessId: tenant.businessId,
-                phoneNumberId: tenant.phoneNumberId,
-                encryptedAccessToken: tenant.accessToken,
-                to: customerNumber,
-                message: introText,
-                type: 'text',
-                messageId: introMsg.id
-              });
-            } catch (sendError) {
-              logger.error('Error sending carousel intro message', {
-                businessId: tenant.businessId,
-                customerNumber,
-                message: sendError.message,
-                stack: sendError.stack
-              });
-            }
-
-            usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
-              logger.error('Error incrementing outbound usage:', err)
-            );
-
-            try {
-              socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
-                customer,
-                message: introMsg,
-                customerNumber
-              });
-            } catch (socketError) {
-              logger.error('Error emitting socket event:', socketError);
-            }
-
-            // One message per vehicle option: image + caption + "Book this" button
-            logger.info('Sending vehicle carousel', { businessId: tenant.businessId, customerNumber, optionCount: carouselOptions.length });
-            for (const option of carouselOptions) {
-              const captionParts = [option.name];
-              if (option.seats) captionParts.push(`${option.seats} seats`);
-              captionParts.push(`₹${option.fare}`);
-              const caption = captionParts.join(' • ');
-
-              const vehicleMsg = await createMessageSoft({
-                business_id: tenant.businessId,
-                customer_id: customer.id,
-                customer_number: customerNumber,
-                direction: 'outbound',
-                type: 'text',
-                content: caption,
-                status: 'sent',
-                triggered_rule_id: activeSession.ruleId,
-                is_read: true
-              }, 'carousel vehicle');
-
-              // Awaited-to-completion so vehicle messages send in the same
-              // order they're constructed, regardless of worker concurrency.
-              try {
-                await addToWhatsappQueueAndWait({
-                  businessId: tenant.businessId,
-                  phoneNumberId: tenant.phoneNumberId,
-                  encryptedAccessToken: tenant.accessToken,
-                  to: customerNumber,
-                  message: caption,
-                  type: 'text',
-                  imageUrl: option.photoUrl || null,
-                  buttons: [{ title: 'Book this', nextKeyword: `vehicle_${option.index}` }],
-                  messageId: vehicleMsg.id
-                });
-                sentCount++;
-              } catch (sendError) {
-                logger.error('Error sending carousel vehicle message', {
-                  businessId: tenant.businessId,
-                  customerNumber,
-                  optionIndex: option.index,
-                  optionName: option.name,
-                  message: sendError.message,
-                  stack: sendError.stack
-                });
-              }
-
-              usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
-                logger.error('Error incrementing outbound usage:', err)
-              );
-
-              try {
-                socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
-                  customer,
-                  message: vehicleMsg,
-                  customerNumber
-                });
-              } catch (socketError) {
-                logger.error('Error emitting socket event:', socketError);
-              }
-            }
-
-            logger.info('Vehicle carousel send complete', {
-              businessId: tenant.businessId,
-              customerNumber,
-              totalOptions: carouselOptions.length,
-              sentCount
-            });
-
-            // Escape hatch: let the customer opt out of the carousel if their
-            // preferred vehicle isn't listed.
-            const otherOptionsText = "Don't see the vehicle you want?";
-            const otherOptionsMsg = await createMessageSoft({
-              business_id: tenant.businessId,
-              customer_id: customer.id,
-              customer_number: customerNumber,
-              direction: 'outbound',
-              type: 'text',
-              content: otherOptionsText,
-              status: 'sent',
-              triggered_rule_id: activeSession.ruleId,
-              is_read: true
-            }, 'carousel other-options');
-
-            // Awaited-to-completion so this message lands after the last
-            // vehicle message, preserving the constructed order.
-            try {
-              await addToWhatsappQueueAndWait({
-                businessId: tenant.businessId,
-                phoneNumberId: tenant.phoneNumberId,
-                encryptedAccessToken: tenant.accessToken,
-                to: customerNumber,
-                message: otherOptionsText,
-                type: 'text',
-                buttons: [{ title: 'Other options', nextKeyword: 'vehicle_other' }],
-                messageId: otherOptionsMsg.id
-              });
-            } catch (sendError) {
-              logger.error('Error sending carousel "other options" message', {
-                businessId: tenant.businessId,
-                customerNumber,
-                message: sendError.message,
-                stack: sendError.stack
-              });
-            }
-
-            usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
-              logger.error('Error incrementing outbound usage:', err)
-            );
-
-            try {
-              socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
-                customer,
-                message: otherOptionsMsg,
-                customerNumber
-              });
-            } catch (socketError) {
-              logger.error('Error emitting socket event:', socketError);
-            }
-          } catch (error) {
-            logger.error('Fatal error in vehicle carousel send block', {
-              businessId: tenant.businessId,
-              customerNumber,
-              message: error.message,
-              stack: error.stack
-            });
-          }
-
-          return; // Do not run rule matching
-        }
-
-        const replyText = nextField ? nextField.label : stepResult;
-
-        // Save outbound message to DB
         const outboundMsg = await saveMessage({
           business_id: tenant.businessId,
           customer_id: customer.id,
           customer_number: customerNumber,
           direction: 'outbound',
           type: 'text',
-          content: replyText,
+          content: confirmationText,
           status: 'sent',
           triggered_rule_id: activeSession.ruleId,
           is_read: true
         });
-
-        // Queue outbound message via addToWhatsappQueue
-        const outboundJobData = {
+        await addToWhatsappQueue({
           businessId: tenant.businessId,
           phoneNumberId: tenant.phoneNumberId,
           encryptedAccessToken: tenant.accessToken,
           to: customerNumber,
-          message: replyText,
+          message: confirmationText,
           type: 'text',
           messageId: outboundMsg.id
-        };
-        if (nextField && (nextField.fieldType === 'buttons' || nextField.fieldType === 'list')) {
-          // nextField's step isn't always activeSession.step + 1 — bailing
-          // out of the vehicle carousel to the generic vehicleType list
-          // reuses the SAME step instead of advancing. Re-fetch the session
-          // (already saved by processBookingStep) to get the step this
-          // question truly lives at, so outbound ids line up with what
-          // inbound resolution will later compare against session.step.
-          const stepSession = await bookingService.getBookingSession(tenant.businessId, customerNumber);
-          outboundJobData.step = stepSession ? stepSession.step : activeSession.step;
-          const nextFieldLabels = (nextField.options || []).map(bookingService.normalizeOption).map(opt => opt.label);
-          if (nextField.fieldType === 'buttons') {
-            outboundJobData.interactiveButtons = nextFieldLabels;
-          } else {
-            outboundJobData.interactiveList = nextFieldLabels;
-            outboundJobData.listButtonLabel = 'Choose';
-          }
-        }
-        await addToWhatsappQueue(outboundJobData);
-
-        // Increment outbound usage (fire and forget)
+        });
         usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
           logger.error('Error incrementing outbound usage:', err)
         );
-
-        // Emit socket event
         try {
           socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
             customer,
@@ -857,6 +858,72 @@ const receiveWebhook = async (req, res) => {
           });
         } catch (socketError) {
           logger.error('Error emitting socket event:', socketError);
+        }
+
+        return; // Do not run rule matching
+      } else {
+        // Non-terminal turn — persist the advanced session before sending
+        // anything (advanceGraphSession never writes to Redis itself).
+        await bookingService.saveBookingSession(tenant.businessId, customerNumber, updatedSession);
+
+        if (typeof result === 'string') {
+          if (result.startsWith('Sorry, that vehicle is no longer available')) {
+            // Tap-time re-verification found the carousel stale and
+            // refreshed it in place (rebuildOrFallback) — resend the
+            // carousel with this status string as the intro, using the
+            // SAME node's freshly computed options already sitting in
+            // updatedSession.currentNodeComputedOptions.
+            const refreshedField = await bookingGraphService.getCurrentNodeField(tenant.businessId, updatedSession, customer.preferredLanguage);
+            if (refreshedField) {
+              await sendFieldPrompt(
+                { tenant, customer, customerNumber, triggeredRuleId: activeSession.ruleId },
+                refreshedField,
+                result
+              );
+            }
+          } else {
+            // Plain re-prompt (invalid choice) — no state change, no field
+            // to render, just the message.
+            const outboundMsg = await saveMessage({
+              business_id: tenant.businessId,
+              customer_id: customer.id,
+              customer_number: customerNumber,
+              direction: 'outbound',
+              type: 'text',
+              content: result,
+              status: 'sent',
+              triggered_rule_id: activeSession.ruleId,
+              is_read: true
+            });
+            await addToWhatsappQueue({
+              businessId: tenant.businessId,
+              phoneNumberId: tenant.phoneNumberId,
+              encryptedAccessToken: tenant.accessToken,
+              to: customerNumber,
+              message: result,
+              type: 'text',
+              messageId: outboundMsg.id
+            });
+            usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+              logger.error('Error incrementing outbound usage:', err)
+            );
+            try {
+              socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+                customer,
+                message: outboundMsg,
+                customerNumber
+              });
+            } catch (socketError) {
+              logger.error('Error emitting socket event:', socketError);
+            }
+          }
+        } else {
+          // result is the next field object (any fieldType, including a
+          // freshly is_computed vehicle_carousel).
+          await sendFieldPrompt(
+            { tenant, customer, customerNumber, triggeredRuleId: activeSession.ruleId },
+            result
+          );
         }
 
         return; // Do not run rule matching
@@ -1058,13 +1125,16 @@ const receiveWebhook = async (req, res) => {
         replyText = applyMessageTemplate(localizedReply, tenant);
 
       } else if (matchedNode.replyKind === 'booking_trigger') {
-        // Start booking flow — ask first question
-        const firstField = await bookingService.startBookingSession(
+        // Start booking flow — ask first question. startGraphSession is
+        // side-effect-free (mirrors advanceGraphSession) — unlike the old
+        // startBookingSession, which saved the session internally, the
+        // session it returns must be persisted here.
+        const { session: newBookingSession, field: firstField } = await bookingGraphService.startGraphSession(
           tenant.businessId,
-          customerNumber,
           matchedNode.id,
           customer.preferredLanguage
         );
+        await bookingService.saveBookingSession(tenant.businessId, customerNumber, newBookingSession);
         bookingField = firstField;
         replyText = firstField.label;
 
@@ -1149,8 +1219,10 @@ const receiveWebhook = async (req, res) => {
       outboundJobData.listButtonLabel = 'Menu';
     }
     if (bookingField && (bookingField.fieldType === 'buttons' || bookingField.fieldType === 'list')) {
-      // startBookingSession always creates the session at step 0.
-      outboundJobData.step = 0;
+      // Reuses the worker/whatsapp.service `step` job-data field to carry
+      // the entry node's id under the graph engine's "{node_id}:{index}" id
+      // scheme (see sendFieldPrompt's doc comment) instead of a numeric step.
+      outboundJobData.step = bookingField.nodeId;
       const bookingFieldLabels = (bookingField.options || []).map(bookingService.normalizeOption).map(opt => opt.label);
       if (bookingField.fieldType === 'buttons') {
         outboundJobData.interactiveButtons = bookingFieldLabels;

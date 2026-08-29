@@ -865,94 +865,139 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
     }
 
     // Step 6: All fields collected - create booking
-    const { data: customer, error: custErr } = await supabase
-      .from('customers').select('id').eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
-    if (custErr) logger.error('Error looking up customer for booking creation:', custErr);
-
-    const bookingCode = 'CAB' + Math.floor(1000 + Math.random() * 9000);
-
-    const { data: bookingRow, error: bookingErr } = await supabase.from('bookings').insert({
-      business_id: businessId,
-      customer_id: customer ? customer.id : null,
-      customer_number: customerNumber,
-      status: 'pending',
-      fields: session.collected,
-      payment_status: 'not_required',
-      booking_code: bookingCode
-    }).select().single();
-    if (bookingErr) throw bookingErr;
-    const booking = toCamelCase(bookingRow);
-
-    // Delete session from Redis
-    await deleteBookingSession(businessId, customerNumber);
-
-    // Increment booking usage (fire and forget)
-    usageService.incrementUsage(businessId, 'booking').catch(err =>
-      logger.error('Error incrementing booking usage:', err)
-    );
-
-    // Build confirmation message (WhatsApp bold = *value*)
-    const fieldLines = session.fields
-      .map(f => {
-        const value = session.collected[f.fieldKey];
-        if (value === undefined || value === null || value === '') {
-          return null;
-        }
-        const label = f.summaryLabel || f.label.replace('?', '');
-        return label + ': *' + value + '*';
-      })
-      .filter(line => line !== null)
-      .join('\n');
-
-    const hasFare = session.collected.vehicleFare !== undefined && session.collected.vehicleFare !== null;
-    const fareLine = !hasFare
-      ? ''
-      : session.collected.fareSource === 'distance_estimate'
-        ? '\nFare: *₹' + session.collected.vehicleFare + ' (estimated, based on distance)*' +
-          '\nDistance: *' + session.collected.distanceKm + ' km*'
-        : '\nFare: *₹' + session.collected.vehicleFare + '*';
-
-    const driverDaLine = session.collected.driverDaTotal
-      ? '\nDriver DA: *₹' + session.collected.driverDaTotal + ' (' + session.collected.driverDaDays + ' days × ₹' + session.collected.driverDaPerDay + ')*'
-      : '';
-
-    const tollNoteLine = hasFare
-      ? '\n\n_Note: Toll & parking charges are not included in this fare and will be collected separately._'
-      : '';
-
-    const extraRateNoteLine = (session.collected.fareSource === 'rental_package' &&
-      session.collected.extraKmRate !== undefined && session.collected.extraKmRate !== null &&
-      session.collected.extraHrRate !== undefined && session.collected.extraHrRate !== null)
-      ? '\n\n_Extra km: ₹' + session.collected.extraKmRate + '/km, Extra hour: ₹' + session.collected.extraHrRate + '/hr beyond package limits._'
-      : '';
-
-    const localRentalUnconfiguredNoteLine = session.localRentalUnconfigured
-      ? '\n\n_Note: this business hasn\'t set up rental packages yet — our team will call you to confirm pricing for this rental._'
-      : '';
-
-    const confirmationText = '✅ *Booking request received!*\n' +
-      'Booking ID: *' + bookingCode + '*\n\n' +
-      fieldLines +
-      fareLine +
-      driverDaLine +
-      tollNoteLine +
-      extraRateNoteLine +
-      localRentalUnconfiguredNoteLine +
-      '\n\nOur team will contact you shortly to confirm. 🚕';
-
-    // Emit Socket.io event (wrap in try/catch)
-    try {
-      socketService.emitToBusiness(businessId.toString(), 'new_booking', {
-        booking,
-        customerNumber
-      });
-    } catch (socketError) {
-      logger.error('Error emitting socket event:', socketError);
-    }
-
-    return confirmationText;
+    return await createBookingAndConfirmation(businessId, customerNumber, session.collected, session.fields, session.localRentalUnconfigured);
   } catch (error) {
     logger.error('Error processing booking step:', error);
+    throw error;
+  }
+};
+
+/**
+ * Shared booking-completion tail for both engines: insert the `bookings` row,
+ * delete the Redis session, bump usage, build the WhatsApp confirmation text,
+ * and emit the `new_booking` socket event. Extracted verbatim out of
+ * processBookingStep's old inline tail so bookingGraph.service.js's
+ * finalizeGraphBooking can reuse the exact same, already-proven formatting
+ * logic instead of duplicating it — the two engines differ only in what
+ * ordered-field-with-labels array they have (session.fields for the old
+ * step/fields model, session.answeredFields for the graph model), which is
+ * why that's a parameter here rather than read off a `session` shape neither
+ * caller fully shares.
+ * @param {string} businessId
+ * @param {string} customerNumber
+ * @param {Object} collected - session.collected (field answers + fare/vehicle bookkeeping)
+ * @param {Array<{fieldKey: string, label: string, summaryLabel: string}>} orderedFields -
+ *   the fields actually answered, in answer order, for the fieldLines summary
+ * @param {boolean} localRentalUnconfigured
+ * @returns {Promise<string>} the confirmation text
+ */
+const createBookingAndConfirmation = async (businessId, customerNumber, collected, orderedFields, localRentalUnconfigured) => {
+  const { data: customer, error: custErr } = await supabase
+    .from('customers').select('id').eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
+  if (custErr) logger.error('Error looking up customer for booking creation:', custErr);
+
+  const bookingCode = 'CAB' + Math.floor(1000 + Math.random() * 9000);
+
+  const { data: bookingRow, error: bookingErr } = await supabase.from('bookings').insert({
+    business_id: businessId,
+    customer_id: customer ? customer.id : null,
+    customer_number: customerNumber,
+    status: 'pending',
+    fields: collected,
+    payment_status: 'not_required',
+    booking_code: bookingCode
+  }).select().single();
+  if (bookingErr) throw bookingErr;
+  const booking = toCamelCase(bookingRow);
+
+  // Delete session from Redis
+  await deleteBookingSession(businessId, customerNumber);
+
+  // Increment booking usage (fire and forget)
+  usageService.incrementUsage(businessId, 'booking').catch(err =>
+    logger.error('Error incrementing booking usage:', err)
+  );
+
+  // Build confirmation message (WhatsApp bold = *value*)
+  const fieldLines = orderedFields
+    .map(f => {
+      const value = collected[f.fieldKey];
+      if (value === undefined || value === null || value === '') {
+        return null;
+      }
+      const label = f.summaryLabel || f.label.replace('?', '');
+      return label + ': *' + value + '*';
+    })
+    .filter(line => line !== null)
+    .join('\n');
+
+  const hasFare = collected.vehicleFare !== undefined && collected.vehicleFare !== null;
+  const fareLine = !hasFare
+    ? ''
+    : collected.fareSource === 'distance_estimate'
+      ? '\nFare: *₹' + collected.vehicleFare + ' (estimated, based on distance)*' +
+        '\nDistance: *' + collected.distanceKm + ' km*'
+      : '\nFare: *₹' + collected.vehicleFare + '*';
+
+  const driverDaLine = collected.driverDaTotal
+    ? '\nDriver DA: *₹' + collected.driverDaTotal + ' (' + collected.driverDaDays + ' days × ₹' + collected.driverDaPerDay + ')*'
+    : '';
+
+  const tollNoteLine = hasFare
+    ? '\n\n_Note: Toll & parking charges are not included in this fare and will be collected separately._'
+    : '';
+
+  const extraRateNoteLine = (collected.fareSource === 'rental_package' &&
+    collected.extraKmRate !== undefined && collected.extraKmRate !== null &&
+    collected.extraHrRate !== undefined && collected.extraHrRate !== null)
+    ? '\n\n_Extra km: ₹' + collected.extraKmRate + '/km, Extra hour: ₹' + collected.extraHrRate + '/hr beyond package limits._'
+    : '';
+
+  const localRentalUnconfiguredNoteLine = localRentalUnconfigured
+    ? '\n\n_Note: this business hasn\'t set up rental packages yet — our team will call you to confirm pricing for this rental._'
+    : '';
+
+  const confirmationText = '✅ *Booking request received!*\n' +
+    'Booking ID: *' + bookingCode + '*\n\n' +
+    fieldLines +
+    fareLine +
+    driverDaLine +
+    tollNoteLine +
+    extraRateNoteLine +
+    localRentalUnconfiguredNoteLine +
+    '\n\nOur team will contact you shortly to confirm. 🚕';
+
+  // Emit Socket.io event (wrap in try/catch)
+  try {
+    socketService.emitToBusiness(businessId.toString(), 'new_booking', {
+      booking,
+      customerNumber
+    });
+  } catch (socketError) {
+    logger.error('Error emitting socket event:', socketError);
+  }
+
+  return confirmationText;
+};
+
+/**
+ * Booking-completion tail for the graph engine — the counterpart to
+ * processBookingStep's now-shared createBookingAndConfirmation call.
+ * bookingGraph.service.js's advanceGraphSession deliberately stops at
+ * {done:true, collected} without inserting a row or building confirmation
+ * text (kept out of that pure-of-side-effects core); the caller (Step 12's
+ * webhook.controller.js wiring) calls this once it sees {done:true}.
+ * @param {string} businessId
+ * @param {string} customerNumber
+ * @param {Object} session - the graph session at completion (collected,
+ *   answeredFields, localRentalUnconfigured)
+ * @returns {Promise<string>} the confirmation text
+ */
+const finalizeGraphBooking = async (businessId, customerNumber, session) => {
+  try {
+    return await createBookingAndConfirmation(businessId, customerNumber, session.collected, session.answeredFields, session.localRentalUnconfigured);
+  } catch (error) {
+    logger.error('Error finalizing graph booking:', error);
     throw error;
   }
 };
@@ -1134,5 +1179,9 @@ module.exports = {
   findBestVehicleCarouselOptions,
   findRentalVehicleCarouselOptions,
   groupRentalPackagesByKey,
-  resolveTravelDateOption
+  resolveTravelDateOption,
+  // Booking-completion tail for the graph engine (Step 12 wiring) — see the
+  // function's own doc comment for why this lives here instead of in
+  // bookingGraph.service.js or inline in webhook.controller.js.
+  finalizeGraphBooking
 };
