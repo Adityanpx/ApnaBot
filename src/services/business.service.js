@@ -74,7 +74,8 @@ const getBusinessByPhoneNumberId = async (phoneNumberId) => {
  */
 const createBusiness = async (ownerUserId, data) => {
   try {
-    const { name, businessCategory, address, city, displayName } = data;
+    const { name, businessCategory, address, city, displayName, bookingEngine } = data;
+    const isGraphEngine = bookingEngine === 'graph';
 
     const webhookVerifyToken = generateWebhookToken();
 
@@ -87,7 +88,8 @@ const createBusiness = async (ownerUserId, data) => {
       owner_user_id: ownerUserId,
       webhook_verify_token: webhookVerifyToken,
       is_active: true,
-      is_whatsapp_connected: false
+      is_whatsapp_connected: false,
+      booking_engine: bookingEngine || 'legacy'
     }).select().single();
     if (error) throw error;
 
@@ -95,6 +97,14 @@ const createBusiness = async (ownerUserId, data) => {
     const { error: userErr } = await supabase
       .from('users').update({ business_id: business.id }).eq('id', ownerUserId);
     if (userErr) throw userErr;
+
+    // Graph-engine businesses start with a literal empty graph — no
+    // business_type_templates lookup, no business_flows/rules seed writes,
+    // no flow_nodes/flow_edges seeding. The owner builds their flow from
+    // scratch via /api/flow-graph. (Confirmed decision — see PRD.md.)
+    if (isGraphEngine) {
+      return toCamelCase(business);
+    }
 
     // Copy default rules + booking fields from BusinessTypeTemplate into a
     // business_flows row — the new per-business source of truth for the

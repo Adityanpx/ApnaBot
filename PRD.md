@@ -35,13 +35,27 @@ This is the most important thing to understand before touching anything.
   booked end-to-end, correct fare, correct confirmation, correct DB row.
 
 ### Engine B — Old flat engine (rules / business_flows)
-- **Live for: every other business**, including Averix Solutions
-  (business_id `bd0ed689-6aa8-4be9-90df-6548564790ca`)
-- Tables: `rules` (chatbot.service.js's OLD matching — now dead for
-  SG Travels, still live for Averix), `business_flows` (per-business copy
-  of booking_fields, made from `business_type_templates` at signup)
+- **Runtime path is unconditionally graph-only today** — the webhook
+  controller and `chatbot.service.js` always run the graph engine
+  regardless of a business's `booking_engine` value; nothing on the live
+  message path branches on it. `booking_engine` only gates the
+  **dashboard CRUD surface** (which of `/api/business/booking-fields` vs
+  `/api/flow-graph` a business's owner is allowed to use — see "CRUD for
+  the graph engine" below). So describing Engine B as "live for every
+  other business" is misleading: Averix's `rules`/`business_flows` rows
+  still exist and are readable/writable via the dashboard, but nothing
+  currently sends Averix's real WhatsApp traffic through
+  `startBookingSession`/`processBookingStep` — that would require
+  Averix's data to actually be migrated into `flow_nodes`/`flow_edges`
+  the way SG Travels' was, which has NOT happened. (This is a real gap
+  to resolve, not just a doc fix — see "Known gaps" #2.)
+- Tables: `rules` (chatbot.service.js's OLD keyword matching), `business_flows`
+  (per-business copy of booking_fields, made from `business_type_templates`
+  at signup)
 - Core logic: `src/services/booking.service.js`'s `startBookingSession`/
-  `processBookingStep` (session.step/session.fields splice-array model)
+  `processBookingStep` (session.step/session.fields splice-array model) —
+  still exported and unit-testable, but not reachable from the live
+  webhook path as of 2026-08-29
 
 ### CRUD for the graph engine — node + edge CRUD done
 `businesses.booking_engine` (`'legacy'`/`'graph'`, added 2026-08-29) now

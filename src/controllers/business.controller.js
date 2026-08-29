@@ -116,9 +116,11 @@ const getBusiness = async (req, res, next) => {
  * POST /api/business
  * Create business (only if user does not have one yet)
  */
+const VALID_BOOKING_ENGINES = ['legacy', 'graph'];
+
 const createBusiness = async (req, res, next) => {
   try {
-    const { name, businessCategory, displayName, address, city } = req.body;
+    const { name, businessCategory, displayName, address, city, bookingEngine } = req.body;
 
     // Check if user already has a business
     if (req.user.businessId) {
@@ -139,13 +141,21 @@ const createBusiness = async (req, res, next) => {
       return errorResponse(res, 400, `Invalid business category. Must be one of: ${VALID_BUSINESS_CATEGORIES.join(', ')}`);
     }
 
+    // Validate booking engine (same two values as the businesses.booking_engine
+    // check constraint). Defaults to 'legacy' below if omitted, preserving
+    // today's behavior for every existing caller.
+    if (bookingEngine !== undefined && !VALID_BOOKING_ENGINES.includes(bookingEngine)) {
+      return errorResponse(res, 400, `Invalid bookingEngine. Must be one of: ${VALID_BOOKING_ENGINES.join(', ')}`);
+    }
+
     // Create business
     const business = await businessService.createBusiness(req.user.userId, {
       name,
       businessCategory,
       displayName,
       address,
-      city
+      city,
+      bookingEngine: bookingEngine || 'legacy'
     });
 
     // Generate new tokens with businessId
@@ -249,12 +259,19 @@ const updateBusiness = async (req, res, next) => {
  * Booking Flow page, where the owner needs to see and toggle every field, not
  * just the active ones (unlike GET /bookings/preview-fields).
  */
+const GRAPH_ENGINE_DASHBOARD_ERROR = 'this business uses the graph booking engine — use /api/flow-graph endpoints instead';
+
 const getBookingFields = async (req, res, next) => {
   try {
     const businessId = req.user.businessId;
 
     if (!businessId) {
       return errorResponse(res, 404, 'No business found');
+    }
+
+    const business = await businessService.getBusinessById(businessId);
+    if (business && business.bookingEngine === 'graph') {
+      return errorResponse(res, 400, GRAPH_ENGINE_DASHBOARD_ERROR);
     }
 
     const { fields } = await bookingService.getAllBookingFields(businessId);
@@ -292,6 +309,11 @@ const updateBookingFields = async (req, res, next) => {
     const businessId = req.user.businessId;
     if (!businessId) {
       return errorResponse(res, 404, 'No business found');
+    }
+
+    const businessRow = await businessService.getBusinessById(businessId);
+    if (businessRow && businessRow.bookingEngine === 'graph') {
+      return errorResponse(res, 400, GRAPH_ENGINE_DASHBOARD_ERROR);
     }
 
     const { bookingFields } = req.body;
