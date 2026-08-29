@@ -1125,5 +1125,14 @@ module.exports = {
   getVehicleCarouselPreview,
   getPreviewCreditsStatus,
   checkAndConsumeManualPreviewCredit,
-  normalizeOption
+  normalizeOption,
+  // Exported for bookingGraph.service.js (graph-engine rewrite in progress)
+  // to reuse rather than duplicate — these are pure DB/fare lookups with no
+  // dependency on the session.fields/session.step array model, so they're
+  // shared as-is between the old and new engines.
+  localizeField,
+  findBestVehicleCarouselOptions,
+  findRentalVehicleCarouselOptions,
+  groupRentalPackagesByKey,
+  resolveTravelDateOption
 };

@@ -65,15 +65,37 @@
 -- constraint can't stop code from reading a stale `options` value it
 -- shouldn't.
 --
--- WHATSAPP INTERACTION IDS — two schemes, not one:
---   - Authored branches (a 'reply' node's buttons/list, content_type !=
---     'text'; NOT a computed node): id = flow_edges.id (uuid, well under
---     Meta's 200/256 char caps). One edge per rendered button/list row.
---   - Computed nodes (vehicle_carousel / rentalPackage options): id =
---     "{node_id}:{index}" (~40 chars, still safe), since there's no
---     persisted edge to reference — the options are generated fresh per
---     turn from a live query. `index` matches the option's position in
---     that turn's computed options array.
+-- WHATSAPP INTERACTION IDS — two schemes, not one. The split is NOT
+-- "reply node vs computed node" — it's "does this choice have a persisted
+-- edge behind it, or does it live in flow_nodes.options":
+--   - Edge-backed choices — a 'reply' node's buttons/list rows (content_type
+--     != 'text', NOT a computed node): id = flow_edges.id (uuid, well under
+--     Meta's 200/256 char caps). One edge per rendered button/list row. A
+--     'question'/'vehicle_carousel'/'rentalPackage' node's outgoing edges do
+--     NOT get this treatment — those edges represent "what question comes
+--     next", not a customer-facing choice, and are never used as a
+--     WhatsApp id.
+--   - options-backed choices — anything rendered from flow_nodes.options,
+--     whether authored (a 'question' node's buttons/list, e.g. tripType,
+--     travelDate's Today/Tomorrow/"Other date", pickupTime's quick options,
+--     servedCities-driven pickupLocation/dropLocation) or computed
+--     (vehicle_carousel / rentalPackage, generated fresh per turn from a
+--     live query, hence no persisted edge to reference): id =
+--     "{node_id}:{index}" (~40 chars, still safe). `index` matches the
+--     option's position in that turn's options — the node's `options`
+--     column for authored nodes, the freshly-computed array for computed
+--     nodes. The node_id prefix (not a bare index) is deliberate: it lets
+--     the engine detect a stale tap from an already-answered question
+--     (tapped node_id != session's current node) without a separate step
+--     counter, the same anti-staleness property "{step}:{index}" gave the
+--     old booking engine.
+--     One reserved non-numeric suffix under this same scheme:
+--     "{vehicle_carousel_node_id}:other" is the vehicle_carousel's
+--     standalone "Other options" escape button (today: a separate message
+--     with id 'vehicle_other') — not index N of the carousel's own
+--     options, so it's carried as a sentinel suffix instead, decoded to
+--     the same static-fallback-node lookup documented in
+--     migrateFlowGraph.js.
 -- webhook.controller.js's id-decode logic goes from three schemes today
 -- (rule keyword id, "{step}:{index}" booking id, "vehicle_{index}"
 -- carousel id) down to these two.
