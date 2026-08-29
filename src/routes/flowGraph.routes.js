@@ -45,6 +45,11 @@ router.put('/question-nodes/:id', requireRole('owner'), flowGraphController.upda
 // flowGraph.controller.js#deleteQuestionNode)
 router.delete('/question-nodes/:id', requireRole('owner'), flowGraphController.deleteQuestionNode);
 
+// GET /full - Entire graph in one response (all reply nodes, all question
+// nodes, all edges) - for the flow editor, avoids N+1 client-side fetching.
+// Registered before /edges so it's unambiguous as its own literal path.
+router.get('/full', flowGraphController.getFullGraph);
+
 // GET /edges?fromNodeId= - Outgoing edges for one node
 router.get('/edges', flowGraphController.getEdges);
 

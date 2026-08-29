@@ -763,6 +763,42 @@ const deleteQuestionNode = async (req, res, next) => {
 };
 
 /**
+ * GET /api/flow-graph/full
+ * Returns the business's entire graph in one response — all reply nodes,
+ * all question/vehicle_carousel/rentalPackage nodes, and all edges — for
+ * the upcoming flow editor, which otherwise would N+1 (fetch nodes, then
+ * fetch edges per node). Three queries total, run in parallel, each
+ * filtered by business_id directly (edges are NOT looked up per
+ * from_node_id in a loop). Same toCamelCase per-row shape as
+ * getReplyNodes/getQuestionNodes/getEdges, unpaginated — the frontend
+ * builds its own node->outgoing-edges map from the flat edges array, so
+ * there's no separate parsing path to support here.
+ */
+const getFullGraph = async (req, res, next) => {
+  try {
+    const businessId = req.user.businessId;
+
+    const [replyNodesRes, questionNodesRes, edgesRes] = await Promise.all([
+      supabase.from('flow_nodes').select('*').eq('business_id', businessId).eq('node_type', 'reply'),
+      supabase.from('flow_nodes').select('*').eq('business_id', businessId).in('node_type', ['question', 'vehicle_carousel', 'rentalPackage']),
+      supabase.from('flow_edges').select('*').eq('business_id', businessId).order('display_order', { ascending: true })
+    ]);
+    if (replyNodesRes.error) throw replyNodesRes.error;
+    if (questionNodesRes.error) throw questionNodesRes.error;
+    if (edgesRes.error) throw edgesRes.error;
+
+    return successResponse(res, 200, {
+      replyNodes: (replyNodesRes.data || []).map(toCamelCase),
+      questionNodes: (questionNodesRes.data || []).map(toCamelCase),
+      edges: (edgesRes.data || []).map(toCamelCase)
+    });
+  } catch (error) {
+    logger.error('Error in getFullGraph:', error);
+    next(error);
+  }
+};
+
+/**
  * GET /api/flow-graph/edges?fromNodeId=
  * Outgoing edges for one node, ordered by displayOrder.
  */
@@ -1069,6 +1105,7 @@ module.exports = {
   createQuestionNode,
   updateQuestionNode,
   deleteQuestionNode,
+  getFullGraph,
   getEdges,
   createEdge,
   updateEdge,
