@@ -10,14 +10,16 @@ const { validateLabelTranslations } = require('../utils/bookingFieldValidation')
 const logger = require('../utils/logger');
 
 // Tables with business_id and ON DELETE CASCADE on the businesses FK (see
-// supabase/migrations/20260819213717_init_schema.sql and
-// 20260829090000_business_flows.sql) — deleting the business row atomically
-// wipes these in the same statement, so they're only counted here (for the
-// response) rather than deleted individually.
+// supabase/migrations/20260819213717_init_schema.sql,
+// 20260829090000_business_flows.sql, and 20260829140000_flow_nodes_edges.sql)
+// — deleting the business row atomically wipes these in the same statement,
+// so they're only counted here (for the response) rather than deleted
+// individually.
 const CASCADE_DELETED_TABLES = [
   'customers', 'rules', 'bookings', 'vehicles', 'route_fares',
   'rental_packages', 'messages', 'message_templates', 'broadcasts',
-  'usage', 'subscriptions', 'business_flows'
+  'usage', 'subscriptions', 'business_flows',
+  'flow_nodes', 'flow_edges', 'flow_snapshots'
 ];
 
 const toCamelCaseDeep = (row, nestedKeys = []) => {
@@ -160,17 +162,18 @@ const toggleBusiness = async (req, res, next) => {
  * Permanently delete a business and cascade-delete every row that belongs to it.
  *
  * customers, rules, bookings, vehicles, route_fares, rental_packages, messages,
- * message_templates, broadcasts, usage, subscriptions, and business_flows all
- * have ON DELETE CASCADE on their business_id FK, so deleting the business
- * row wipes them in one atomic DB statement — no manual per-table deletes
- * needed (and no risk of a partial failure among them).
+ * message_templates, broadcasts, usage, subscriptions, business_flows, and
+ * flow_nodes/flow_edges/flow_snapshots (graph booking engine) all have ON
+ * DELETE CASCADE on their business_id FK, so deleting the business row wipes
+ * them in one atomic DB statement — no manual per-table deletes needed (and
+ * no risk of a partial failure among them).
  *
  * users.business_id has NO cascade, and businesses.owner_user_id is a NOT NULL
  * FK back to users — a circular reference — so owner/staff users need explicit
  * handling in this order:
  *   1. delete staff users (business_id = this business, role = 'staff')
  *   2. null out the owner's business_id (unblocks deleting the business row)
- *   3. delete the business row (cascades the 12 tables above)
+ *   3. delete the business row (cascades the 15 tables above)
  *   4. delete the owner user row (unblocked now that the business row is gone)
  *
  * NOT deleted: plans, business_type_templates, flow_packs, vehicle_type_catalog
