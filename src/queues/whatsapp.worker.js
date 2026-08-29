@@ -11,7 +11,11 @@ const connection = {
   port: parseInt(redisUrl.port),
   password: redisUrl.password,
   username: redisUrl.username || 'default',
-  tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined
+  tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
+  retryStrategy(times) {
+    if (times > 10) return null;
+    return Math.min(times * 50, 2000);
+  }
 };
 
 // Must match the prefix used by whatsapp.queue.js - see comment there.
@@ -81,5 +85,16 @@ worker.on('failed', (job, err) => {
 worker.on('error', (err) => {
   logger.error(`Worker error: ${err.message}`);
 });
+
+// connection's retryStrategy gives up after 10 attempts, which makes
+// ioredis emit 'end' on its underlying client instead of retrying further.
+// There's no automatic recovery from that state, so exit and let pm2 (see
+// deploy.yml) restart the process and reconnect from scratch.
+worker.client.then((client) => {
+  client.on('end', () => {
+    logger.error('CRITICAL: Redis connection for whatsapp worker permanently closed (retries exhausted); exiting to trigger process restart');
+    process.exit(1);
+  });
+}).catch(() => {});
 
 module.exports = worker;

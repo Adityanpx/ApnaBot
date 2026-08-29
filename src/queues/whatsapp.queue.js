@@ -9,7 +9,11 @@ const connection = {
   port: parseInt(redisUrl.port),
   password: redisUrl.password,
   username: redisUrl.username || 'default',
-  tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined
+  tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
+  retryStrategy(times) {
+    if (times > 10) return null;
+    return Math.min(times * 50, 2000);
+  }
 };
 
 // Namespaces queue keys per environment so a local dev run can never join
@@ -27,6 +31,21 @@ const whatsappQueue = new Queue('whatsapp-outbound', {
     removeOnFail: 500
   }
 });
+
+whatsappQueue.on('error', (err) => {
+  logger.error(`WhatsApp queue error: ${err.message}`);
+});
+
+// connection's retryStrategy gives up after 10 attempts, which makes
+// ioredis emit 'end' on its underlying client instead of retrying further.
+// There's no automatic recovery from that state, so exit and let pm2 (see
+// deploy.yml) restart the process and reconnect from scratch.
+whatsappQueue.client.then((client) => {
+  client.on('end', () => {
+    logger.error('CRITICAL: Redis connection for whatsapp queue permanently closed (retries exhausted); exiting to trigger process restart');
+    process.exit(1);
+  });
+}).catch(() => {});
 
 // Only instantiated lazily because it opens its own blocking Redis
 // connection; most callers (single-message replies) never need it.
