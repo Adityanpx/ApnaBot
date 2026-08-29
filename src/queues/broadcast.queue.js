@@ -1,5 +1,6 @@
 const { Queue } = require('bullmq');
 const logger = require('../utils/logger');
+const config = require('../config/env');
 
 const redisUrl = new URL(process.env.REDIS_URL);
 
@@ -11,8 +12,14 @@ const connection = {
   tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined
 };
 
+// Namespaces queue keys per environment so a local dev run can never join
+// the production queue, even if REDIS_URL is accidentally shared. Must
+// match the prefix used by broadcast.worker.js.
+const prefix = `apnabot:${config.QUEUE_NAMESPACE}`;
+
 const broadcastQueue = new Queue('broadcast-outbound', {
   connection,
+  prefix,
   defaultJobOptions: {
     // No retries: each job fans a template send out to up to 50 recipients,
     // tracked per-recipient inside the worker (see broadcast.worker.js). A

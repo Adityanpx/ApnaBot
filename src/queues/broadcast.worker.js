@@ -3,6 +3,7 @@ const whatsappService = require('../services/whatsapp.service');
 const walletService = require('../services/wallet.service');
 const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
+const config = require('../config/env');
 
 const redisUrl = new URL(process.env.REDIS_URL);
 
@@ -13,6 +14,9 @@ const connection = {
   username: redisUrl.username || 'default',
   tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined
 };
+
+// Must match the prefix used by broadcast.queue.js - see comment there.
+const prefix = `apnabot:${config.QUEUE_NAMESPACE}`;
 
 // Resolves a recipient's own {{1}}, {{2}}... values from variableMapping
 // (see broadcast.controller.js createBroadcast) instead of the shared,
@@ -80,6 +84,7 @@ const worker = new Worker('broadcast-outbound', async (job) => {
   return { sent, failed };
 }, {
   connection,
+  prefix,
   concurrency: 5
 });
 

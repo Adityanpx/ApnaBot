@@ -67,6 +67,13 @@ module.exports = {
   // Optional: only needed by shops with enableDistanceFares on; read directly
   // from process.env in distanceMatrix.service.js, exported here for consistency.
   GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY,
+  // BullMQ key prefix for the whatsapp-outbound/broadcast-outbound queues.
+  // Defaults to NODE_ENV so a local dev run can never join the same queue as
+  // production even if REDIS_URL is accidentally pointed at the same Redis
+  // instance. Override with QUEUE_NAMESPACE if two non-prod environments
+  // (e.g. two developers, or staging + prod both set to NODE_ENV=production)
+  // need to be kept apart too.
+  QUEUE_NAMESPACE: process.env.QUEUE_NAMESPACE || process.env.NODE_ENV,
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY
 };

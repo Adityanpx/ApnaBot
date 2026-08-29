@@ -1,5 +1,6 @@
 const { Queue, QueueEvents } = require('bullmq');
 const logger = require('../utils/logger');
+const config = require('../config/env');
 
 const redisUrl = new URL(process.env.REDIS_URL);
 
@@ -11,8 +12,14 @@ const connection = {
   tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined
 };
 
+// Namespaces queue keys per environment so a local dev run can never join
+// the production queue, even if REDIS_URL is accidentally shared. Must
+// match the prefix used by whatsapp.worker.js and the QueueEvents below.
+const prefix = `apnabot:${config.QUEUE_NAMESPACE}`;
+
 const whatsappQueue = new Queue('whatsapp-outbound', {
   connection,
+  prefix,
   defaultJobOptions: {
     attempts: 3,
     backoff: { type: 'exponential', delay: 2000 },
@@ -30,7 +37,7 @@ let whatsappQueueEventsReady = null;
 const getQueueEvents = () => {
   if (!whatsappQueueEventsReady) {
     const startedAt = Date.now();
-    const queueEvents = new QueueEvents('whatsapp-outbound', { connection });
+    const queueEvents = new QueueEvents('whatsapp-outbound', { connection, prefix });
     queueEvents.on('error', (err) => {
       logger.error('WhatsApp QueueEvents connection error', { error: err.message });
     });

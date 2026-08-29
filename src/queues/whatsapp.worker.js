@@ -2,6 +2,7 @@ const { Worker } = require('bullmq');
 const whatsappService = require('../services/whatsapp.service');
 const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
+const config = require('../config/env');
 
 const redisUrl = new URL(process.env.REDIS_URL);
 
@@ -12,6 +13,9 @@ const connection = {
   username: redisUrl.username || 'default',
   tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined
 };
+
+// Must match the prefix used by whatsapp.queue.js - see comment there.
+const prefix = `apnabot:${config.QUEUE_NAMESPACE}`;
 
 const worker = new Worker('whatsapp-outbound', async (job) => {
   const { businessId, phoneNumberId, encryptedAccessToken, to, message, messageId,
@@ -62,6 +66,7 @@ const worker = new Worker('whatsapp-outbound', async (job) => {
   }
 }, {
   connection,
+  prefix,
   concurrency: 5
 });
 
