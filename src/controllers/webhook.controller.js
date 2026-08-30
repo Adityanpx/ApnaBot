@@ -717,7 +717,8 @@ const receiveWebhook = async (req, res) => {
           const menuListOptions = await buildMenuListOptions(escapeBusinessDoc.menuItems, customer.preferredLanguage);
           const menuReplyText = applyMessageTemplate(
             getLocalizedText(escapeBusinessDoc, 'welcomeMessage', customer.preferredLanguage) || 'How can we help you today?',
-            tenant
+            tenant,
+            customer
           );
 
           const menuOutboundMsg = await saveMessage({
@@ -958,7 +959,8 @@ const receiveWebhook = async (req, res) => {
         const welcomeMessage = getLocalizedText(languageBusinessDoc, 'welcomeMessage', 'en');
         const languagePromptText = applyMessageTemplate(
           welcomeMessage ? `${welcomeMessage}\n\n${languageChoiceLine}` : languageChoiceLine,
-          tenant
+          tenant,
+          customer
         );
 
         const languagePromptMsg = await saveMessage({
@@ -1056,7 +1058,7 @@ const receiveWebhook = async (req, res) => {
           }
         }
 
-        greetingReplyText = applyMessageTemplate(greetingReplyText, tenant);
+        greetingReplyText = applyMessageTemplate(greetingReplyText, tenant, customer);
 
         // Save outbound message
         const greetingOutboundMsg = await saveMessage({
@@ -1122,7 +1124,7 @@ const receiveWebhook = async (req, res) => {
       if (matchedNode.replyKind === 'text') {
         // Simple text reply (may also carry an image and/or buttons).
         const localizedReply = getLocalizedText(matchedNode, 'label', customer.preferredLanguage);
-        replyText = applyMessageTemplate(localizedReply, tenant);
+        replyText = applyMessageTemplate(localizedReply, tenant, customer);
 
       } else if (matchedNode.replyKind === 'booking_trigger') {
         // Start booking flow — ask first question. startGraphSession is
@@ -1136,10 +1138,10 @@ const receiveWebhook = async (req, res) => {
         );
         await bookingService.saveBookingSession(tenant.businessId, customerNumber, newBookingSession);
         bookingField = firstField;
-        replyText = firstField.label;
+        replyText = applyMessageTemplate(firstField.label, tenant, customer);
 
       } else if (matchedNode.replyKind === 'payment_trigger') {
-        replyText = applyMessageTemplate(matchedNode.label, tenant) || 'Please complete your payment.';
+        replyText = applyMessageTemplate(matchedNode.label, tenant, customer) || 'Please complete your payment.';
       }
     } else {
       // No rule matched — try an AI-generated fallback (opt-in per business),
@@ -1157,7 +1159,7 @@ const receiveWebhook = async (req, res) => {
         }
       }
 
-      replyText = smartReply || applyMessageTemplate(tenant.fallbackReply, tenant) || 'Thank you for your message. We will get back to you soon.';
+      replyText = smartReply || applyMessageTemplate(tenant.fallbackReply, tenant, customer) || 'Thank you for your message. We will get back to you soon.';
 
       // Attach the numbered menu (if the business has one enabled) regardless of
       // whether replyText above came from the AI smart fallback or the

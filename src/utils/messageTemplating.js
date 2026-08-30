@@ -1,6 +1,8 @@
-function applyMessageTemplate(text, business) {
+function applyMessageTemplate(text, business, customer) {
   if (!text) return text;
-  return text.replace(/\{\{businessName\}\}/g, business.displayName || business.name || '');
+  let result = text.replace(/\{\{businessName\}\}/g, business.displayName || business.name || '');
+  result = result.replace(/\{\{customerName\}\}/g, (customer?.name || '').trim() || 'there');
+  return result;
 }
 
 module.exports = { applyMessageTemplate };
