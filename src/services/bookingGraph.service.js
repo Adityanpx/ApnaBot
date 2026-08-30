@@ -129,7 +129,7 @@ const isNodeEffectivelyActive = (node, disabledFieldKeys) => {
  * has a matching condition — a terminal node, e.g. vehicle_carousel).
  * @returns {string|null} next node id, or null if the sequence has ended
  */
-const pickNextNodeId = (nodes, edges, fromNodeId, collected, disabledFieldKeys) => {
+const pickNextNodeId = (nodes, edges, fromNodeId, collected, disabledFieldKeys, businessId) => {
   const nodeById = new Map(nodes.map(n => [n.id, n]));
   let currentId = fromNodeId;
   for (let hop = 0; hop < MAX_HOPS; hop++) {
@@ -137,7 +137,32 @@ const pickNextNodeId = (nodes, edges, fromNodeId, collected, disabledFieldKeys) 
       .filter(e => e.fromNodeId === currentId)
       .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
     const matched = outgoing.find(e => evaluateCondition(e.condition, collected));
-    if (!matched) return null;
+    if (!matched) {
+      if (outgoing.length > 0) {
+        // Edges DO exist from this node, but none of their conditions matched
+        // the customer's collected answers — the session will silently report
+        // {done:true} here even though further nodes exist. This is the exact
+        // signature of a condition/value drift bug (e.g. a condition authored
+        // against a value that never actually ends up in session.collected,
+        // a stale/duplicate edge, a mismatched option value after an edit) —
+        // evaluateCondition does strict, untrimmed, case-sensitive `===`, with
+        // no validation anywhere that condition.equals/in actually matches a
+        // real value for that field. Log full detail so this is diagnosable
+        // from logs alone, not from re-tracing a live session by hand.
+        logger.error('bookingGraph: node has outgoing edges but none matched — session will end here even though further nodes exist', {
+          businessId,
+          nodeId: currentId,
+          collected,
+          candidates: outgoing.map(e => ({
+            edgeId: e.id,
+            toNodeId: e.toNodeId,
+            condition: e.condition,
+            actualValueForConditionField: e.condition ? collected[e.condition.field] : undefined
+          }))
+        });
+      }
+      return null;
+    }
 
     const targetNode = nodeById.get(matched.toNodeId);
     if (!targetNode) {
@@ -536,7 +561,7 @@ const advanceGraphSession = async ({ businessId, session, reply, languageCode })
   });
 
   // ---- advance ----
-  const nextNodeId = pickNextNodeId(nodes, edges, currentNode.id, session.collected, disabledFieldKeys);
+  const nextNodeId = pickNextNodeId(nodes, edges, currentNode.id, session.collected, disabledFieldKeys, businessId);
   if (nextNodeId === null) {
     return { session, result: { done: true, collected: session.collected } };
   }
