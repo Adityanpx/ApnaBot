@@ -165,8 +165,68 @@ graph engine is otherwise done as of 2026-08-29.
    from the graph engine's internal node/edge representation. Don't
    conflate: the graph engine is a DATA MODEL change; the visual canvas
    is a UI project that would sit on top of it later.
+8. **`verifyBookingGraph.js` currently unusable** — `business_flows` rows
+   are missing for SG Travels' post-reset `business_id` (SG Infotech +
+   Averix were wiped and recreated fresh on 2026-08-29; the business ids
+   elsewhere in this doc predate that reset and need re-confirming).
+   The script diffs the graph engine against the old engine's
+   `business_flows`-driven output, so it can't run until either
+   `business_flows` is reseeded for the current business_id or the
+   script is reworked to not depend on it. CLAUDE.md rule 6 requires
+   re-running this script after graph-engine changes — currently
+   blocked; the three bug fixes above were verified on real WhatsApp
+   traffic instead.
+9. **`bookings.customer_id` NOT NULL vs. null-tolerant insert** —
+   `createBookingAndConfirmation` (`booking.service.js:894-909`) inserts
+   `customer_id: customer ? customer.id : null` when no matching
+   `customers` row is found for the business+whatsapp_number pair. If
+   `bookings.customer_id` is actually `NOT NULL` in the live schema,
+   that insert would fail. Latent gap — never hit in real traffic yet
+   (every booking tested so far had a pre-existing customer row).
+   Schema not yet verified either way; check before assuming it's safe.
+10. **Averix still on `booking_engine='legacy'`** — a signup bug from
+    earlier today (2026-08-30) was never fully resolved or retraced.
+    Unrelated to the SG Travels graph-engine work above; needs its own
+    follow-up session.
+11. **Round Trip branch built and wired, not yet walked end-to-end on
+    WhatsApp** — same rebuild as the Session log entry above, but only
+    One Way was actually confirmed live; Round Trip needs the same final
+    confirmation pass before it's trusted the way One Way now is.
 
 ## Session log (append here as major milestones land)
+- 2026-08-30: SG Travels' full travels booking flow (welcome menu →
+  tripType branching → full question chain → real `vehicle_carousel`
+  with live fares → booking complete) rebuilt from scratch through the
+  graph engine editor (`/api/flow-graph`) and **CONFIRMED WORKING END
+  TO END ON REAL WHATSAPP TRAFFIC** — One Way branch and the travelDate
+  fix (below) both walked live today. Three real bugs found and fixed
+  during the rebuild:
+  - **Reply-node → question-node send failure** (`ba80518`) — a button/
+    list wired straight from a reply node to a question node (e.g. "hi"
+    → "Book a ride" → tripType) resolved its WhatsApp interaction id via
+    the target node's `keyword`, which only exists on reply nodes; sent
+    as `null`, Meta's schema validator rejected it. Fixed by always using
+    `edge.id` as the interaction id outbound, and resolving inbound taps
+    structurally (`resolveTappedEdge`) instead of re-running keyword
+    matching.
+  - **Missing `{{customerName}}` substitution** (`65cb2e5`) —
+    `applyMessageTemplate` only ever substituted `{{businessName}}`;
+    `{{customerName}}` passed through literally in every reply. Fixed by
+    threading `customer` into every `applyMessageTemplate` call site and
+    adding the substitution (falls back to "there"). Also fixed
+    `booking_trigger` labels skipping `applyMessageTemplate` entirely
+    (first question was sent with placeholders unresolved).
+  - **travelDate display-value overwriting the raw match value**
+    (`f9e55ba`, `bb7a69b`) — `session.collected`'s stored value for a
+    field was being overwritten with its display-formatted string
+    *before* edge-condition matching ran against it, so a travelDate
+    edge condition compared against the formatted display string instead
+    of the raw value, silently failed to match, and fell through —
+    causing travelDate bookings to complete early with the wrong branch
+    taken. `f9e55ba` first added diagnostic logging on wired-edge
+    condition-match failures (to surface this class of silent bug at
+    all); `bb7a69b` fixed the actual ordering bug and updated
+    `verifyBookingGraph.js` accordingly.
 - 2026-08-2X: `business_flows` table + per-business booking flow reads
   (replaces live template reads) — done, verified on SG Travels + Averix.
 - 2026-08-29: `flow_nodes`/`flow_edges`/`flow_snapshots` graph engine —
