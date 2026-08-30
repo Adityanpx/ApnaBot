@@ -990,12 +990,21 @@ const createBookingAndConfirmation = async (businessId, customerNumber, collecte
  * @param {string} businessId
  * @param {string} customerNumber
  * @param {Object} session - the graph session at completion (collected,
- *   answeredFields, localRentalUnconfigured)
+ *   answeredFields, localRentalUnconfigured, displayOverrides)
  * @returns {Promise<string>} the confirmation text
  */
 const finalizeGraphBooking = async (businessId, customerNumber, session) => {
   try {
-    return await createBookingAndConfirmation(businessId, customerNumber, session.collected, session.answeredFields, session.localRentalUnconfigured);
+    // session.collected holds the RAW answers the graph engine matched edge
+    // conditions against (e.g. travelDate = "Today", not a calendar date —
+    // see bookingGraph.service.js's advanceGraphSession). displayOverrides
+    // holds the handful of fields that need a different value once the
+    // session is over and only display (confirmation text + the persisted
+    // bookings.fields row) remains — merged in here, at the one point
+    // both engines' completion paths funnel through, so it's never visible
+    // to edge-condition matching.
+    const displayCollected = { ...session.collected, ...(session.displayOverrides || {}) };
+    return await createBookingAndConfirmation(businessId, customerNumber, displayCollected, session.answeredFields, session.localRentalUnconfigured);
   } catch (error) {
     logger.error('Error finalizing graph booking:', error);
     throw error;

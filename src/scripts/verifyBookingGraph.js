@@ -176,7 +176,15 @@ async function runNewEngine(businessId, entryReplyNodeId, replies, languageCode)
     throw new Error('NEW engine: script did not end with {done:true} — check SCRIPTED_REPLIES against the business\'s current flow');
   }
 
-  return { turns, collected: lastResult.collected };
+  // lastResult.collected is advanceGraphSession's raw {done:true} payload —
+  // it deliberately holds RAW answers (e.g. travelDate = "Today") used for
+  // edge-condition matching, not the display-formatted values that only
+  // exist once finalizeGraphBooking merges session.displayOverrides in (see
+  // booking.service.js). Apply that same merge here so this diffs against
+  // what actually ends up in bookingRow.fields for the old engine, without
+  // this script having to insert/delete a real booking row itself.
+  const displayCollected = { ...lastResult.collected, ...(session.displayOverrides || {}) };
+  return { turns, collected: displayCollected };
 }
 
 function diffCollected(oldCollected, newCollected) {

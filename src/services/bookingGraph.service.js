@@ -345,7 +345,12 @@ const startGraphSession = async (businessId, replyNodeId, languageCode) => {
     startedAt: new Date().toISOString(),
     localRentalUnconfigured: false,
     rentalPackageKeyByLabel: null,
-    currentNodeComputedOptions: null
+    currentNodeComputedOptions: null,
+    // Display-only field values that must NOT be used for edge-condition
+    // matching (currently just travelDate's "Today"/"Tomorrow" -> actual
+    // date). Merged over session.collected at finalize time only — see the
+    // comment in advanceGraphSession's buttons/list branch.
+    displayOverrides: {}
   };
 
   return { session, field: nodeToFieldLocalized(entryNode, business.servedCities || [], null, languageCode) };
@@ -383,7 +388,8 @@ const startGraphSessionAtNode = async (businessId, entryNodeId, ruleId, language
     startedAt: new Date().toISOString(),
     localRentalUnconfigured: false,
     rentalPackageKeyByLabel: null,
-    currentNodeComputedOptions: null
+    currentNodeComputedOptions: null,
+    displayOverrides: {}
   };
 
   return { session, field: nodeToFieldLocalized(entryNode, business.servedCities || [], null, languageCode) };
@@ -543,9 +549,22 @@ const advanceGraphSession = async ({ businessId, session, reply, languageCode })
       }
     }
 
-    session.collected[currentNode.fieldKey] = currentNode.fieldKey === 'travelDate'
-      ? bookingService.resolveTravelDateOption(resolvedOption.value)
-      : resolvedOption.value;
+    // Store the raw tapped value ("Today"/"Tomorrow"), not a display-formatted
+    // one — pickNextNodeId's evaluateCondition reads this same
+    // session.collected to match outgoing edge conditions immediately after
+    // this turn, and edges are authored against the literal option value
+    // (see OTHER_SENTINELS above for the same reason). A relative-date ->
+    // actual-date conversion for travelDate is still needed, but only for
+    // display in the final confirmation text — see session.displayOverrides,
+    // merged in by booking.service.js's finalizeGraphBooking at finalize
+    // time, never at collection time.
+    session.collected[currentNode.fieldKey] = resolvedOption.value;
+    if (currentNode.fieldKey === 'travelDate') {
+      // Defensive: a session already in-flight (mid-booking) at the moment
+      // this shape change deploys won't have displayOverrides yet.
+      session.displayOverrides = session.displayOverrides || {};
+      session.displayOverrides.travelDate = bookingService.resolveTravelDateOption(resolvedOption.value);
+    }
   } else {
     session.collected[currentNode.fieldKey] = trimmedReply;
   }
