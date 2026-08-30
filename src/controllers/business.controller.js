@@ -179,7 +179,9 @@ const createBusiness = async (req, res, next) => {
       business: businessData,
       accessToken,
       refreshToken,
-      message: 'Business created successfully. Default rules have been added based on your business category.'
+      message: business.bookingEngine === 'graph'
+        ? 'Business created successfully.'
+        : 'Business created successfully. Default rules have been added based on your business category.'
     });
   } catch (error) {
     logger.error('Error in createBusiness:', error);
