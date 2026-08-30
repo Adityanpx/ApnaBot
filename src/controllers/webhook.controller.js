@@ -1107,18 +1107,65 @@ const receiveWebhook = async (req, res) => {
       }
     }
 
-    // Step 13 - Run rule matching
-    const matchResult = await chatbotService.findMatchingRule(tenant.businessId, messageText);
-    const matchedNode = matchResult?.node || null;
-    const matchedEdges = matchResult?.edges || [];
+    // Step 13 - Resolve what to reply to. A tap on a reply-node button/list
+    // row carries its flow_edges.id as the WhatsApp interaction id (see
+    // chatbot.service.js's getOutgoingEdges) — resolve it structurally
+    // first, since a UUID will never match a keyword. Only reached with no
+    // active session (Step 12 returns early otherwise) and past the lang_
+    // picker tap (handled above; it falls through with messageText='hi'
+    // instead of a real edge id, hence the startsWith('lang_') guard here).
+    // Falls back to keyword text matching — same as before this fix — for
+    // an actual typed message, or for a stale tap whose id predates this
+    // scheme (an old keyword-text button id already delivered to a
+    // customer before this change shipped) or targets a since-deleted edge.
+    let matchedNode = null;
+    let matchedEdges = [];
+    // Set when a tapped edge targets a question node directly (a button
+    // wired straight into the booking graph, bypassing the booking_trigger
+    // reply-node convention) — handled in Step 14 below instead of via
+    // matchedNode.replyKind.
+    let directBookingEntry = null;
+
+    const tappedEdgeId = (buttonReplyId && !buttonReplyId.startsWith('lang_')) ? buttonReplyId : listReplyId;
+    if (tappedEdgeId) {
+      const resolvedTap = await chatbotService.resolveTappedEdge(tenant.businessId, tappedEdgeId);
+      if (resolvedTap?.targetNode?.nodeType === 'question') {
+        directBookingEntry = { nodeId: resolvedTap.targetNode.id, ruleId: resolvedTap.edge.fromNodeId };
+      } else if (resolvedTap?.targetNode?.nodeType === 'reply') {
+        matchedNode = resolvedTap.targetNode;
+        matchedEdges = matchedNode.contentType === 'text' ? [] : await chatbotService.getOutgoingEdges(matchedNode.id);
+      } else if (resolvedTap) {
+        logger.error(`Tapped flow_edges row ${tappedEdgeId} (business ${tenant.businessId}) targets node type '${resolvedTap.targetNode.nodeType}', which isn't a supported button/list target — falling back to keyword matching`);
+      }
+    }
+
+    if (!directBookingEntry && !matchedNode) {
+      const matchResult = await chatbotService.findMatchingRule(tenant.businessId, messageText);
+      matchedNode = matchResult?.node || null;
+      matchedEdges = matchResult?.edges || [];
+    }
 
     // Step 14 — Prepare reply based on rule type
     let replyText = null;
     let triggeredRuleId = null;
-    let bookingField = null; // set when booking_trigger fires, for interactive rendering below
+    let bookingField = null; // set when booking_trigger (or a direct question-node tap) fires, for interactive rendering below
     let fallbackMenuListOptions = null; // set when no rule matched and business has an enabled menu
 
-    if (matchedNode) {
+    if (directBookingEntry) {
+      // Button targeted a question node directly — start the graph right
+      // there instead of following a booking_trigger node's single edge.
+      triggeredRuleId = directBookingEntry.ruleId;
+      const { session: newBookingSession, field: firstField } = await bookingGraphService.startGraphSessionAtNode(
+        tenant.businessId,
+        directBookingEntry.nodeId,
+        directBookingEntry.ruleId,
+        customer.preferredLanguage
+      );
+      await bookingService.saveBookingSession(tenant.businessId, customerNumber, newBookingSession);
+      bookingField = firstField;
+      replyText = applyMessageTemplate(firstField.label, tenant, customer);
+
+    } else if (matchedNode) {
       triggeredRuleId = matchedNode.id;
 
       if (matchedNode.replyKind === 'text') {
@@ -1187,10 +1234,10 @@ const receiveWebhook = async (req, res) => {
     });
 
     // Step 16 - Queue outbound message. matchedNode's buttons/list options
-    // are built from its outgoing flow_edges — nextKeyword (resolved by
-    // chatbotService.findMatchingRule from each edge's target node) is
-    // untouched, it's still the matching key that comes back as
-    // button_reply.id/list_reply.id.
+    // are built from its outgoing flow_edges — nextKeyword is each edge's
+    // own id (see chatbot.service.js's getOutgoingEdges), which comes back
+    // unchanged as button_reply.id/list_reply.id and is resolved
+    // structurally by Step 13's resolveTappedEdge on the next inbound tap.
     const localizedButtons = matchedNode?.contentType === 'buttons'
       ? matchedEdges.map(edge => ({
           nextKeyword: edge.nextKeyword,

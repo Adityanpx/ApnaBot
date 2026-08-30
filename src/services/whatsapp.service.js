@@ -76,8 +76,10 @@ const sendImageMessage = async (phoneNumberId, encryptedAccessToken, to, imageUr
 
 /**
  * Send an interactive reply-buttons message (optional image header + body + up to 3 buttons).
- * Each button's id IS its nextKeyword, so the webhook can feed it straight back
- * into the rule matcher when tapped.
+ * Each button's id is its nextKeyword (chatbot.service.js's getOutgoingEdges
+ * sets this to the edge's own id), which the webhook resolves back to
+ * whatever the edge targets — another reply node or a question node —
+ * when tapped.
  * @param {string} phoneNumberId - The WhatsApp phone number ID
  * @param {string} encryptedAccessToken - Encrypted Meta access token
  * @param {string} to - Recipient phone number
@@ -161,9 +163,9 @@ const sendListMessage = async (phoneNumberId, encryptedAccessToken, to, bodyText
 };
 
 /**
- * Send a WhatsApp list message where each row chains to a specific rule by keyword.
+ * Send a WhatsApp list message where each row chains to a specific rule/edge.
  * Unlike sendListMessage (index-based, used by the booking flow's choice questions),
- * each row's id is the rule's nextKeyword.
+ * each row's id is the edge's nextKeyword (= edge.id, see getOutgoingEdges).
  * @param {string} phoneNumberId - The WhatsApp phone number ID
  * @param {string} encryptedAccessToken - Encrypted Meta access token
  * @param {string} to - Recipient phone number

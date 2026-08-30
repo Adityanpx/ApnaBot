@@ -96,18 +96,21 @@ const incrementTriggerCount = (nodeId) => {
 
 /**
  * Fetch a reply node's outgoing button/list edges, live (not cached — see
- * findMatchingRule). Each edge is annotated with `nextKeyword`, resolved
- * from its to_node_id against the business's cached reply-node list, so
- * callers can keep building the same {title, nextKeyword} / {label,
- * description, nextKeyword} shape whatsapp.service.js's outbound button/list
- * senders already expect (button/list row id = nextKeyword, until the
- * edge-id-based scheme lands).
+ * findMatchingRule). Each edge is annotated with `nextKeyword` = edge.id —
+ * the field name is a holdover from the old keyword-text-based id scheme
+ * (whatsapp.service.js/webhook.controller.js still read `.nextKeyword`, not
+ * renamed here to keep this fix's diff minimal) but the value is now
+ * unconditionally the edge's own id, regardless of what it targets. A
+ * reply-node edge targeting another reply node, or one targeting a
+ * question node directly (a button that starts a booking), both get a
+ * working WhatsApp interaction id this way — the id only needs to be
+ * unique and round-trippable, not tied to the target's node type.
+ * Resolution back to whatever the edge points at happens on the inbound
+ * side (see resolveTappedEdge / webhook.controller.js Step 13).
  * @param {string} nodeId - the matched reply node's id (from_node_id)
- * @param {Array} nodes - this business's cached active reply nodes (for keyword lookup)
- * @param {string} businessId - for error logging only
  * @returns {Promise<Array>}
  */
-const getOutgoingEdges = async (nodeId, nodes, businessId) => {
+const getOutgoingEdges = async (nodeId) => {
   const { data, error } = await supabase
     .from('flow_edges').select('*').eq('from_node_id', nodeId)
     .order('display_order', { ascending: true }).order('created_at', { ascending: true });
@@ -116,15 +119,48 @@ const getOutgoingEdges = async (nodeId, nodes, businessId) => {
     return [];
   }
 
-  const keywordByNodeId = new Map(nodes.map(node => [node.id, node.keyword]));
+  return (data || []).map(toCamelCase).map(edge => ({ ...edge, nextKeyword: edge.id }));
+};
 
-  return (data || []).map(toCamelCase).map(edge => {
-    const nextKeyword = keywordByNodeId.get(edge.toNodeId);
-    if (!nextKeyword) {
-      logger.error(`flow_edges row ${edge.id} (business ${businessId}) targets node ${edge.toNodeId}, which isn't an active reply node — its button/list row will have no working id`);
-    }
-    return { ...edge, nextKeyword: nextKeyword || null };
-  });
+const EDGE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve a tapped WhatsApp interaction id back to the flow_edges row and
+ * target flow_nodes row it came from, for the inbound side of the
+ * edge-id-based scheme getOutgoingEdges builds. Returns null (not an
+ * error) for anything that isn't a live edge on this business — most
+ * commonly a stale tap on a button delivered before this scheme shipped
+ * (its id is the old keyword text, not a UUID, so it's rejected before
+ * even querying) or a tap on an edge that's since been deleted/retargeted;
+ * callers should treat null the same as "no match" and fall back to
+ * keyword matching.
+ * @param {string} businessId
+ * @param {string} edgeId
+ * @returns {Promise<{edge: Object, targetNode: Object}|null>}
+ */
+const resolveTappedEdge = async (businessId, edgeId) => {
+  if (!EDGE_ID_PATTERN.test(edgeId)) {
+    return null;
+  }
+
+  const { data: edgeRow, error: edgeError } = await supabase
+    .from('flow_edges').select('*').eq('id', edgeId).eq('business_id', businessId).maybeSingle();
+  if (edgeError) {
+    logger.error('Error resolving tapped flow_edges row:', edgeError);
+    return null;
+  }
+  if (!edgeRow) return null;
+
+  const edge = toCamelCase(edgeRow);
+  const { data: nodeRow, error: nodeError } = await supabase
+    .from('flow_nodes').select('*').eq('id', edge.toNodeId).eq('business_id', businessId).maybeSingle();
+  if (nodeError) {
+    logger.error('Error resolving tapped edge target node:', nodeError);
+    return null;
+  }
+  if (!nodeRow) return null;
+
+  return { edge, targetNode: toCamelCase(nodeRow) };
 };
 
 /**
@@ -220,7 +256,7 @@ const findMatchingRule = async (businessId, incomingText) => {
     // 'question'/'vehicle_carousel'/'rentalPackage' concept, never 'reply').
     const edges = matchedNode.contentType === 'text'
       ? []
-      : await getOutgoingEdges(matchedNode.id, nodes, businessId);
+      : await getOutgoingEdges(matchedNode.id);
 
     return { node: matchedNode, edges };
   } catch (error) {
@@ -233,5 +269,7 @@ module.exports = {
   getRulesFromCache,
   invalidateRulesCache,
   normalizeText,
-  findMatchingRule
+  findMatchingRule,
+  getOutgoingEdges,
+  resolveTappedEdge
 };

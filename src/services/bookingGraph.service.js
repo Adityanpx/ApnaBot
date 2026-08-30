@@ -327,6 +327,44 @@ const startGraphSession = async (businessId, replyNodeId, languageCode) => {
 };
 
 /**
+ * Start a booking session directly at a given question node — for a reply
+ * node's button/list row wired straight to a question node (rather than
+ * via the booking_trigger reply node's own single unconditional edge, see
+ * startGraphSession above). Deliberately does not walk/skip-forward past
+ * an inactive entryNode the way pickNextNodeId does for mid-sequence hops —
+ * matches startGraphSession's existing entry-point behavior, which also
+ * trusts its resolved entry node directly.
+ * @param {string} businessId
+ * @param {string} entryNodeId - the question node to start at
+ * @param {string} ruleId - the reply node whose button/list row led here (for triggered_rule_id attribution, same role startGraphSession's replyNodeId plays)
+ * @param {string} [languageCode]
+ * @returns {Promise<{session: Object, field: Object}>}
+ */
+const startGraphSessionAtNode = async (businessId, entryNodeId, ruleId, languageCode) => {
+  const { nodes } = await loadGraph(businessId);
+  const entryNode = nodes.find(n => n.id === entryNodeId);
+  if (!entryNode) {
+    throw new Error(`bookingGraph: startGraphSessionAtNode target node ${entryNodeId} not found`);
+  }
+
+  const business = await businessService.getBusinessById(businessId);
+  if (!business) throw new Error('Business not found');
+
+  const session = {
+    currentNodeId: entryNode.id,
+    collected: {},
+    answeredFields: [],
+    ruleId,
+    startedAt: new Date().toISOString(),
+    localRentalUnconfigured: false,
+    rentalPackageKeyByLabel: null,
+    currentNodeComputedOptions: null
+  };
+
+  return { session, field: nodeToFieldLocalized(entryNode, business.servedCities || [], null, languageCode) };
+};
+
+/**
  * Process one booking-session turn against the graph.
  * @returns {Promise<{session: Object, result: Object|string|{done:true,collected:Object}}>}
  *   result is: the next field object, a re-prompt/status string (no state
@@ -576,5 +614,6 @@ module.exports = {
   pickNextNodeId,
   getCurrentNodeField,
   startGraphSession,
+  startGraphSessionAtNode,
   advanceGraphSession
 };
