@@ -18,6 +18,9 @@ const logger = require('../utils/logger');
 const VALID_MATCH_TYPES = ['exact', 'contains', 'startsWith'];
 const VALID_CONTENT_TYPES = ['text', 'buttons', 'list'];
 const VALID_REPLY_KINDS = ['text', 'booking_trigger', 'payment_trigger'];
+// 'rentalPackage' deliberately excluded — still engine-internal/migration-only,
+// per PRD.md's "NOT done yet" note. Only vehicle_carousel has a create path.
+const VALID_QUESTION_NODE_TYPES = ['question', 'vehicle_carousel'];
 
 // Ported from business.controller.js's updateBookingFields — same literal
 // field_key list bookingGraph.service.js still hardcodes (OTHER_SENTINELS,
@@ -486,22 +489,48 @@ const getQuestionNodes = async (req, res, next) => {
 
 /**
  * POST /api/flow-graph/question-nodes
- * Create an authored question node. node_type/is_computed are never taken
- * from the request body — this endpoint only ever creates 'question' nodes;
- * vehicle_carousel/rentalPackage nodes are engine-internal (produced by
- * migrateFlowGraph.js only), there is no dashboard path to create one.
+ * Create an authored question node, OR (nodeType: 'vehicle_carousel') the
+ * one computed node type this surface can create. is_computed is never
+ * taken from the request body — it's derived from nodeType server-side.
+ * 'rentalPackage' remains engine-internal/migration-only (no create path) —
+ * see VALID_QUESTION_NODE_TYPES.
+ *
+ * For a vehicle_carousel node: contentType is ignored and forced to 'list'
+ * (cosmetic only — bookingGraph.service.js's effectiveFieldType() already
+ * overrides rendering to 'vehicle_carousel' whenever node_type is that
+ * value, and the DB's content_type check constraint doesn't allow the
+ * literal string 'vehicle_carousel' anyway), and options must be omitted or
+ * empty — a non-empty options array is rejected rather than silently
+ * dropped, since the whole point of is_computed is that choices come from a
+ * live route_fares/vehicles query at runtime, never from this column.
+ * required has no runtime effect for this node type either (bookingGraph
+ * .service.js's isNodeEffectivelyActive treats every non-'question' node as
+ * always active) but is left client-settable for dashboard-display
+ * consistency with authored nodes.
+ *
  * The node is created isolated (no edges) — wire it into the sequence via
- * the edges endpoint afterward. fieldKey is deliberately NOT checked
- * against the reserved-key list here: multiple nodes sharing a fieldKey is
- * legitimate by design (an authored node plus its manual-fallback sibling),
- * so creating another node with a reserved fieldKey is fine — only RENAMING
+ * the edges endpoint afterward. Per the "zero outgoing edges" rule for
+ * vehicle_carousel (the post-selection flow is handled entirely in
+ * bookingGraph.service.js's fare/booking-completion logic, not by an edge),
+ * createEdge rejects any edge sourced FROM a vehicle_carousel node — so
+ * only an INCOMING edge should ever be added here.
+ *
+ * fieldKey is deliberately NOT checked against the reserved-key list here:
+ * multiple nodes sharing a fieldKey is legitimate by design (an authored
+ * node plus its manual-fallback sibling, or — for vehicle_carousel
+ * specifically — the static non-computed fallback bookingGraph.service.js's
+ * fallbackToStaticSibling requires to exist for the same fieldKey), so
+ * creating another node with a reserved fieldKey is fine — only RENAMING
  * AWAY from or DELETING a reserved key is guarded (see updateQuestionNode/
- * deleteQuestionNode).
+ * deleteQuestionNode, both of which remain scoped to node_type='question'
+ * and so cannot touch a vehicle_carousel node once created — same
+ * read-only-after-creation behavior migration-script-created computed nodes
+ * already had).
  */
 const createQuestionNode = async (req, res, next) => {
   try {
     const {
-      fieldKey, contentType = 'text', summaryLabel = null, required = false,
+      fieldKey, nodeType = 'question', contentType = 'text', summaryLabel = null, required = false,
       order = null, options = [], labelTranslations = null, imageUrl = null, label
     } = req.body;
     const businessId = req.user.businessId;
@@ -509,7 +538,18 @@ const createQuestionNode = async (req, res, next) => {
     if (!fieldKey || typeof fieldKey !== 'string') {
       return errorResponse(res, 400, 'fieldKey is required');
     }
-    if (!VALID_CONTENT_TYPES.includes(contentType)) {
+    if (!VALID_QUESTION_NODE_TYPES.includes(nodeType)) {
+      return errorResponse(res, 400, `nodeType must be one of: ${VALID_QUESTION_NODE_TYPES.join(', ')}`);
+    }
+    const isComputed = nodeType === 'vehicle_carousel';
+
+    if (isComputed) {
+      if (Array.isArray(options) && options.length > 0) {
+        return errorResponse(res, 400,
+          'options must not be provided for a vehicle_carousel node — its choices are computed live from route_fares/vehicles at runtime, never stored on the node.'
+        );
+      }
+    } else if (!VALID_CONTENT_TYPES.includes(contentType)) {
       return errorResponse(res, 400, `contentType must be one of: ${VALID_CONTENT_TYPES.join(', ')}`);
     }
     // Required at the API layer because flow_nodes.label is NOT NULL at the
@@ -531,29 +571,31 @@ const createQuestionNode = async (req, res, next) => {
       return errorResponse(res, 400, labelTranslationsError);
     }
 
-    if ((contentType === 'buttons' || contentType === 'list') && (!Array.isArray(options) || options.length === 0)) {
-      return errorResponse(res, 400, `options must have at least one entry for contentType "${contentType}"`);
-    }
-    for (const opt of options || []) {
-      if (opt && typeof opt === 'object') {
-        const optErr = validateLabelTranslations(opt.labelTranslations, `option "${opt.value}" labelTranslations`);
-        if (optErr) return errorResponse(res, 400, optErr);
+    if (!isComputed) {
+      if ((contentType === 'buttons' || contentType === 'list') && (!Array.isArray(options) || options.length === 0)) {
+        return errorResponse(res, 400, `options must have at least one entry for contentType "${contentType}"`);
+      }
+      for (const opt of options || []) {
+        if (opt && typeof opt === 'object') {
+          const optErr = validateLabelTranslations(opt.labelTranslations, `option "${opt.value}" labelTranslations`);
+          if (optErr) return errorResponse(res, 400, optErr);
+        }
       }
     }
 
     const { data: node, error } = await supabase.from('flow_nodes').insert({
       business_id: businessId,
-      node_type: 'question',
+      node_type: nodeType,
       field_key: fieldKey,
-      content_type: contentType,
+      content_type: isComputed ? 'list' : contentType,
       label,
       label_translations: labelTranslations || null,
       image_url: imageUrl || null,
       summary_label: summaryLabel,
       required,
       order,
-      options: options || [],
-      is_computed: false,
+      options: isComputed ? [] : (options || []),
+      is_computed: isComputed,
       is_active: true
     }).select().single();
     if (error) throw error;
@@ -855,11 +897,21 @@ const createEdge = async (req, res, next) => {
     const { data: endpointNodes, error: nodesErr } = await supabase
       .from('flow_nodes').select('id, node_type').eq('business_id', businessId).in('id', [fromNodeId, toNodeId]);
     if (nodesErr) throw nodesErr;
-    if (!(endpointNodes || []).some(n => n.id === fromNodeId)) {
+    const fromNode = (endpointNodes || []).find(n => n.id === fromNodeId);
+    if (!fromNode) {
       return errorResponse(res, 404, 'fromNodeId not found for this business');
     }
     if (!(endpointNodes || []).some(n => n.id === toNodeId)) {
       return errorResponse(res, 404, 'toNodeId not found for this business');
+    }
+    // vehicle_carousel nodes never get an outgoing edge — what happens after
+    // vehicle selection (fare lookup, booking finalization) is hardcoded in
+    // bookingGraph.service.js's advanceGraphSession, not edge-driven. This
+    // also keeps the frontend wiring UI from offering a "next node" for one.
+    if (fromNode.node_type === 'vehicle_carousel') {
+      return errorResponse(res, 400,
+        'vehicle_carousel nodes cannot have outgoing edges — the post-selection flow is handled entirely in bookingGraph.service.js, not by edges.'
+      );
     }
 
     const labelTranslationsError = validateTranslationsMap(labelTranslations, 'labelTranslations');

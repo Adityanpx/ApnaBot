@@ -97,9 +97,18 @@ of this check would have blocked nearly all edge writes the moment any
 node was mid-way through being wired in — caught and fixed while live-
 testing step 5, before it shipped.)
 
-NOT done yet: `vehicle_carousel`/`rentalPackage` nodes are read-only
-through this surface (by design — engine-internal, never dashboard-created,
-and there's no dashboard concept of creating one). `flow_snapshots`
+`vehicle_carousel` nodes can now be created (2026-08-30) via
+`POST /api/flow-graph/question-nodes` with `nodeType: 'vehicle_carousel'`
+— server forces `is_computed=true`/`content_type='list'` and rejects a
+non-empty `options` array. Still read-only after creation (update/delete
+stay scoped to `node_type='question'`), and `createEdge` refuses any edge
+sourced FROM a vehicle_carousel node (zero outgoing edges — the
+post-selection flow is hardcoded in `bookingGraph.service.js`, not
+edge-driven).
+
+NOT done yet: `rentalPackage` nodes are still read-only through this
+surface (by design — engine-internal, no dashboard concept of creating
+one). `flow_snapshots`
 ("save current flow, start new" versioning) is still completely unused —
 no reader or writer anywhere touches it. Full CRUD (node + edge) for the
 graph engine is otherwise done as of 2026-08-29.
