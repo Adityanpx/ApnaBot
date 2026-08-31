@@ -15,16 +15,28 @@ const getActiveSubscription = async (businessId) => {
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
-    const { data: sub, error } = await supabase
+    // Ordered multi-row select instead of .maybeSingle() — defense in
+    // depth. A write-path bug (or a manual DB edit, or a migration) could
+    // leave 2+ 'active' rows for a business; .maybeSingle() throws
+    // PGRST116 on that instead of returning one, which took down SG
+    // Travels' webhook on 2026-08-31. Take the most recent instead of
+    // failing, but log it so the underlying duplicate is still visible.
+    const { data: subs, error } = await supabase
       .from('subscriptions')
       .select('*, plan:plans(*)')
       .eq('business_id', businessId)
       .eq('status', 'active')
-      .maybeSingle();
+      .order('created_at', { ascending: false });
     if (error) throw error;
 
+    if (subs && subs.length > 1) {
+      logger.warn(`Business ${businessId} has ${subs.length} active subscriptions — using most recent (${subs[0].id}, created_at ${subs[0].created_at}). Duplicate-active-row state should be investigated.`);
+    }
+
+    const sub = subs && subs.length > 0 ? subs[0] : null;
+
     if (sub) await redis.set(cacheKey, JSON.stringify(sub), 'EX', CACHE_TTL);
-    return sub || null;
+    return sub;
   } catch (error) {
     logger.error('Error in getActiveSubscription:', error);
     throw error;
