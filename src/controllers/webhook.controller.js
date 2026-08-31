@@ -594,13 +594,11 @@ const receiveWebhook = async (req, res) => {
       return;
     }
 
-    // Step 7 - Check usage limit
+    // Step 7 - Check usage limit (used below, AFTER the message is saved —
+    // an over-limit business must still receive/store the message; only the
+    // reply is blocked. See Step 9.5.)
     const msgLimit = tenant.plan?.msg_limit || 500;
     const usageCheck = await usageService.checkUsageLimit(tenant.businessId, msgLimit);
-    if (!usageCheck.allowed) {
-      logger.warn(`Usage limit reached for business ${tenant.businessId}`);
-      return;
-    }
 
     // Step 8 - Upsert customer
     const customer = await upsertCustomerForInboundMessage(tenant.businessId, customerNumber, profileName);
@@ -631,6 +629,13 @@ const receiveWebhook = async (req, res) => {
       status: 'delivered',
       is_read: false
     });
+
+    // Step 9.5 - Enforce usage limit (message is already saved above — only
+    // the reply, and the now-meaningless usage increment below, are blocked)
+    if (!usageCheck.allowed) {
+      logger.warn(`Usage limit reached for business ${tenant.businessId} — message saved, reply suppressed`);
+      return;
+    }
 
     // Step 10 - Increment usage (fire and forget)
     usageService.incrementUsage(tenant.businessId, 'inbound');
