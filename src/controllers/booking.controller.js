@@ -181,24 +181,6 @@ const deleteBooking = async (req, res, next) => {
 };
 
 /**
- * GET /api/bookings/preview-fields
- * Read-only preview of the booking field sequence for the business's
- * type, for the dashboard's Conversation Preview. No session is created.
- */
-const getBookingFieldsPreview = async (req, res, next) => {
-  try {
-    const businessId = req.user.businessId;
-
-    const { fields } = await bookingService.getBookingFieldsPreview(businessId);
-
-    return successResponse(res, 200, { fields });
-  } catch (error) {
-    logger.error('Error fetching booking fields preview:', error);
-    next(error);
-  }
-};
-
-/**
  * GET /api/bookings/preview-vehicle-options
  * Read-only preview of the vehicle carousel for a given pickup/drop/tripType,
  * for the dashboard's Conversation Preview. No session is created.
@@ -237,6 +219,5 @@ module.exports = {
   updateBookingStatus,
   addBookingNotes,
   deleteBooking,
-  getBookingFieldsPreview,
   getVehicleCarouselPreview
 };

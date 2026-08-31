@@ -426,108 +426,6 @@ const toggleRule = async (req, res, next) => {
 };
 
 /**
- * GET /api/rules/templates
- * Get default rules for business's category
- */
-const getTemplates = async (req, res, next) => {
-  try {
-    const businessId = req.user.businessId;
-
-    const business = await businessService.getBusinessById(businessId);
-    if (!business) {
-      return errorResponse(res, 404, 'Business not found');
-    }
-
-    // Reads this business's own business_flows row, not the shared
-    // business_type_templates row — business_type_templates is only used
-    // as the starting point at business creation now.
-    const { data: flow } = await supabase
-      .from('business_flows').select('rules, booking_fields').eq('business_id', businessId).maybeSingle();
-    if (!flow) {
-      return successResponse(res, 200, { defaultRules: [], bookingFields: [] });
-    }
-
-    return successResponse(res, 200, {
-      defaultRules: flow.rules || [],
-      bookingFields: flow.booking_fields || []
-    });
-  } catch (error) {
-    logger.error('Error in getTemplates:', error);
-    next(error);
-  }
-};
-
-/**
- * POST /api/rules/bulk-import
- * Import template rules
- */
-const bulkImportRules = async (req, res, next) => {
-  try {
-    const { replaceExisting = false } = req.body;
-    const businessId = req.user.businessId;
-
-    // Reads this business's own business_flows.rules (its current/last-saved
-    // flow) rather than the shared business_type_templates row — this makes
-    // the button an "undo my changes back to my saved flow" action. A
-    // separate "reset to category factory defaults" action (reading
-    // business_type_templates directly) may be added later as its own
-    // button; don't repoint this one to do double duty for that.
-    const { data: flow, error: flowErr } = await supabase
-      .from('business_flows').select('rules').eq('business_id', businessId).maybeSingle();
-    if (flowErr) throw flowErr;
-    if (!flow || !flow.rules || flow.rules.length === 0) {
-      return errorResponse(res, 404, 'No saved flow found for this business');
-    }
-
-    // If replaceExisting, delete all existing rules
-    if (replaceExisting) {
-      const { error: deleteErr } = await supabase.from('rules').delete().eq('business_id', businessId);
-      if (deleteErr) throw deleteErr;
-    }
-
-    // Import rules that don't already exist
-    let createdCount = 0;
-    for (const rule of flow.rules) {
-      const { data: existingRule, error: existingErr } = await supabase
-        .from('rules').select('id').eq('business_id', businessId).eq('keyword', rule.keyword).maybeSingle();
-      if (existingErr) throw existingErr;
-      if (!existingRule) {
-        const { error: insertErr } = await supabase.from('rules').insert({
-          business_id: businessId,
-          keyword: rule.keyword,
-          match_type: rule.matchType || 'contains',
-          reply: rule.reply || '',
-          reply_type: rule.replyType || 'text',
-          reply_image_url: rule.replyImageUrl || null,
-          buttons: (rule.buttons || []).map(b => ({
-            title: b.title,
-            nextKeyword: b.nextKeyword
-          })),
-          list_options: (rule.listOptions || []).map(o => ({
-            label: o.label,
-            description: o.description || '',
-            nextKeyword: o.nextKeyword
-          })),
-          hindi_aliases: rule.hindiAliases || [],
-          is_active: true,
-          trigger_count: 0
-        });
-        if (insertErr) throw insertErr;
-        createdCount++;
-      }
-    }
-
-    // Invalidate cache
-    await invalidateRulesCache(businessId);
-
-    return successResponse(res, 200, { count: createdCount });
-  } catch (error) {
-    logger.error('Error in bulkImportRules:', error);
-    next(error);
-  }
-};
-
-/**
  * POST /api/rules/upload-image
  * Upload a rule reply image to R2
  */
@@ -627,8 +525,6 @@ module.exports = {
   updateRule,
   deleteRule,
   toggleRule,
-  getTemplates,
-  bulkImportRules,
   uploadRuleImage,
   translateRules
 };

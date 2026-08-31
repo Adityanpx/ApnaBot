@@ -12,18 +12,6 @@ const { uploadSingle } = require('../middleware/upload.middleware');
 // GET / - List rules
 router.get('/', protect, requireBusiness, ruleController.getRules);
 
-// GET /templates - Get templates (must be before /:id)
-router.get('/templates', protect, requireBusiness, ruleController.getTemplates);
-
-// POST /bulk-import - Bulk import rules
-router.post(
-  '/bulk-import',
-  protect,
-  requireBusiness,
-  requireRole('owner'),
-  ruleController.bulkImportRules
-);
-
 // POST /upload-image - Upload rule reply image
 router.post(
   '/upload-image',

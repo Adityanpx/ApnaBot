@@ -74,8 +74,7 @@ const getBusinessByPhoneNumberId = async (phoneNumberId) => {
  */
 const createBusiness = async (ownerUserId, data) => {
   try {
-    const { name, businessCategory, address, city, displayName, bookingEngine } = data;
-    const isGraphEngine = bookingEngine === 'graph';
+    const { name, businessCategory, address, city, displayName } = data;
 
     const webhookVerifyToken = generateWebhookToken();
 
@@ -89,7 +88,7 @@ const createBusiness = async (ownerUserId, data) => {
       webhook_verify_token: webhookVerifyToken,
       is_active: true,
       is_whatsapp_connected: false,
-      booking_engine: bookingEngine || 'legacy'
+      booking_engine: 'graph'
     }).select().single();
     if (error) throw error;
 
@@ -98,60 +97,10 @@ const createBusiness = async (ownerUserId, data) => {
       .from('users').update({ business_id: business.id }).eq('id', ownerUserId);
     if (userErr) throw userErr;
 
-    // Graph-engine businesses start with a literal empty graph — no
+    // Every business starts with a literal empty graph — no
     // business_type_templates lookup, no business_flows/rules seed writes,
     // no flow_nodes/flow_edges seeding. The owner builds their flow from
-    // scratch via /api/flow-graph. (Confirmed decision — see PRD.md.)
-    if (isGraphEngine) {
-      return toCamelCase(business);
-    }
-
-    // Copy default rules + booking fields from BusinessTypeTemplate into a
-    // business_flows row — the new per-business source of truth for the
-    // flow editor and all booking-field reads (see booking.service.js,
-    // rule.controller.js). business_type_templates itself is only read here,
-    // at creation time; existing businesses never read it again.
-    const { data: template, error: templateErr } = await supabase
-      .from('business_type_templates').select('default_rules, booking_fields').eq('business_category', businessCategory).maybeSingle();
-    if (templateErr) throw templateErr;
-
-    if (template) {
-      try {
-        const { error: flowErr } = await supabase.from('business_flows').insert({
-          business_id: business.id,
-          rules: template.default_rules || [],
-          booking_fields: template.booking_fields || []
-        });
-        if (flowErr) throw flowErr;
-        logger.info(`Created business_flows row for business ${business.id}`);
-      } catch (flowError) {
-        logger.error(`FAILED to create business_flows row for business ${business.id}:`, flowError);
-      }
-    }
-
-    // Also mirror default_rules into the rules table — chatbot.service.js
-    // (the keyword-matching engine) reads directly from rules, not
-    // business_flows, so both need to stay populated.
-    if (template && template.default_rules && template.default_rules.length > 0) {
-      try {
-        const rulesToCreate = template.default_rules.map(rule => ({
-          business_id: business.id,
-          keyword: rule.keyword,
-          match_type: rule.matchType || 'contains',
-          reply: rule.reply || rule.response || '',
-          reply_type: rule.replyType || 'text',
-          is_active: true,
-          trigger_count: 0
-        }));
-
-        const { error: rulesErr } = await supabase.from('rules').insert(rulesToCreate);
-        if (rulesErr) throw rulesErr;
-        logger.info(`Created ${rulesToCreate.length} default rules for business ${business.id}`);
-      } catch (ruleError) {
-        logger.error(`FAILED to create default rules for business ${business.id}:`, ruleError);
-      }
-    }
-
+    // scratch via /api/flow-graph.
     return toCamelCase(business);
   } catch (error) {
     logger.error('Error in createBusiness:', error);

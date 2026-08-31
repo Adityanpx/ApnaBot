@@ -10,7 +10,6 @@ const logger = require('../utils/logger');
 const r2 = require('../services/r2.service');
 const config = require('../config/env');
 const { isValidLanguageCode, LANGUAGE_CATALOG } = require('../utils/languageCatalog');
-const { validateLabelTranslations } = require('../utils/bookingFieldValidation');
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 
@@ -116,11 +115,9 @@ const getBusiness = async (req, res, next) => {
  * POST /api/business
  * Create business (only if user does not have one yet)
  */
-const VALID_BOOKING_ENGINES = ['legacy', 'graph'];
-
 const createBusiness = async (req, res, next) => {
   try {
-    const { name, businessCategory, displayName, address, city, bookingEngine } = req.body;
+    const { name, businessCategory, displayName, address, city } = req.body;
 
     // Check if user already has a business
     if (req.user.businessId) {
@@ -141,21 +138,13 @@ const createBusiness = async (req, res, next) => {
       return errorResponse(res, 400, `Invalid business category. Must be one of: ${VALID_BUSINESS_CATEGORIES.join(', ')}`);
     }
 
-    // Validate booking engine (same two values as the businesses.booking_engine
-    // check constraint). Defaults to 'legacy' below if omitted, preserving
-    // today's behavior for every existing caller.
-    if (bookingEngine !== undefined && !VALID_BOOKING_ENGINES.includes(bookingEngine)) {
-      return errorResponse(res, 400, `Invalid bookingEngine. Must be one of: ${VALID_BOOKING_ENGINES.join(', ')}`);
-    }
-
     // Create business
     const business = await businessService.createBusiness(req.user.userId, {
       name,
       businessCategory,
       displayName,
       address,
-      city,
-      bookingEngine: bookingEngine || 'legacy'
+      city
     });
 
     // Generate new tokens with businessId
@@ -179,9 +168,7 @@ const createBusiness = async (req, res, next) => {
       business: businessData,
       accessToken,
       refreshToken,
-      message: business.bookingEngine === 'graph'
-        ? 'Business created successfully.'
-        : 'Business created successfully. Default rules have been added based on your business category.'
+      message: 'Business created successfully.'
     });
   } catch (error) {
     logger.error('Error in createBusiness:', error);
@@ -202,16 +189,26 @@ const updateBusiness = async (req, res, next) => {
     }
 
     if (req.body.disabledBookingFields !== undefined) {
-      // Validate against this business's own business_flows.booking_fields,
-      // not the shared business_type_templates row — a business's flow can
-      // diverge from its category template after creation, so that's the
-      // only correct source of "what fields does this business actually have".
-      const { data: flow } = await supabase
-        .from('business_flows')
-        .select('booking_fields')
+      // Validate against this business's own flow_nodes, not the shared
+      // business_type_templates row — a business's flow can diverge from its
+      // category template after creation, so that's the only correct source
+      // of "what fields does this business actually have". field_key is NOT
+      // unique per business (an authored node and its manual/computed
+      // fallback sibling share one — see 20260829140000_flow_nodes_edges.sql's
+      // header comment), so dedupe by field_key when building the map; every
+      // sibling pair's required value matches in practice, confirmed against
+      // real data before relying on it here.
+      const { data: nodes } = await supabase
+        .from('flow_nodes')
+        .select('field_key, required')
         .eq('business_id', businessId)
-        .maybeSingle();
-      const flowFieldsByKey = new Map((flow?.booking_fields || []).map(field => [field.fieldKey, field]));
+        .in('node_type', ['question', 'vehicle_carousel', 'rentalPackage']);
+      const flowFieldsByKey = new Map();
+      for (const node of nodes || []) {
+        if (!flowFieldsByKey.has(node.field_key)) {
+          flowFieldsByKey.set(node.field_key, node);
+        }
+      }
 
       const invalidFieldKeys = req.body.disabledBookingFields.filter(fieldKey => {
         const flowField = flowFieldsByKey.get(fieldKey);
@@ -250,203 +247,6 @@ const updateBusiness = async (req, res, next) => {
     return successResponse(res, 200, businessData);
   } catch (error) {
     logger.error('Error in updateBusiness:', error);
-    next(error);
-  }
-};
-
-/**
- * GET /api/business/booking-fields
- * Full (unfiltered) booking field sequence for the owner's business category,
- * including fields currently in disabledBookingFields — powers the dashboard's
- * Booking Flow page, where the owner needs to see and toggle every field, not
- * just the active ones (unlike GET /bookings/preview-fields).
- */
-const GRAPH_ENGINE_DASHBOARD_ERROR = 'this business uses the graph booking engine — use /api/flow-graph endpoints instead';
-
-const getBookingFields = async (req, res, next) => {
-  try {
-    const businessId = req.user.businessId;
-
-    if (!businessId) {
-      return errorResponse(res, 404, 'No business found');
-    }
-
-    const business = await businessService.getBusinessById(businessId);
-    if (business && business.bookingEngine === 'graph') {
-      return errorResponse(res, 400, GRAPH_ENGINE_DASHBOARD_ERROR);
-    }
-
-    const { fields } = await bookingService.getAllBookingFields(businessId);
-
-    return successResponse(res, 200, { fields });
-  } catch (error) {
-    logger.error('Error in getBookingFields:', error);
-    next(error);
-  }
-};
-
-const VALID_BOOKING_FIELD_TYPES = ['text', 'buttons', 'list'];
-
-// booking.service.js's processBookingStep branches on these exact fieldKey
-// literals for travels-shaped businesses (Other-date/Other-location/Other-time
-// text swaps, and tripType-driven Round Trip/Local Rental branching + fare
-// lookups). Renaming or removing one doesn't error — the special behavior
-// just silently stops firing — so updateBookingFields below refuses to let
-// these keys change for these categories.
-const TRAVEL_CATEGORIES_WITH_RESERVED_FIELDS = ['cab', 'travels'];
-const RESERVED_TRAVEL_FIELD_KEYS = ['tripType', 'pickupLocation', 'dropLocation', 'travelDate', 'pickupTime'];
-
-/**
- * PUT /api/business/booking-fields
- * Full replacement of the owner's business_flows.booking_fields content —
- * modeled on admin.controller.js's updateTemplate, scoped to the caller's
- * own business instead of superadmin/global. Enabling/disabling fields is a
- * separate concern (PUT /api/business { disabledBookingFields }) and is
- * untouched here except for clearing entries orphaned by this update.
- * Body: { bookingFields: [...] } — same shape as
- * business_type_templates.booking_fields.
- */
-const updateBookingFields = async (req, res, next) => {
-  try {
-    const businessId = req.user.businessId;
-    if (!businessId) {
-      return errorResponse(res, 404, 'No business found');
-    }
-
-    const businessRow = await businessService.getBusinessById(businessId);
-    if (businessRow && businessRow.bookingEngine === 'graph') {
-      return errorResponse(res, 400, GRAPH_ENGINE_DASHBOARD_ERROR);
-    }
-
-    const { bookingFields } = req.body;
-    if (!Array.isArray(bookingFields) || bookingFields.length === 0) {
-      return errorResponse(res, 400, 'bookingFields must be a non-empty array');
-    }
-
-    const { data: flow, error: flowErr } = await supabase
-      .from('business_flows')
-      .select('booking_fields, business:businesses(business_category)')
-      .eq('business_id', businessId)
-      .maybeSingle();
-    if (flowErr) throw flowErr;
-    if (!flow) return errorResponse(res, 404, 'No booking flow found for this business');
-
-    // vehicle_carousel fields are normally only ever generated transiently in
-    // a Redis booking session (booking.service.js processBookingStep), never
-    // written to business_flows. The one exception: the 'cab' category's
-    // business_type_templates row was hand-edited via
-    // src/scripts/updateCabBookingFields.js to store vehicleType with
-    // fieldType 'vehicle_carousel' directly, and business.service.js's
-    // createBusiness copies that template verbatim into business_flows on
-    // signup — so a 'cab' business created after that script ran can have it
-    // baked into stored data. Editing over that risks freezing/corrupting a
-    // field meant to be computed at runtime, so refuse outright.
-    if ((flow.booking_fields || []).some(f => f && f.fieldType === 'vehicle_carousel')) {
-      return errorResponse(res, 400, "This business's booking flow contains a vehicle_carousel field, which is generated dynamically at runtime from route fares/distance estimates and cannot be edited through this endpoint. Contact support.");
-    }
-
-    const seenFieldKeys = new Set();
-    const seenOrders = new Set();
-
-    for (const field of bookingFields) {
-      if (!field || typeof field !== 'object') {
-        return errorResponse(res, 400, 'Each booking field must be an object');
-      }
-
-      if (!field.fieldKey || typeof field.fieldKey !== 'string') {
-        return errorResponse(res, 400, 'Every field needs a non-empty fieldKey');
-      }
-      if (seenFieldKeys.has(field.fieldKey)) {
-        return errorResponse(res, 400, `Duplicate fieldKey "${field.fieldKey}" — every field needs a unique fieldKey`);
-      }
-      seenFieldKeys.add(field.fieldKey);
-
-      if (!Number.isInteger(field.order)) {
-        return errorResponse(res, 400, `Field "${field.fieldKey}" order must be an integer`);
-      }
-      if (seenOrders.has(field.order)) {
-        return errorResponse(res, 400, `Duplicate order value ${field.order} — order values must be unique`);
-      }
-      seenOrders.add(field.order);
-
-      if (!VALID_BOOKING_FIELD_TYPES.includes(field.fieldType)) {
-        return errorResponse(res, 400, field.fieldType === 'vehicle_carousel'
-          ? `Field "${field.fieldKey}" cannot use fieldType "vehicle_carousel" — that type is generated dynamically at runtime from route fares/distance estimates and can't be hand-edited or saved with static options.`
-          : `Field "${field.fieldKey}" fieldType must be one of: ${VALID_BOOKING_FIELD_TYPES.join(', ')}`);
-      }
-
-      const fieldErr = validateLabelTranslations(
-        field.labelTranslations, `Field "${field.fieldKey}" labelTranslations`
-      );
-      if (fieldErr) return errorResponse(res, 400, fieldErr);
-
-      if ((field.fieldType === 'buttons' || field.fieldType === 'list') &&
-          (!Array.isArray(field.options) || field.options.length === 0)) {
-        return errorResponse(res, 400, `Field "${field.fieldKey}" must have at least one option (fieldType "${field.fieldType}")`);
-      }
-
-      for (const opt of field.options || []) {
-        if (opt && typeof opt === 'object') {
-          const optErr = validateLabelTranslations(
-            opt.labelTranslations, `Field "${field.fieldKey}" option "${opt.value}" labelTranslations`
-          );
-          if (optErr) return errorResponse(res, 400, optErr);
-        }
-      }
-    }
-
-    // Travels/cab businesses: refuse to rename or remove any reserved
-    // fieldKey booking.service.js's processBookingStep depends on by literal
-    // string match. Only the key itself is locked — label, options, order,
-    // required, and translations on that field can still change freely.
-    const businessCategory = flow.business && flow.business.business_category;
-    if (TRAVEL_CATEGORIES_WITH_RESERVED_FIELDS.includes(businessCategory)) {
-      const currentFieldKeys = new Set((flow.booking_fields || []).map(f => f && f.fieldKey));
-      const missingReservedKeys = RESERVED_TRAVEL_FIELD_KEYS.filter(
-        key => currentFieldKeys.has(key) && !seenFieldKeys.has(key)
-      );
-      if (missingReservedKeys.length > 0) {
-        return errorResponse(res, 400,
-          `Cannot rename or remove fieldKey(s): ${missingReservedKeys.join(', ')}. Special booking-flow behavior depends on these exact keys ` +
-          '(tripType drives Round Trip/Local Rental branching and fare calculation; pickupLocation/dropLocation drive route-fare pricing lookups; ' +
-          'travelDate/pickupTime drive the "Other" quick-reply sub-questions) — renaming or removing them would silently break that behavior with no error. ' +
-          'Label, options, order, required, and translations on these fields can still be changed freely.'
-        );
-      }
-    }
-
-    // Drop any disabledBookingFields entries whose fieldKey no longer exists
-    // in the new set, so removing a field can't leave an orphaned disable
-    // entry behind.
-    const { data: business, error: bizErr } = await supabase
-      .from('businesses').select('disabled_booking_fields').eq('id', businessId).maybeSingle();
-    if (bizErr) throw bizErr;
-    const currentDisabled = business?.disabled_booking_fields || [];
-    const survivingDisabled = currentDisabled.filter(fieldKey => seenFieldKeys.has(fieldKey));
-
-    const { data: updatedFlow, error: updateErr } = await supabase
-      .from('business_flows')
-      .update({ booking_fields: bookingFields })
-      .eq('business_id', businessId)
-      .select('booking_fields')
-      .single();
-    if (updateErr) throw updateErr;
-
-    if (survivingDisabled.length !== currentDisabled.length) {
-      await businessService.updateBusiness(businessId, { disabledBookingFields: survivingDisabled });
-    }
-
-    // No cache to flush here: unlike business_type_templates (shared across a
-    // whole category, hence updateTemplate's flushAllTenantCache), this is a
-    // per-business business_flows row. The tenant:{phoneNumberId} cache never
-    // stores booking_fields (see tenant.service.js), and every booking-field
-    // read (startBookingSession, getAllBookingFields, etc. in
-    // booking.service.js) queries business_flows directly with no cache in
-    // front of it — so the update is immediately live with nothing to flush.
-    logger.info(`Business ${businessId} updated its own booking_fields (${bookingFields.length} field(s))`);
-    return successResponse(res, 200, { bookingFields: updatedFlow.booking_fields }, 'Booking fields updated successfully');
-  } catch (error) {
-    logger.error('Error in updateBookingFields:', error);
     next(error);
   }
 };
@@ -847,8 +647,6 @@ module.exports = {
   getBusiness,
   createBusiness,
   updateBusiness,
-  getBookingFields,
-  updateBookingFields,
   getServedCities,
   updateServedCities,
   getServedCitySuggestions,

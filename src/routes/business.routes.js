@@ -8,8 +8,6 @@ const { uploadSingle } = require('../middleware/upload.middleware');
 // GET    /                   → protect, requireBusiness, business.controller.getBusiness
 // POST   /                   → protect, business.controller.createBusiness
 // PUT    /                   → protect, requireBusiness, business.controller.updateBusiness
-// GET    /booking-fields     → protect, requireBusiness, business.controller.getBookingFields
-// PUT    /booking-fields     → protect, requireBusiness, business.controller.updateBookingFields
 // GET    /served-cities       → protect, requireBusiness, business.controller.getServedCities
 // PUT    /served-cities       → protect, requireBusiness, business.controller.updateServedCities
 // GET    /served-cities/suggestions → protect, requireBusiness, business.controller.getServedCitySuggestions
@@ -26,16 +24,6 @@ router.post('/', protect, businessController.createBusiness);
 
 // PUT / - Update business profile
 router.put('/', protect, requireBusiness, businessController.updateBusiness);
-
-// GET /booking-fields - Full unfiltered booking field sequence for the owner's
-// business category (includes currently-disabled fields), for the Booking Flow page
-router.get('/booking-fields', protect, requireBusiness, businessController.getBookingFields);
-
-// PUT /booking-fields - Full replacement of this business's booking_fields
-// content (labels, translations, options, order, etc). Enabling/disabling
-// fields stays on PUT / (disabledBookingFields) — separate concern.
-// Body: { bookingFields: [...] }
-router.put('/booking-fields', protect, requireBusiness, businessController.updateBookingFields);
 
 // GET /served-cities - Get the business's servedCities list
 router.get('/served-cities', protect, requireBusiness, businessController.getServedCities);

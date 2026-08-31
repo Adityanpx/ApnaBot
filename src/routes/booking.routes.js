@@ -12,9 +12,6 @@ const { requireRole } = require('../middleware/role.middleware');
 // GET /api/bookings - List bookings with filters
 router.get('/', protect, requireBusiness, bookingController.getBookings);
 
-// GET /preview-fields - Read-only booking field sequence preview (must be before /:id)
-router.get('/preview-fields', protect, requireBusiness, bookingController.getBookingFieldsPreview);
-
 // GET /preview-vehicle-options - Read-only vehicle carousel preview (must be before /:id)
 router.get('/preview-vehicle-options', protect, requireBusiness, bookingController.getVehicleCarouselPreview);
 
