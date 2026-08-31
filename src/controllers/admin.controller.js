@@ -386,6 +386,18 @@ const grantSubscription = async (req, res, next) => {
     if (planErr) throw planErr;
     if (!plan) return errorResponse(res, 404, 'Plan not found');
 
+    // Cancel any existing active subscription first — same guard
+    // subscriptionService.createSubscription uses — otherwise this insert
+    // leaves two 'active' rows for the business, which breaks every
+    // .eq('status','active').maybeSingle() query downstream (tenant
+    // resolution, plan checks) with a PGRST116 "multiple rows" error.
+    const { error: cancelErr } = await supabase
+      .from('subscriptions')
+      .update({ status: 'cancelled' })
+      .eq('business_id', id)
+      .eq('status', 'active');
+    if (cancelErr) throw cancelErr;
+
     const startDate = new Date();
     const endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
 
