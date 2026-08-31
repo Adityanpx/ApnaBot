@@ -831,7 +831,53 @@ const receiveWebhook = async (req, res) => {
         // cutover. Either way, fall through to rule matching below.
         logger.info(`Booking session expired for ${customerNumber}`);
       } else if (result.done) {
-        const confirmationText = await bookingService.finalizeGraphBooking(tenant.businessId, customerNumber, updatedSession);
+        let confirmationText;
+        try {
+          confirmationText = await bookingService.finalizeGraphBooking(tenant.businessId, customerNumber, updatedSession);
+        } catch (finalizeError) {
+          logger.error('Error finalizing graph booking', {
+            businessId: tenant.businessId,
+            customerNumber,
+            message: finalizeError.message,
+            stack: finalizeError.stack
+          });
+
+          const fallbackText = 'Sorry, something went wrong confirming your booking — our team will reach out to you shortly.';
+          const fallbackMsg = await saveMessage({
+            business_id: tenant.businessId,
+            customer_id: customer.id,
+            customer_number: customerNumber,
+            direction: 'outbound',
+            type: 'text',
+            content: fallbackText,
+            status: 'sent',
+            triggered_rule_id: activeSession.ruleId,
+            is_read: true
+          });
+          await addToWhatsappQueue({
+            businessId: tenant.businessId,
+            phoneNumberId: tenant.phoneNumberId,
+            encryptedAccessToken: tenant.accessToken,
+            to: customerNumber,
+            message: fallbackText,
+            type: 'text',
+            messageId: fallbackMsg.id
+          });
+          usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+            logger.error('Error incrementing outbound usage:', err)
+          );
+          try {
+            socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+              customer,
+              message: fallbackMsg,
+              customerNumber
+            });
+          } catch (socketError) {
+            logger.error('Error emitting socket event:', socketError);
+          }
+
+          return; // Do not run rule matching
+        }
 
         const outboundMsg = await saveMessage({
           business_id: tenant.businessId,

@@ -894,13 +894,18 @@ const processBookingStep = async (businessId, customerNumber, customerReply, ten
 const createBookingAndConfirmation = async (businessId, customerNumber, collected, orderedFields, localRentalUnconfigured) => {
   const { data: customer, error: custErr } = await supabase
     .from('customers').select('id').eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
-  if (custErr) logger.error('Error looking up customer for booking creation:', custErr);
+  if (custErr || !customer) {
+    logger.error('Cannot create booking: no customer record found', {
+      businessId, customerNumber, custErr, collected
+    });
+    throw new Error(`Cannot create booking: no customer record found for ${customerNumber} on business ${businessId}`);
+  }
 
   const bookingCode = 'CAB' + Math.floor(1000 + Math.random() * 9000);
 
   const { data: bookingRow, error: bookingErr } = await supabase.from('bookings').insert({
     business_id: businessId,
-    customer_id: customer ? customer.id : null,
+    customer_id: customer.id,
     customer_number: customerNumber,
     status: 'pending',
     fields: collected,
