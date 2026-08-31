@@ -16,35 +16,22 @@
 // use real Redis (via booking.service.js's distance-fare cache) for the
 // distance_estimate branch's cache seed/cleanup.
 //
-// Branches cover: route_fare match (2 active vehicles), distance_estimate
-// (no route_fare for the pair). Neither branch collects or asserts a
-// `tripType` value — see the live-bug note below. Two branch categories
-// that existed here before are gone as of 2026-09-01, for two different
-// real-data reasons (confirmed by querying SG Travels' actual flow_nodes/
-// flow_edges, not assumed):
-//   - "Local Rental" (rental_package match, no-packages-configured detour):
-//     SG Travels' live flow was rebuilt 2026-08-30 with only "One Way"/
-//     "Round Trip" as tripType options and no rentalPackage node at all —
-//     no real conversation path exists to script this against.
-//   - "Round Trip" (route_fare + numberOfDays field): the nodes/edges for
-//     this exist in flow_nodes, but are unreachable from the real booking
-//     entry point (see below) — there is no live conversation path that
-//     reaches them today either.
-// Re-add branches here if/when either is rebuilt into the live graph.
+// Branches cover: One Way route_fare match (2 active vehicles), One Way
+// distance_estimate (no route_fare for the pair), and Round Trip route_fare
+// match (numberOfDays field). "Local Rental" (rental_package match,
+// no-packages-configured detour) stays out as of 2026-09-01: SG Travels'
+// live flow was rebuilt 2026-08-30 with only "One Way"/"Round Trip" as
+// tripType options and no rentalPackage node at all — no real conversation
+// path exists to script this against. Re-add if that's rebuilt into the
+// live graph.
 //
-// KNOWN LIVE BUG, found while validating this rewrite against real data,
-// NOT fixed here (out of scope for a script cleanup — it's a live
-// flow_nodes/flow_edges wiring change, flagged to the human instead): the
-// business's actual `reply_kind='booking_trigger'` node (keyword "book")
-// routes straight to `pickupLocation`, skipping the `tripType` question
-// entirely. Every real customer who types "book" today is never asked One
-// Way vs. Round Trip — `tripType` stays uncollected, and
-// `findBestVehicleCarouselOptions`'s `tripTypeMap[tripType] || 'oneway'`
-// fallback means every booking through this entry point is silently
-// treated as One Way. This script exercises that SAME real entry point
-// (same `reply_kind='booking_trigger'` lookup query below), so its
-// branches deliberately don't collect/assert `tripType` either — that's
-// not an oversight, it's what actually happens today.
+// FIXED 2026-09-01 (was previously a known live bug, see
+// [[sg_travels_booking_trigger_bug]]): the business's `reply_kind=
+// 'booking_trigger'` node (keyword "book") used to route straight to
+// `pickupLocation`, skipping `tripType` entirely, so every real booking was
+// silently priced as One Way. Its outgoing edge now targets `tripType`
+// first, matching this script's own real-entry-point lookup below — every
+// branch here collects and asserts a real `tripType` value again.
 //
 // Usage: node src/scripts/verifyBookingGraph.js
 
@@ -194,10 +181,13 @@ async function seedDistanceCache(businessId, fromCity, toCity, distanceKm) {
 // - rental_packages is EMPTY for this business, and flow_nodes' tripType
 //   node only offers "One Way"/"Round Trip" — no Local Rental branch is
 //   scriptable against real data right now (see file header).
-// - the real `booking_trigger` entry node bypasses tripType entirely (see
-//   file header's KNOWN LIVE BUG note) — both branches below rely on
-//   findBestVehicleCarouselOptions's `tripTypeMap[undefined] || 'oneway'`
-//   fallback, matching real live behavior, not a oneway-only assumption.
+// - round_trip pune->mumbai has ONE active vehicle (Swift Dzire, ₹5500,
+//   route_fare id a648d4b5-7852-4d53-89b1-06b4af6504e3) — confirmed live
+//   2026-09-01, same day the entry node's routing was fixed to reach
+//   tripType at all. Not test-script leftover.
+// - the real `booking_trigger` entry node now routes to `tripType` first
+//   (fixed 2026-09-01, see header) — all branches below collect and assert
+//   a real `tripType` value.
 //
 // findMatchingVehicleOptions/findDistanceBasedVehicleOptions issue no
 // ORDER BY, so which vehicle lands at carousel index 0 is an
@@ -211,6 +201,7 @@ async function seedDistanceCache(businessId, fromCity, toCity, distanceKm) {
 const SWIFT_DZIRE_ID = 'c5bd925d-29ae-4285-968b-167eb27dc2fe';
 const ERTIGA_ID = 'a740bd94-9f7d-42f4-b6f3-3203b51310ae';
 const ERTIGA_ONEWAY_ROUTE_FARE_ID = 'db2e42d4-26c0-44be-ab53-0b3121bd9299';
+const SWIFT_DZIRE_ROUNDTRIP_ROUTE_FARE_ID = 'a648d4b5-7852-4d53-89b1-06b4af6504e3';
 
 const TODAY_DISPLAY_DATE = bookingService.resolveTravelDateOption('Today');
 
@@ -252,9 +243,10 @@ async function main() {
 
   const branches = [
     {
-      name: 'Pune -> Mumbai, route_fare match (tripType uncollected — see KNOWN LIVE BUG)',
-      replies: ['Pune', 'Mumbai', 'Today', 'Morning (8-11 AM)', 'No', 'No', 'No', '0'],
+      name: 'One Way, Pune -> Mumbai, route_fare match',
+      replies: ['One Way', 'Pune', 'Mumbai', 'Today', 'Morning (8-11 AM)', 'No', 'No', 'No', '0'],
       expected: {
+        tripType: 'One Way',
         pickupLocation: 'Pune',
         dropLocation: 'Mumbai',
         travelDate: TODAY_DISPLAY_DATE,
@@ -271,8 +263,29 @@ async function main() {
       }
     },
     {
-      name: 'Pune -> Satara, distance_estimate (no route_fare for this pair)',
-      replies: ['Pune', 'Satara', 'Today', 'Morning (8-11 AM)', 'No', 'No', 'No', '0'],
+      name: 'Round Trip, Pune -> Mumbai, route_fare match (numberOfDays field)',
+      replies: ['Round Trip', '3', 'Pune', 'Mumbai', 'Today', 'Morning (8-11 AM)', 'No', 'No', 'No', '0'],
+      expected: {
+        tripType: 'Round Trip',
+        numberOfDays: '3',
+        pickupLocation: 'Pune',
+        dropLocation: 'Mumbai',
+        travelDate: TODAY_DISPLAY_DATE,
+        pickupTime: 'Morning (8-11 AM)',
+        acRequired: 'No',
+        carrierRequired: 'No',
+        tollParkingIncluded: 'No',
+        fareSource: 'route_fare',
+        routeFareId: SWIFT_DZIRE_ROUNDTRIP_ROUTE_FARE_ID,
+        vehicleId: SWIFT_DZIRE_ID,
+        vehicleName: 'Swift Dzire',
+        vehicleFare: 5500,
+        vehicleType: 'Swift Dzire'
+      }
+    },
+    {
+      name: 'One Way, Pune -> Satara, distance_estimate (no route_fare for this pair)',
+      replies: ['One Way', 'Pune', 'Satara', 'Today', 'Morning (8-11 AM)', 'No', 'No', 'No', '0'],
       setup: async (businessId) => {
         const priorEnableDistanceFares = false; // known SG Travels baseline, confirmed 2026-09-01
         await setEnableDistanceFares(businessId, true);
@@ -284,6 +297,7 @@ async function main() {
         await redis.del(ctx.cacheKey);
       },
       expected: {
+        tripType: 'One Way',
         pickupLocation: 'Pune',
         dropLocation: 'Satara',
         travelDate: TODAY_DISPLAY_DATE,
