@@ -2,6 +2,7 @@ const supabase = require('../config/supabase');
 const { generateWebhookToken } = require('../utils/crypto');
 const { encrypt } = require('../utils/crypto');
 const { toCamelCase } = require('../utils/caseConvert');
+const { writeBusinessGraphRows } = require('./flowSnapshot.service');
 const logger = require('../utils/logger');
 
 const businessFieldMap = {
@@ -97,10 +98,25 @@ const createBusiness = async (ownerUserId, data) => {
       .from('users').update({ business_id: business.id }).eq('id', ownerUserId);
     if (userErr) throw userErr;
 
-    // Every business starts with a literal empty graph — no
-    // business_type_templates lookup, no business_flows/rules seed writes,
-    // no flow_nodes/flow_edges seeding. The owner builds their flow from
+    // No business_type_templates lookup, no business_flows/rules seed
+    // writes (those stay dead per PRD.md). flow_nodes/flow_edges ARE seeded
+    // now, but only from an active flow_snapshots category template — if
+    // none exists for this category, the business still starts with a
+    // literal empty graph exactly as before; the owner builds it from
     // scratch via /api/flow-graph.
+    const { data: template, error: templateErr } = await supabase
+      .from('flow_snapshots').select('nodes, edges')
+      .eq('category', businessCategory).eq('is_category_template', true).eq('is_active', true)
+      .maybeSingle();
+    if (templateErr) throw templateErr;
+
+    if (template) {
+      await writeBusinessGraphRows(business.id, template.nodes, template.edges, {
+        reuseIds: false,
+        resetTriggerCount: true
+      });
+    }
+
     return toCamelCase(business);
   } catch (error) {
     logger.error('Error in createBusiness:', error);

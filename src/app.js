@@ -31,6 +31,8 @@ const broadcastRoutes = require('./routes/broadcast.routes');
 const walletRoutes = require('./routes/wallet.routes');
 const rateCardRoutes = require('./routes/rateCard.routes');
 const flowGraphRoutes = require('./routes/flowGraph.routes');
+const flowSnapshotRoutes = require('./routes/flowSnapshot.routes');
+const categoryTemplateRoutes = require('./routes/categoryTemplate.routes');
 
 const app = express();
 
@@ -103,6 +105,7 @@ app.use('/api/staff', staffRoutes);
 app.use('/api/admin/vehicle-catalog', vehicleCatalogRoutes);
 app.use('/api/admin/flow-packs', flowPackRoutes);
 app.use('/api/admin/rate-cards', rateCardRoutes);
+app.use('/api/admin/category-templates', categoryTemplateRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/flow-packs', flowPackPublicRoutes);
 app.use('/api/saved-flows', savedFlowRoutes);
@@ -113,6 +116,7 @@ app.use('/api/rental-packages', rentalPackageRoutes);
 app.use('/api/message-templates', messageTemplateRoutes);
 app.use('/api/broadcasts', broadcastRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/flow-graph/snapshots', flowSnapshotRoutes);
 app.use('/api/flow-graph', flowGraphRoutes);
 
 // Error handler middleware
