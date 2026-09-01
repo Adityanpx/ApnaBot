@@ -1,6 +1,11 @@
 const Razorpay = require('razorpay');
 const config = require('../config/env');
 const supabase = require('../config/supabase');
+const businessService = require('./business.service');
+const usageService = require('./usage.service');
+const socketService = require('./socket.service');
+const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
+const { toCamelCase } = require('../utils/caseConvert');
 const logger = require('../utils/logger');
 
 // Initialize Razorpay instance
@@ -151,11 +156,17 @@ const handlePaymentLinkPaid = async (payload) => {
   const paymentLinkId = paymentLink.id;
 
   const { data: booking, error } = await supabase
-    .from('bookings').select('id').eq('payment_id', paymentLinkId).maybeSingle();
+    .from('bookings').select('id, business_id, customer_id, customer_number, booking_code')
+    .eq('payment_id', paymentLinkId).maybeSingle();
   if (error) throw error;
 
   if (booking) {
+    // Auto-confirm on payment — a deliberate choice (not an oversight): an
+    // advance-payment booking has no other "confirmed" trigger today, so
+    // without this it would sit at status='pending' forever even once paid.
+    // Revisit if a business ever wants a manual confirm-after-payment step.
     const { error: updateErr } = await supabase.from('bookings').update({
+      status: 'confirmed',
       payment_status: 'paid',
       payment_details: {
         paymentId: paymentLinkId,
@@ -167,6 +178,68 @@ const handlePaymentLinkPaid = async (payload) => {
     if (updateErr) throw updateErr;
 
     logger.info('Payment completed for booking:', booking.id);
+
+    try {
+      socketService.emitToBusiness(booking.business_id.toString(), 'booking_updated', {
+        bookingId: booking.id,
+        status: 'confirmed'
+      });
+    } catch (socketError) {
+      logger.error('Error emitting booking_updated socket event:', socketError);
+    }
+
+    try {
+      const business = await businessService.getBusinessById(booking.business_id);
+      if (!business) {
+        logger.error('Cannot send advance-paid confirmation: business not found', { businessId: booking.business_id, bookingId: booking.id });
+        return;
+      }
+
+      const { data: customerRow, error: customerErr } = await supabase
+        .from('customers').select('*').eq('id', booking.customer_id).maybeSingle();
+      if (customerErr) throw customerErr;
+
+      const confirmationText = `✅ Advance received! Your booking ${booking.booking_code} is confirmed. Our team will contact you shortly.`;
+
+      const { data: messageRow, error: msgErr } = await supabase.from('messages').insert({
+        business_id: booking.business_id,
+        customer_id: booking.customer_id,
+        customer_number: booking.customer_number,
+        direction: 'outbound',
+        type: 'text',
+        content: confirmationText,
+        status: 'sent',
+        is_read: true
+      }).select().single();
+      if (msgErr) throw msgErr;
+      const message = toCamelCase(messageRow);
+
+      await addToWhatsappQueue({
+        businessId: booking.business_id,
+        phoneNumberId: business.phoneNumberId,
+        encryptedAccessToken: business.accessToken,
+        to: booking.customer_number,
+        message: confirmationText,
+        type: 'text',
+        messageId: message.id
+      });
+
+      usageService.incrementUsage(booking.business_id, 'outbound').catch(err =>
+        logger.error('Error incrementing outbound usage:', err)
+      );
+
+      try {
+        socketService.emitToBusiness(booking.business_id.toString(), 'new_message', {
+          customer: toCamelCase(customerRow),
+          message,
+          customerNumber: booking.customer_number
+        });
+      } catch (socketError) {
+        logger.error('Error emitting new_message socket event:', socketError);
+      }
+    } catch (sendError) {
+      logger.error('Error sending advance-paid WhatsApp confirmation:', sendError);
+    }
   }
 };
 

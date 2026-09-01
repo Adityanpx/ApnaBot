@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { toCamelCase } = require('../utils/caseConvert');
 const { getLocalizedText } = require('../utils/localization');
 const businessService = require('./business.service');
+const paymentService = require('./payment.service');
 const { addToWhatsappQueue } = require('../queues/whatsapp.queue');
 const usageService = require('./usage.service');
 const socketService = require('./socket.service');
@@ -378,7 +379,7 @@ const deleteBookingSession = async (businessId, customerNumber) => {
  */
 const createBookingAndConfirmation = async (businessId, customerNumber, collected, orderedFields, localRentalUnconfigured) => {
   const { data: customer, error: custErr } = await supabase
-    .from('customers').select('id').eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
+    .from('customers').select('id, name').eq('business_id', businessId).eq('whatsapp_number', customerNumber).maybeSingle();
   if (custErr || !customer) {
     logger.error('Cannot create booking: no customer record found', {
       businessId, customerNumber, custErr, collected
@@ -388,15 +389,43 @@ const createBookingAndConfirmation = async (businessId, customerNumber, collecte
 
   const bookingCode = 'CAB' + Math.floor(1000 + Math.random() * 9000);
 
-  const { data: bookingRow, error: bookingErr } = await supabase.from('bookings').insert({
+  // Advance-payment collection: compute this BEFORE inserting the booking
+  // row, since it changes what payment_status/payment_amount get written.
+  // advanceAmount stays null (== no advance required) unless the business
+  // has opted in AND the amount is actually computable — a 'percentage'
+  // business with a non-fare booking type (no collected.vehicleFare) can't
+  // compute a sane amount, so that case falls back to normal (no-advance)
+  // behavior rather than inventing a number.
+  const business = await businessService.getBusinessById(businessId);
+  let advanceAmount = null;
+  if (business?.requireAdvancePayment) {
+    if (business.advancePaymentType === 'percentage') {
+      if (collected.vehicleFare === undefined || collected.vehicleFare === null) {
+        logger.error('Cannot compute percentage advance payment: booking has no vehicleFare', {
+          businessId, customerNumber, advancePaymentValue: business.advancePaymentValue
+        });
+      } else {
+        advanceAmount = Math.round(collected.vehicleFare * (business.advancePaymentValue / 100) * 100) / 100;
+      }
+    } else if (business.advancePaymentType === 'fixed') {
+      advanceAmount = business.advancePaymentValue;
+    }
+  }
+
+  const bookingInsert = {
     business_id: businessId,
     customer_id: customer.id,
     customer_number: customerNumber,
     status: 'pending',
     fields: collected,
-    payment_status: 'not_required',
+    payment_status: advanceAmount !== null ? 'pending' : 'not_required',
     booking_code: bookingCode
-  }).select().single();
+  };
+  if (advanceAmount !== null) {
+    bookingInsert.payment_amount = advanceAmount;
+  }
+
+  const { data: bookingRow, error: bookingErr } = await supabase.from('bookings').insert(bookingInsert).select().single();
   if (bookingErr) throw bookingErr;
   const booking = toCamelCase(bookingRow);
 
@@ -407,6 +436,32 @@ const createBookingAndConfirmation = async (businessId, customerNumber, collecte
   usageService.incrementUsage(businessId, 'booking').catch(err =>
     logger.error('Error incrementing booking usage:', err)
   );
+
+  if (advanceAmount !== null) {
+    // Booking isn't confirmed yet — skip the normal fieldLines/fare summary
+    // entirely and send a payment-link message instead. createRazorpayPaymentLink
+    // itself writes payment_link/payment_id back onto this booking row.
+    const paymentLink = await paymentService.createRazorpayPaymentLink(
+      booking.id,
+      Math.round(advanceAmount * 100),
+      customer.name || 'Customer',
+      customerNumber,
+      `Advance payment for booking ${bookingCode}`
+    );
+
+    const advanceConfirmationText = `Almost done! To confirm your booking, please pay the advance of ₹${advanceAmount} here: ${paymentLink.short_url}\n\nBooking ID: *${bookingCode}*`;
+
+    try {
+      socketService.emitToBusiness(businessId.toString(), 'new_booking', {
+        booking,
+        customerNumber
+      });
+    } catch (socketError) {
+      logger.error('Error emitting socket event:', socketError);
+    }
+
+    return advanceConfirmationText;
+  }
 
   // Build confirmation message (WhatsApp bold = *value*)
   const fieldLines = orderedFields

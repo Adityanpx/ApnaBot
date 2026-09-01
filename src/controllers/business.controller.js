@@ -238,6 +238,24 @@ const updateBusiness = async (req, res, next) => {
       }
     }
 
+    if (req.body.requireAdvancePayment === true) {
+      // type/value can arrive in this same request, or already be set on the
+      // business from a prior save (toggling on again after toggling off) —
+      // only fetch the existing row if this request doesn't supply both.
+      let { advancePaymentType, advancePaymentValue } = req.body;
+      if (advancePaymentType === undefined || advancePaymentValue === undefined) {
+        const existing = await businessService.getBusinessById(businessId);
+        if (advancePaymentType === undefined) advancePaymentType = existing?.advancePaymentType;
+        if (advancePaymentValue === undefined) advancePaymentValue = existing?.advancePaymentValue;
+      }
+      if (!['fixed', 'percentage'].includes(advancePaymentType)) {
+        return errorResponse(res, 400, "advancePaymentType must be 'fixed' or 'percentage' when requireAdvancePayment is enabled.");
+      }
+      if (typeof advancePaymentValue !== 'number' || advancePaymentValue <= 0) {
+        return errorResponse(res, 400, 'advancePaymentValue must be a positive number when requireAdvancePayment is enabled.');
+      }
+    }
+
     const business = await businessService.updateBusiness(businessId, req.body);
 
     // Remove accessToken from response
