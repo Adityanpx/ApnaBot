@@ -566,6 +566,9 @@ const advanceGraphSession = async ({ businessId, session, reply, languageCode })
       session.displayOverrides.travelDate = bookingService.resolveTravelDateOption(resolvedOption.value);
     }
   } else {
+    if (currentNode.required === true && trimmedReply === '') {
+      return { session, result: getLocalizedText(currentNode, 'label', languageCode) };
+    }
     session.collected[currentNode.fieldKey] = trimmedReply;
   }
 

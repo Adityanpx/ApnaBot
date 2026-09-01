@@ -1111,6 +1111,14 @@ const receiveWebhook = async (req, res) => {
     let replyText = null;
     let triggeredRuleId = null;
     let bookingField = null; // set when booking_trigger (or a direct question-node tap) fires, for interactive rendering below
+    // Set only in the no-rule-matched fallback branch below, when the
+    // business has a greeting/menu reply node — its buttons are borrowed
+    // for Step 16's outbound render so the fallback isn't a dead-end text
+    // message. Deliberately kept separate from matchedNode/triggeredRuleId:
+    // the fallback reply is not "from" this node for analytics/trigger-count
+    // purposes, only its buttons are reused.
+    let fallbackMenuNode = null;
+    let fallbackMenuEdges = [];
 
     if (directBookingEntry) {
       // Button targeted a question node directly — start the graph right
@@ -1168,6 +1176,19 @@ const receiveWebhook = async (req, res) => {
       }
 
       replyText = smartReply || applyMessageTemplate(tenant.fallbackReply, tenant, customer) || 'Thank you for your message. We will get back to you soon.';
+
+      // Attach the business's greeting/menu buttons (if one is configured)
+      // so the customer has a tappable way forward instead of a dead-end
+      // text message. Probes the same rule-matching findMatchingRule uses
+      // for a real "hi" greeting, with incrementCount:false since this is
+      // not a real customer trigger of that node (see its doc comment).
+      const greetingMatch = await chatbotService.findMatchingRule(tenant.businessId, 'hi', { incrementCount: false });
+      if (greetingMatch?.node &&
+          (greetingMatch.node.contentType === 'buttons' || greetingMatch.node.contentType === 'list') &&
+          greetingMatch.edges.length > 0) {
+        fallbackMenuNode = greetingMatch.node;
+        fallbackMenuEdges = greetingMatch.edges;
+      }
     }
 
     // Step 15 - Save outbound message
@@ -1188,14 +1209,22 @@ const receiveWebhook = async (req, res) => {
     // own id (see chatbot.service.js's getOutgoingEdges), which comes back
     // unchanged as button_reply.id/list_reply.id and is resolved
     // structurally by Step 13's resolveTappedEdge on the next inbound tap.
-    const localizedButtons = matchedNode?.contentType === 'buttons'
-      ? matchedEdges.map(edge => ({
+    // matchedNode stays null in the no-rule-matched fallback branch above,
+    // so this borrows fallbackMenuNode/fallbackMenuEdges (the greeting
+    // node's buttons) for rendering only — matchedNode itself, and
+    // therefore triggeredRuleId/outboundMsg.triggered_rule_id above, are
+    // untouched.
+    const buttonSourceNode = matchedNode || fallbackMenuNode;
+    const buttonSourceEdges = matchedNode ? matchedEdges : fallbackMenuEdges;
+
+    const localizedButtons = buttonSourceNode?.contentType === 'buttons'
+      ? buttonSourceEdges.map(edge => ({
           nextKeyword: edge.nextKeyword,
           title: getLocalizedText(edge, 'label', customer.preferredLanguage)
         }))
       : [];
-    const localizedListOptions = matchedNode?.contentType === 'list'
-      ? matchedEdges.map(edge => ({
+    const localizedListOptions = buttonSourceNode?.contentType === 'list'
+      ? buttonSourceEdges.map(edge => ({
           nextKeyword: edge.nextKeyword,
           label: getLocalizedText(edge, 'label', customer.preferredLanguage),
           description: getLocalizedText(edge, 'description', customer.preferredLanguage)

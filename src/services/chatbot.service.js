@@ -167,9 +167,15 @@ const resolveTappedEdge = async (businessId, edgeId) => {
  * Find matching reply-trigger flow node for incoming message
  * @param {string} businessId - The business ID
  * @param {string} incomingText - The incoming message text
+ * @param {Object} [opts]
+ * @param {boolean} [opts.incrementCount=true] - set false for a probe call
+ *   that isn't a real customer message (e.g. webhook.controller.js's
+ *   no-rule-matched fallback borrowing the greeting node's buttons) so
+ *   trigger_count isn't inflated by a match the customer didn't actually
+ *   trigger.
  * @returns {Promise<{node: Object, edges: Array}|null>}
  */
-const findMatchingRule = async (businessId, incomingText) => {
+const findMatchingRule = async (businessId, incomingText, { incrementCount = true } = {}) => {
   try {
     // Normalize the incoming text
     const normalizedText = normalizeText(incomingText);
@@ -249,7 +255,7 @@ const findMatchingRule = async (businessId, incomingText) => {
       return null;
     }
 
-    incrementTriggerCount(matchedNode.id);
+    if (incrementCount) incrementTriggerCount(matchedNode.id);
 
     // Only reply nodes with a rendered button/list carry outgoing edges —
     // skip the query for plain text replies (is_computed nodes are a
