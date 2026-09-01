@@ -3,10 +3,13 @@
 -- ============================================
 -- Per-business flow data: one row per business, holding both the keyword
 -- rules and the booking field sequence that used to be read live from the
--- shared business_type_templates row. business_type_templates keeps its
--- existing role as the category starting point copied at business creation
--- (see business.service.js createBusiness) — it is no longer read at
--- runtime for an existing business. The `rules` table remains the source
+-- shared business_type_templates row — it is no longer read at runtime for
+-- an existing business. [Update, 2026-09-02: business_type_templates no
+-- longer plays even the category-starting-point role described above —
+-- createBusiness now seeds from flow_snapshots category templates instead,
+-- and business_type_templates has been dropped. business_flows itself was
+-- also already dropped, see 20260901170000_drop_flow_packs_and_business_flows.sql
+-- — this migration is kept only as schema history.] The `rules` table remains the source
 -- the chatbot engine (chatbot.service.js) matches against directly; this
 -- table is the editable flow definition the dashboard's flow editor and
 -- booking-field reads (booking.service.js, rule.controller.js) work against.

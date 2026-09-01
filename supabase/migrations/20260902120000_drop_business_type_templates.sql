@@ -1,0 +1,17 @@
+-- Drop business_type_templates — superseded by flow_snapshots' category
+-- starter templates (see 20260901120000_flow_snapshots_category_templates.sql).
+-- createBusiness has already stopped reading this table (business.service.js
+-- now reads flow_snapshots where category=<x> and is_category_template=true);
+-- its only remaining live consumer was admin.controller.js's
+-- getTemplates/updateTemplate (GET/PUT /api/admin/templates), removed in the
+-- same change that adds this migration.
+--
+-- Live row count at time of writing: 20 (one per business category, from the
+-- original seed + the later software_it addition). FK list verified against
+-- live pg_constraint, not just migration files — nothing references this
+-- table (confrelid = 'business_type_templates'::regclass returns zero rows).
+--
+-- Also removed in this pass: businessTypeSeed.js, updateCabBookingFields.js,
+-- updateTravelsFieldTranslations.js — one-off scripts that only ever
+-- targeted this table.
+drop table business_type_templates;

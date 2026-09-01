@@ -18,9 +18,7 @@ const {
   getPlans,
   createPlan,
   updatePlan,
-  deletePlan,
-  getTemplates,
-  updateTemplate
+  deletePlan
 } = require('../controllers/admin.controller');
 
 // All admin routes — superadmin only
@@ -47,9 +45,5 @@ router.get('/plans',                getPlans);
 router.post('/plans',               createPlan);
 router.put('/plans/:id',            updatePlan);
 router.delete('/plans/:id',         deletePlan);
-
-// Business Type Templates
-router.get('/templates',            getTemplates);
-router.put('/templates/:id',        updateTemplate);
 
 module.exports = router;

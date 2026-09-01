@@ -1,7 +1,6 @@
 require('dotenv').config();
 const logger = require('../utils/logger');
 const seedPlans = require('./planSeed');
-const seedBusinessTypeTemplates = require('./businessTypeSeed');
 const seedAdmin = require('./adminSeed');
 
 const runSeeds = async () => {
@@ -9,7 +8,6 @@ const runSeeds = async () => {
     logger.info('Starting database seeding...');
 
     await seedPlans();
-    await seedBusinessTypeTemplates();
     await seedAdmin();
     
     logger.info('All seeds completed successfully!');

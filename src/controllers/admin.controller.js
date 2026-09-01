@@ -6,7 +6,6 @@ const adminService = require('../services/admin.service');
 const { invalidateRulesCache } = require('../services/chatbot.service');
 const { successResponse, errorResponse } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
-const { validateLabelTranslations } = require('../utils/bookingFieldValidation');
 const logger = require('../utils/logger');
 
 // Tables with business_id and ON DELETE CASCADE on the businesses FK (see
@@ -615,82 +614,6 @@ const deletePlan = async (req, res, next) => {
   }
 };
 
-/**
- * GET /api/admin/templates
- * List all business category templates
- */
-const getTemplates = async (req, res, next) => {
-  try {
-    const { data: templates, error } = await supabase
-      .from('business_type_templates')
-      .select('*')
-      .order('business_category', { ascending: true });
-    if (error) throw error;
-    return successResponse(res, 200, { templates: (templates || []).map(toCamelCase) });
-  } catch (error) {
-    logger.error('Error in getTemplates:', error);
-    next(error);
-  }
-};
-
-/**
- * PUT /api/admin/templates/:id
- * Update a business category template's default rules and booking fields
- */
-const updateTemplate = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { defaultRules, bookingFields } = req.body;
-
-    const { data: existing } = await supabase
-      .from('business_type_templates').select('id').eq('id', id).maybeSingle();
-    if (!existing) return errorResponse(res, 404, 'Template not found');
-
-    if (bookingFields !== undefined) {
-      for (const field of bookingFields) {
-        const fieldErr = validateLabelTranslations(
-          field.labelTranslations, `Field "${field.fieldKey}" labelTranslations`
-        );
-        if (fieldErr) return errorResponse(res, 400, fieldErr);
-
-        for (const opt of field.options || []) {
-          if (opt && typeof opt === 'object') {
-            const optErr = validateLabelTranslations(
-              opt.labelTranslations, `Option "${opt.value}" labelTranslations`
-            );
-            if (optErr) return errorResponse(res, 400, optErr);
-          }
-        }
-      }
-    }
-
-    const updates = {};
-    if (defaultRules !== undefined) updates.default_rules = defaultRules;
-    if (bookingFields !== undefined) updates.booking_fields = bookingFields;
-
-    const { data: template, error } = await supabase
-      .from('business_type_templates').update(updates).eq('id', id).select().single();
-    if (error) throw error;
-
-    if (bookingFields !== undefined) {
-      // booking_fields is shared by every business in this category — a
-      // single phoneNumberId-keyed invalidation can't target them all, so
-      // flush the whole tenant cache rather than wait out the 1hr TTL.
-      try {
-        await tenantService.flushAllTenantCache();
-      } catch (cacheErr) {
-        logger.error(`Failed to flush tenant cache after template ${id} update:`, cacheErr);
-      }
-    }
-
-    logger.info(`Template ${id} updated by superadmin`);
-    return successResponse(res, 200, toCamelCase(template), 'Template updated successfully');
-  } catch (error) {
-    logger.error('Error in updateTemplate:', error);
-    next(error);
-  }
-};
-
 module.exports = {
   getBusinesses,
   getBusinessById,
@@ -705,7 +628,5 @@ module.exports = {
   getPlans,
   createPlan,
   updatePlan,
-  deletePlan,
-  getTemplates,
-  updateTemplate
+  deletePlan
 };
