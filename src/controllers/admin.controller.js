@@ -15,7 +15,7 @@ const logger = require('../utils/logger');
 // atomically wipes these in the same statement, so they're only counted
 // here (for the response) rather than deleted individually.
 const CASCADE_DELETED_TABLES = [
-  'customers', 'rules', 'bookings', 'vehicles', 'route_fares',
+  'customers', 'bookings', 'vehicles', 'route_fares',
   'rental_packages', 'messages', 'message_templates', 'broadcasts',
   'usage', 'subscriptions',
   'flow_nodes', 'flow_edges', 'flow_snapshots'
@@ -160,7 +160,7 @@ const toggleBusiness = async (req, res, next) => {
  * DELETE /api/admin/businesses/:id
  * Permanently delete a business and cascade-delete every row that belongs to it.
  *
- * customers, rules, bookings, vehicles, route_fares, rental_packages, messages,
+ * customers, bookings, vehicles, route_fares, rental_packages, messages,
  * message_templates, broadcasts, usage, subscriptions, and
  * flow_nodes/flow_edges/flow_snapshots (graph booking engine) all have ON
  * DELETE CASCADE on their business_id FK, so deleting the business row wipes
@@ -172,7 +172,7 @@ const toggleBusiness = async (req, res, next) => {
  * handling in this order:
  *   1. delete staff users (business_id = this business, role = 'staff')
  *   2. null out the owner's business_id (unblocks deleting the business row)
- *   3. delete the business row (cascades the 14 tables above)
+ *   3. delete the business row (cascades the 13 tables above)
  *   4. delete the owner user row (unblocked now that the business row is gone)
  *
  * NOT deleted: plans, business_type_templates, vehicle_type_catalog
@@ -221,7 +221,7 @@ const deleteBusiness = async (req, res, next) => {
     }
     logger.info(`[deleteBusiness] business=${id} — unlinked owner ${business.owner_user_id} from business`);
 
-    // 3. Delete the business row — cascades customers/rules/bookings/vehicles/
+    // 3. Delete the business row — cascades customers/bookings/vehicles/
     // route_fares/rental_packages/messages/message_templates/broadcasts/usage/subscriptions
     const { error: bizDelErr } = await supabase.from('businesses').delete().eq('id', id);
     if (bizDelErr) {

@@ -9,7 +9,6 @@ const errorHandler = require('./middleware/errorHandler.middleware');
 // Import routes
 const authRoutes = require('./routes/auth.routes');
 const businessRoutes = require('./routes/business.routes');
-const ruleRoutes = require('./routes/rule.routes');
 const customerRoutes = require('./routes/customer.routes');
 const messageRoutes = require('./routes/message.routes');
 const bookingRoutes = require('./routes/booking.routes');
@@ -91,7 +90,6 @@ app.get('/', (req, res) => {
 // Mount routes
 app.use('/api/auth', authRoutes);
 app.use('/api/business', businessRoutes);
-app.use('/api/rules', ruleRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/bookings', bookingRoutes);

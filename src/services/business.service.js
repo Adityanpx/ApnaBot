@@ -8,7 +8,7 @@ const logger = require('../utils/logger');
 const businessFieldMap = {
   name: 'name', displayName: 'display_name', address: 'address', city: 'city',
   profileImage: 'profile_image', upiId: 'upi_id', fallbackReply: 'fallback_reply',
-  welcomeMessage: 'welcome_message', isMenuEnabled: 'is_menu_enabled', menuItems: 'menu_items',
+  welcomeMessage: 'welcome_message',
   enableDistanceFares: 'enable_distance_fares', enableSmartFallback: 'enable_smart_fallback',
   roundTripPerDayKm: 'round_trip_per_day_km', roundTripDriverDaEnabled: 'round_trip_driver_da_enabled',
   roundTripDriverDaAmount: 'round_trip_driver_da_amount', disabledBookingFields: 'disabled_booking_fields',

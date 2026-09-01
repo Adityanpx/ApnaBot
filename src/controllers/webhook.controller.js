@@ -104,31 +104,6 @@ const upsertCustomerForInboundMessage = async (businessId, customerNumber, profi
 };
 
 /**
- * Build the numbered-menu list options for a business's enabled menu, in the
- * {label, nextKeyword} shape sendRuleListMessage expects. Shared by the
- * Step 12.5 greeting handler and the "no rule matched" fallback.
- * @param {Array} menuItems - business.menuItems
- * @param {string} [languageCode] - customer.preferredLanguage
- * @returns {Promise<Array<{label: string, nextKeyword: string}>>}
- */
-const buildMenuListOptions = async (menuItems, languageCode) => {
-  const sortedItems = [...menuItems]
-    .sort((a, b) => a.order - b.order)
-    .slice(0, 10);
-  const ruleIds = sortedItems.map(item => item.ruleId);
-  const { data: rules, error } = await supabase.from('rules').select('id, keyword').in('id', ruleIds);
-  if (error) throw error;
-  const keywordByRuleId = new Map((rules || []).map(rule => [rule.id.toString(), rule.keyword]));
-
-  return sortedItems
-    .filter(item => keywordByRuleId.has(item.ruleId.toString()))
-    .map(item => ({
-      label: getLocalizedText(item, 'label', languageCode),
-      nextKeyword: keywordByRuleId.get(item.ruleId.toString())
-    }));
-};
-
-/**
  * Send a booking-session field's prompt to the customer: plain text for a
  * 'text' field, a single message with an interactive attachment for
  * 'buttons'/'list', or the full intro + one-message-per-vehicle + "Other
@@ -677,13 +652,8 @@ const receiveWebhook = async (req, res) => {
       if (ESCAPE_KEYWORDS.has(normalizedEscapeText)) {
         await bookingService.deleteBookingSession(tenant.businessId, customerNumber);
 
-        const escapeBusinessDoc = await businessService.getBusinessById(tenant.businessId);
-        const escapeHasMenu = !!(escapeBusinessDoc?.isMenuEnabled && escapeBusinessDoc.menuItems?.length > 0);
-
         // Cancellation confirmation message
-        const cancelText = escapeHasMenu
-          ? 'Booking cancelled.'
-          : "Booking cancelled. Type 'hi' to see what I can help with.";
+        const cancelText = "Booking cancelled. Type 'hi' to see what I can help with.";
         const cancelMsg = await saveMessage({
           business_id: tenant.businessId,
           customer_id: customer.id,
@@ -714,51 +684,6 @@ const receiveWebhook = async (req, res) => {
           });
         } catch (socketError) {
           logger.error('Error emitting socket event:', socketError);
-        }
-
-        // If the business has a menu, follow up with the same welcome/menu send
-        // Step 12.5 does for a greeting.
-        if (escapeHasMenu) {
-          const menuListOptions = await buildMenuListOptions(escapeBusinessDoc.menuItems, customer.preferredLanguage);
-          const menuReplyText = applyMessageTemplate(
-            getLocalizedText(escapeBusinessDoc, 'welcomeMessage', customer.preferredLanguage) || 'How can we help you today?',
-            tenant,
-            customer
-          );
-
-          const menuOutboundMsg = await saveMessage({
-            business_id: tenant.businessId,
-            customer_id: customer.id,
-            customer_number: customerNumber,
-            direction: 'outbound',
-            type: 'text',
-            content: menuReplyText,
-            status: 'sent',
-            is_read: true
-          });
-          await addToWhatsappQueue({
-            businessId: tenant.businessId,
-            phoneNumberId: tenant.phoneNumberId,
-            encryptedAccessToken: tenant.accessToken,
-            to: customerNumber,
-            message: menuReplyText,
-            type: 'text',
-            listOptions: menuListOptions,
-            listButtonLabel: 'Menu',
-            messageId: menuOutboundMsg.id
-          });
-          usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
-            logger.error('Error incrementing outbound usage:', err)
-          );
-          try {
-            socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
-              customer,
-              message: menuOutboundMsg,
-              customerNumber
-            });
-          } catch (socketError) {
-            logger.error('Error emitting socket event:', socketError);
-          }
         }
 
         logger.info(`Booking session cancelled via escape keyword for ${customerNumber}`);
@@ -1083,33 +1008,21 @@ const receiveWebhook = async (req, res) => {
       logger.info(`Set preferred language ${tappedCode} for business ${tenant.businessId}, customer ${customerNumber}; falling through to greeting`);
       messageText = 'hi';
       // No return - fall through to Step 12.5 / Step 13 below, which will
-      // greet with the business's welcomeMessage/menu if configured, or
+      // greet with the business's welcomeMessage if configured, or
       // otherwise run rule matching against 'hi' exactly like a real
       // greeting message would.
     }
 
-    // Step 12.5 - Greeting -> welcome message / menu (exact match only, so
+    // Step 12.5 - Greeting -> welcome message (exact match only, so
     // real rule keywords still take priority over this).
     const normalizedText = (messageText || '').trim().toLowerCase();
     if (GREETING_KEYWORDS.has(normalizedText)) {
       const businessDoc = await businessService.getBusinessById(tenant.businessId);
 
-      const hasMenu = !!(businessDoc?.isMenuEnabled && businessDoc.menuItems?.length > 0);
       const localizedWelcomeMessage = getLocalizedText(businessDoc, 'welcomeMessage', customer.preferredLanguage);
 
-      if (businessDoc && (localizedWelcomeMessage || hasMenu)) {
-        let greetingReplyText = localizedWelcomeMessage || '';
-        let menuListOptions = [];
-
-        if (hasMenu) {
-          menuListOptions = await buildMenuListOptions(businessDoc.menuItems, customer.preferredLanguage);
-
-          if (!greetingReplyText) {
-            greetingReplyText = 'How can we help you today?';
-          }
-        }
-
-        greetingReplyText = applyMessageTemplate(greetingReplyText, tenant, customer);
+      if (businessDoc && localizedWelcomeMessage) {
+        const greetingReplyText = applyMessageTemplate(localizedWelcomeMessage, tenant, customer);
 
         // Save outbound message
         const greetingOutboundMsg = await saveMessage({
@@ -1131,8 +1044,6 @@ const receiveWebhook = async (req, res) => {
           to: customerNumber,
           message: greetingReplyText,
           type: 'text',
-          listOptions: menuListOptions,
-          listButtonLabel: 'Menu',
           messageId: greetingOutboundMsg.id
         };
         await addToWhatsappQueue(greetingJobData);
@@ -1200,7 +1111,6 @@ const receiveWebhook = async (req, res) => {
     let replyText = null;
     let triggeredRuleId = null;
     let bookingField = null; // set when booking_trigger (or a direct question-node tap) fires, for interactive rendering below
-    let fallbackMenuListOptions = null; // set when no rule matched and business has an enabled menu
 
     if (directBookingEntry) {
       // Button targeted a question node directly — start the graph right
@@ -1258,17 +1168,6 @@ const receiveWebhook = async (req, res) => {
       }
 
       replyText = smartReply || applyMessageTemplate(tenant.fallbackReply, tenant, customer) || 'Thank you for your message. We will get back to you soon.';
-
-      // Attach the numbered menu (if the business has one enabled) regardless of
-      // whether replyText above came from the AI smart fallback or the
-      // static fallbackReply — gives the customer a way to reach a real
-      // rule instead of a dead-end message.
-      const fallbackBusinessDoc = await businessService.getBusinessById(tenant.businessId);
-      const fallbackHasMenu = !!(fallbackBusinessDoc?.isMenuEnabled && fallbackBusinessDoc.menuItems?.length > 0);
-
-      if (fallbackHasMenu) {
-        fallbackMenuListOptions = await buildMenuListOptions(fallbackBusinessDoc.menuItems, customer.preferredLanguage);
-      }
     }
 
     // Step 15 - Save outbound message
@@ -1312,12 +1211,9 @@ const receiveWebhook = async (req, res) => {
       type: 'text',
       imageUrl: matchedNode?.imageUrl || null,
       buttons: localizedButtons,
-      listOptions: fallbackMenuListOptions || localizedListOptions,
+      listOptions: localizedListOptions,
       messageId: outboundMsg.id
     };
-    if (fallbackMenuListOptions) {
-      outboundJobData.listButtonLabel = 'Menu';
-    }
     if (bookingField && (bookingField.fieldType === 'buttons' || bookingField.fieldType === 'list')) {
       // Reuses the worker/whatsapp.service `step` job-data field to carry
       // the entry node's id under the graph engine's "{node_id}:{index}" id
