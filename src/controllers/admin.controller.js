@@ -10,15 +10,14 @@ const { validateLabelTranslations } = require('../utils/bookingFieldValidation')
 const logger = require('../utils/logger');
 
 // Tables with business_id and ON DELETE CASCADE on the businesses FK (see
-// supabase/migrations/20260819213717_init_schema.sql,
-// 20260829090000_business_flows.sql, and 20260829140000_flow_nodes_edges.sql)
-// — deleting the business row atomically wipes these in the same statement,
-// so they're only counted here (for the response) rather than deleted
-// individually.
+// supabase/migrations/20260819213717_init_schema.sql and
+// 20260829140000_flow_nodes_edges.sql) — deleting the business row
+// atomically wipes these in the same statement, so they're only counted
+// here (for the response) rather than deleted individually.
 const CASCADE_DELETED_TABLES = [
   'customers', 'rules', 'bookings', 'vehicles', 'route_fares',
   'rental_packages', 'messages', 'message_templates', 'broadcasts',
-  'usage', 'subscriptions', 'business_flows',
+  'usage', 'subscriptions',
   'flow_nodes', 'flow_edges', 'flow_snapshots'
 ];
 
@@ -162,7 +161,7 @@ const toggleBusiness = async (req, res, next) => {
  * Permanently delete a business and cascade-delete every row that belongs to it.
  *
  * customers, rules, bookings, vehicles, route_fares, rental_packages, messages,
- * message_templates, broadcasts, usage, subscriptions, business_flows, and
+ * message_templates, broadcasts, usage, subscriptions, and
  * flow_nodes/flow_edges/flow_snapshots (graph booking engine) all have ON
  * DELETE CASCADE on their business_id FK, so deleting the business row wipes
  * them in one atomic DB statement — no manual per-table deletes needed (and
@@ -173,10 +172,10 @@ const toggleBusiness = async (req, res, next) => {
  * handling in this order:
  *   1. delete staff users (business_id = this business, role = 'staff')
  *   2. null out the owner's business_id (unblocks deleting the business row)
- *   3. delete the business row (cascades the 15 tables above)
+ *   3. delete the business row (cascades the 14 tables above)
  *   4. delete the owner user row (unblocked now that the business row is gone)
  *
- * NOT deleted: plans, business_type_templates, flow_packs, vehicle_type_catalog
+ * NOT deleted: plans, business_type_templates, vehicle_type_catalog
  * (shared/global, not business-owned).
  */
 const deleteBusiness = async (req, res, next) => {
