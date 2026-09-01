@@ -69,9 +69,10 @@ const createSubscription = async (businessId, planId, options = {}) => {
       .eq('status', 'active');
     if (cancelErr) throw cancelErr;
 
+    const durationMonths = options.durationMonths || 1;
     const startDate = new Date();
     const endDate = new Date();
-    endDate.setMonth(endDate.getMonth() + 1); // 1 month validity
+    endDate.setMonth(endDate.getMonth() + durationMonths);
 
     const { data: sub, error } = await supabase
       .from('subscriptions')

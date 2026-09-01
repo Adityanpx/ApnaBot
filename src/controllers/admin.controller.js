@@ -510,7 +510,7 @@ const createPlan = async (req, res, next) => {
     const {
       name, displayName, price, msgLimit, ruleLimit,
       customerLimit, bookingEnabled, paymentLinkEnabled,
-      staffEnabled, maxStaff
+      staffEnabled, maxStaff, durationOptions
     } = req.body;
 
     if (!name || !displayName || price === undefined) {
@@ -530,7 +530,8 @@ const createPlan = async (req, res, next) => {
       payment_link_enabled: paymentLinkEnabled ?? false,
       staff_enabled: staffEnabled ?? false,
       max_staff: maxStaff ?? 0,
-      is_active: true
+      is_active: true,
+      duration_options: durationOptions || [{ months: 1, price, label: 'Monthly', discount: 0 }]
     }).select().single();
     if (error) throw error;
 
@@ -555,13 +556,15 @@ const updatePlan = async (req, res, next) => {
 
     const allowedFields = [
       'displayName', 'price', 'msgLimit', 'ruleLimit', 'customerLimit',
-      'bookingEnabled', 'paymentLinkEnabled', 'staffEnabled', 'maxStaff', 'isActive'
+      'bookingEnabled', 'paymentLinkEnabled', 'staffEnabled', 'maxStaff', 'isActive',
+      'durationOptions'
     ];
     const fieldMap = {
       displayName: 'display_name', msgLimit: 'msg_limit', ruleLimit: 'rule_limit',
       customerLimit: 'customer_limit', bookingEnabled: 'booking_enabled',
       paymentLinkEnabled: 'payment_link_enabled', staffEnabled: 'staff_enabled',
-      maxStaff: 'max_staff', isActive: 'is_active', price: 'price'
+      maxStaff: 'max_staff', isActive: 'is_active', price: 'price',
+      durationOptions: 'duration_options'
     };
 
     const updates = {};

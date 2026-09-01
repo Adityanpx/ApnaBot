@@ -73,7 +73,7 @@ const getPlans = async (req, res, next) => {
  */
 const createSubscriptionOrder = async (req, res, next) => {
   try {
-    const { planId } = req.body;
+    const { planId, durationMonths = 1 } = req.body;
     const businessId = req.user.businessId;
 
     if (!planId) return errorResponse(res, 400, 'planId is required');
@@ -81,18 +81,22 @@ const createSubscriptionOrder = async (req, res, next) => {
     const { data: plan } = await supabase.from('plans').select('*').eq('id', planId).maybeSingle();
     if (!plan || !plan.is_active) return errorResponse(res, 404, 'Plan not found');
 
+    const durationOption = (plan.duration_options || []).find(d => d.months === durationMonths);
+    if (!durationOption) return errorResponse(res, 400, `Duration of ${durationMonths} months is not available for this plan`);
+
     const order = await razorpay.orders.create({
-      amount: plan.price * 100, // paise
+      amount: durationOption.price * 100, // paise
       currency: 'INR',
       receipt: `sub_${Date.now()}`, // Max 40 chars: "sub_" + 13 digits = 17 chars
       notes: {
         businessId: businessId.toString(),
         planId: planId.toString(),
-        planName: plan.name
+        planName: plan.name,
+        durationMonths: durationMonths.toString()
       }
     });
 
-    logger.info(`Razorpay order created: ${order.id} for business ${businessId}`);
+    logger.info(`Razorpay order created: ${order.id} for business ${businessId}, ${durationMonths} months`);
     return successResponse(res, 200, {
       orderId: order.id,
       amount: order.amount,
@@ -101,8 +105,9 @@ const createSubscriptionOrder = async (req, res, next) => {
         _id: plan.id,
         name: plan.name,
         displayName: plan.display_name,
-        price: plan.price
-      }
+        price: durationOption.price
+      },
+      durationMonths
     });
   } catch (error) {
     logger.error('Error in createSubscriptionOrder:', error);
@@ -120,7 +125,8 @@ const verifyAndActivate = async (req, res, next) => {
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
-      planId
+      planId,
+      durationMonths = 1
     } = req.body;
     const businessId = req.user.businessId;
 
@@ -143,7 +149,8 @@ const verifyAndActivate = async (req, res, next) => {
     const subscription = await subscriptionService.createSubscription(businessId, planId, {
       status: 'active',
       razorpayPaymentId: razorpay_payment_id,
-      razorpaySubscriptionId: razorpay_order_id
+      razorpaySubscriptionId: razorpay_order_id,
+      durationMonths
     });
 
     const { data: populated, error } = await supabase

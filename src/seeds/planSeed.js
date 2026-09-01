@@ -8,19 +8,37 @@ const plans = [
     name: 'basic', display_name: 'Basic', price: 199,
     msg_limit: 500, rule_limit: 10, customer_limit: 100,
     booking_enabled: true, payment_link_enabled: false,
-    staff_enabled: false, max_staff: 0, is_active: true
+    staff_enabled: false, max_staff: 0, is_active: true,
+    duration_options: [
+      { months: 1,  price: 199,  label: 'Monthly',     discount: 0 },
+      { months: 3,  price: 537,  label: 'Quarterly',   discount: 10 },
+      { months: 6,  price: 954,  label: 'Half-Yearly', discount: 20 },
+      { months: 12, price: 1672, label: 'Yearly',      discount: 30 }
+    ]
   },
   {
     name: 'pro', display_name: 'Pro', price: 399,
     msg_limit: 2000, rule_limit: 50, customer_limit: 500,
     booking_enabled: true, payment_link_enabled: true,
-    staff_enabled: true, max_staff: 2, is_active: true
+    staff_enabled: true, max_staff: 2, is_active: true,
+    duration_options: [
+      { months: 1,  price: 399,  label: 'Monthly',     discount: 0 },
+      { months: 3,  price: 1077, label: 'Quarterly',   discount: 10 },
+      { months: 6,  price: 1916, label: 'Half-Yearly', discount: 20 },
+      { months: 12, price: 3352, label: 'Yearly',      discount: 30 }
+    ]
   },
   {
     name: 'business', display_name: 'Business', price: 699,
     msg_limit: -1, rule_limit: -1, customer_limit: -1,
     booking_enabled: true, payment_link_enabled: true,
-    staff_enabled: true, max_staff: 5, is_active: true
+    staff_enabled: true, max_staff: 5, is_active: true,
+    duration_options: [
+      { months: 1,  price: 699,  label: 'Monthly',     discount: 0 },
+      { months: 3,  price: 1887, label: 'Quarterly',   discount: 10 },
+      { months: 6,  price: 3356, label: 'Half-Yearly', discount: 20 },
+      { months: 12, price: 5872, label: 'Yearly',      discount: 30 }
+    ]
   }
 ];
 
