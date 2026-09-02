@@ -5,13 +5,23 @@ software/IT services verticals so far). Node/Express + Supabase (Postgres)
 + Upstash Redis + BullMQ. Owner: Suresh Gavali (Averix Solutions Pvt Ltd).
 
 **No production customers yet.** SG Travels (business_id
-`b92113c1-8692-46d5-b377-998c6541486f`, `business_category='travels'`) and
-Averix Solutions (business_id `6e918384-2a7e-4342-8ab4-2b9cecbe791d`,
-`business_category='software_it'`) are both TEST accounts under the
+`b92113c1-8692-46d5-b377-998c6541486f`, `business_category='travels'`,
+wiped and recreated fresh on 2026-08-29) and Averix Solutions (business_id
+`014a3f2a-6a32-4c44-82df-ec6a298a2caa`, `business_category='travels'`,
+deleted and recreated on 2026-09-02) are both TEST accounts under the
 owner's control — freely resettable, no real customer data to protect.
-Both were wiped and recreated fresh on 2026-08-29; these are the current
-ids (confirmed live 2026-09-02). This will change once ad traffic starts;
-update this line when it does.
+
+Averix's business_id and category both changed on 2026-09-02: the prior
+row (`6e918384-2a7e-4342-8ab4-2b9cecbe791d`, `business_category=
+'software_it'`) no longer exists — it was deliberately deleted and
+recreated under `business_category='travels'` to serve as a second QA
+test business for the canvas/booking-flow test plan, not as a distinct
+software_it test case anymore. Confirmed live 2026-09-02. Because of
+this, `business_category` can no longer be assumed unique per category —
+code that looks up "the" business for a category (e.g. the old
+`verifyBookingGraph.js` lookup) needs an explicit business id instead;
+see that script's header for the fix. This will change once ad traffic
+starts; update this line when it does.
 
 ## Current architecture — ONE booking engine
 
@@ -204,6 +214,16 @@ tracked as a deferred "future initiative" — it's built and live.
    model reference above; not investigated this pass.
 
 ## Session log (append here as major milestones land)
+- 2026-09-02: Averix Solutions deleted and recreated as a second QA test
+  business, `business_category='travels'` (business_id
+  `014a3f2a-6a32-4c44-82df-ec6a298a2caa`, replacing the old
+  `6e918384-2a7e-4342-8ab4-2b9cecbe791d` / `software_it` row) — deliberate,
+  for the canvas/booking-flow test plan, not a bug. This broke
+  `verifyBookingGraph.js`'s `.eq('business_category', 'travels')
+  .maybeSingle()` business lookup (PGRST116, 2 rows returned) since
+  category is no longer unique per business; fixed by making business
+  selection explicit (`--business=<id>` / `BUSINESS_ID` env var,
+  defaulting to SG Travels) instead of category-derived.
 - 2026-09-02: PRD.md rewritten to reflect single-engine reality — every
   claim in this rewrite (table drops, business ids, entry-node wiring,
   flow_snapshots schema/row counts, Averix's `booking_engine`) verified

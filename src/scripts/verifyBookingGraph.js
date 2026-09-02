@@ -33,7 +33,23 @@
 // first, matching this script's own real-entry-point lookup below — every
 // branch here collects and asserts a real `tripType` value again.
 //
+// Business selection is EXPLICIT, not derived from business_category.
+// Originally this looked up the business via
+// `.eq('business_category', 'travels').maybeSingle()`, which crashed
+// (PGRST116, "2 rows returned") once a second travels-category business
+// existed: Averix Solutions was deliberately deleted and recreated on
+// 2026-09-02 with `business_category='travels'` as a QA test business for
+// the canvas/booking-flow test plan (see PRD.md), so category is no longer
+// a unique key. All the SCRIPTED_REPLIES/expected values below are pinned
+// to SG Travels' real flow_nodes/route_fares/vehicles data specifically —
+// running this against a different business's id will fail every branch
+// unless the branches/expectations are rewritten for that business's flow.
+//
 // Usage: node src/scripts/verifyBookingGraph.js
+//        node src/scripts/verifyBookingGraph.js --business=<businessId>
+//        BUSINESS_ID=<businessId> node src/scripts/verifyBookingGraph.js
+// Defaults to SG Travels (b92113c1-8692-46d5-b377-998c6541486f) if neither
+// is given. --business=<id> takes precedence over BUSINESS_ID.
 
 require('dotenv').config();
 
@@ -71,6 +87,15 @@ const bookingService = require('../services/booking.service');
 const bookingGraph = require('../services/bookingGraph.service');
 
 const TEST_CUSTOMER_NUMBER = 'VERIFY_BOOKING_GRAPH_TEST';
+
+const DEFAULT_BUSINESS_ID = 'b92113c1-8692-46d5-b377-998c6541486f'; // SG Travels
+
+function resolveBusinessId() {
+  const cliArg = process.argv.find(arg => arg.startsWith('--business='));
+  if (cliArg) return cliArg.slice('--business='.length);
+  if (process.env.BUSINESS_ID) return process.env.BUSINESS_ID;
+  return DEFAULT_BUSINESS_ID;
+}
 
 // vehicle_carousel options carry a distinct shape (vehicle/fare choice, not
 // a value/label choice) — see buildVehicleCarouselOptions/
@@ -224,10 +249,11 @@ function assertCollected(actual, expected) {
 }
 
 async function main() {
+  const businessId = resolveBusinessId();
   const { data: business, error: bizErr } = await supabase
-    .from('businesses').select('id, name').eq('business_category', 'travels').maybeSingle();
+    .from('businesses').select('id, name').eq('id', businessId).maybeSingle();
   if (bizErr) throw bizErr;
-  if (!business) throw new Error("No business found with business_category = 'travels'.");
+  if (!business) throw new Error(`No business found with id ${businessId}.`);
 
   // Safety net: clear out anything a previous failed/interrupted run left behind.
   await cleanupTestData(business.id);
