@@ -29,6 +29,8 @@ const rateCardRoutes = require('./routes/rateCard.routes');
 const flowGraphRoutes = require('./routes/flowGraph.routes');
 const flowSnapshotRoutes = require('./routes/flowSnapshot.routes');
 const categoryTemplateRoutes = require('./routes/categoryTemplate.routes');
+const nodeLibraryRoutes = require('./routes/nodeLibrary.routes');
+const nodeLibraryPublicRoutes = require('./routes/nodeLibraryPublic.routes');
 const reportsRoutes = require('./routes/reports.routes');
 
 const app = express();
@@ -101,6 +103,7 @@ app.use('/api/staff', staffRoutes);
 app.use('/api/admin/vehicle-catalog', vehicleCatalogRoutes);
 app.use('/api/admin/rate-cards', rateCardRoutes);
 app.use('/api/admin/category-templates', categoryTemplateRoutes);
+app.use('/api/admin/node-library', nodeLibraryRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/vehicles', vehicleRoutes);
@@ -110,6 +113,7 @@ app.use('/api/message-templates', messageTemplateRoutes);
 app.use('/api/broadcasts', broadcastRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/flow-graph/snapshots', flowSnapshotRoutes);
+app.use('/api/flow-graph/library', nodeLibraryPublicRoutes);
 app.use('/api/flow-graph', flowGraphRoutes);
 app.use('/api/reports', reportsRoutes);
 
