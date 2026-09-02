@@ -359,6 +359,22 @@ const deleteBookingSession = async (businessId, customerNumber) => {
 };
 
 /**
+ * Records that a booking session started (a "lead"), for reports-feature
+ * conversion tracking — deliberately separate from whether it ever reaches
+ * createBookingAndConfirmation. Throws on failure so callers can fire-and-forget
+ * with .catch(), matching this codebase's non-critical-write convention.
+ * @param {string} businessId
+ * @param {string} customerId
+ */
+const recordBookingLead = async (businessId, customerId) => {
+  const { error } = await supabase.from('booking_leads').insert({
+    business_id: businessId,
+    customer_id: customerId
+  });
+  if (error) throw error;
+};
+
+/**
  * Shared booking-completion tail for both engines: insert the `bookings` row,
  * delete the Redis session, bump usage, build the WhatsApp confirmation text,
  * and emit the `new_booking` socket event. Extracted verbatim out of
@@ -419,7 +435,8 @@ const createBookingAndConfirmation = async (businessId, customerNumber, collecte
     status: 'pending',
     fields: collected,
     payment_status: advanceAmount !== null ? 'pending' : 'not_required',
-    booking_code: bookingCode
+    booking_code: bookingCode,
+    fare_amount: collected.vehicleFare ?? null
   };
   if (advanceAmount !== null) {
     bookingInsert.payment_amount = advanceAmount;
@@ -662,6 +679,7 @@ module.exports = {
   getBookingSession,
   saveBookingSession,
   deleteBookingSession,
+  recordBookingLead,
   findMatchingVehicleOptions,
   getVehicleCarouselPreview,
   getPreviewCreditsStatus,

@@ -29,6 +29,7 @@ const rateCardRoutes = require('./routes/rateCard.routes');
 const flowGraphRoutes = require('./routes/flowGraph.routes');
 const flowSnapshotRoutes = require('./routes/flowSnapshot.routes');
 const categoryTemplateRoutes = require('./routes/categoryTemplate.routes');
+const reportsRoutes = require('./routes/reports.routes');
 
 const app = express();
 
@@ -110,6 +111,7 @@ app.use('/api/broadcasts', broadcastRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/flow-graph/snapshots', flowSnapshotRoutes);
 app.use('/api/flow-graph', flowGraphRoutes);
+app.use('/api/reports', reportsRoutes);
 
 // Error handler middleware
 app.use(errorHandler);

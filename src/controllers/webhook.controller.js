@@ -1131,6 +1131,9 @@ const receiveWebhook = async (req, res) => {
         customer.preferredLanguage
       );
       await bookingService.saveBookingSession(tenant.businessId, customerNumber, newBookingSession);
+      bookingService.recordBookingLead(tenant.businessId, customer.id).catch(err =>
+        logger.error('Error recording booking lead:', err)
+      );
       bookingField = firstField;
       replyText = applyMessageTemplate(firstField.label, tenant, customer);
 
@@ -1153,6 +1156,9 @@ const receiveWebhook = async (req, res) => {
           customer.preferredLanguage
         );
         await bookingService.saveBookingSession(tenant.businessId, customerNumber, newBookingSession);
+        bookingService.recordBookingLead(tenant.businessId, customer.id).catch(err =>
+          logger.error('Error recording booking lead:', err)
+        );
         bookingField = firstField;
         replyText = applyMessageTemplate(firstField.label, tenant, customer);
 
