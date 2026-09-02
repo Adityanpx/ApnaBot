@@ -50,6 +50,11 @@ router.delete('/question-nodes/:id', requireRole('owner'), flowGraphController.d
 // Registered before /edges so it's unambiguous as its own literal path.
 router.get('/full', flowGraphController.getFullGraph);
 
+// PUT /full - Batch-save the entire desired end state (canvas editor save
+// button). Diffs against current DB state; validates the proposed end state
+// as a whole before writing anything - see flowGraph.controller.js#saveFullGraph.
+router.put('/full', requireRole('owner'), flowGraphController.saveFullGraph);
+
 // GET /edges?fromNodeId= - Outgoing edges for one node
 router.get('/edges', flowGraphController.getEdges);
 

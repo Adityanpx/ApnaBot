@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const { invalidateRulesCache } = require('../services/chatbot.service');
 const bookingGraphService = require('../services/bookingGraph.service');
@@ -841,6 +842,381 @@ const getFullGraph = async (req, res, next) => {
 };
 
 /**
+ * PUT /api/flow-graph/full
+ * Batch-save the entire desired end state for this business's graph in one
+ * round trip (the canvas editor's save button) — { replyNodes, questionNodes,
+ * edges }, same node/edge shape as GET /full's response, each node also
+ * optionally carrying positionX/positionY. Every node/edge either names a
+ * real existing id (an edit) or omits its id / uses a client-generated temp
+ * id never yet saved (a brand-new row, minted a real id here). Every current
+ * DB row NOT named anywhere in the payload is deleted.
+ *
+ * This is a DIFF against current state, not a blind replace — see the
+ * per-array loops below. The proposed end state is validated as a whole
+ * (findCycles/findUnreachableNodes via assertGraphStillValid, exactly as if
+ * it were the new live graph) BEFORE anything is written; on any validation
+ * failure this writes nothing and returns 400. The actual write is one call
+ * to save_flow_graph_full (see its migration's doc comment for why this
+ * needs to be a single RPC rather than a sequence of supabase-js calls:
+ * PostgREST has no cross-call transaction boundary, so a partial failure
+ * here would otherwise leave flow_nodes/flow_edges — read by the live
+ * booking engine mid-session — in a half-applied state).
+ *
+ * Deliberate deviations from a literal per-instruction port, flagged rather
+ * than silently decided:
+ *   - Computed nodes (is_computed=true: vehicle_carousel/rentalPackage) have
+ *     no delete path ANYWHERE in this API today (createQuestionNode can
+ *     create one, updateQuestionNode/deleteQuestionNode are both scoped to
+ *     node_type='question' and simply 404 for one). Letting "omitted from
+ *     the payload" silently delete one here would be a first-ever, unguarded
+ *     way to remove a node bookingGraph.service.js's fallbackToStaticSibling
+ *     can throw on mid-booking if it goes missing. Blocked outright instead
+ *     (see the nodeDeletes check below) — the only edit batch save accepts
+ *     for one of these is position.
+ *   - findFallbackSiblingNodeIds is run against the CURRENT graph (pre-edit),
+ *     not the proposed end state, then cross-referenced against this diff's
+ *     node deletes — running it against the proposed state the way
+ *     findCycles/findUnreachableNodes are run would never flag anything,
+ *     because a node being deleted is by definition absent from the proposed
+ *     state and so can never appear in a fallback-sibling id list computed
+ *     from it. This mirrors exactly what deleteQuestionNode already does
+ *     (compute fallback-sibling status from the graph as it stands right
+ *     before the delete).
+ *   - The reserved-field-key guard is re-checked for deletes only, per spec.
+ *     updateQuestionNode's rename-away-from-reserved-key guard is NOT ported
+ *     to batch save — a batch save could still rename tripType/pickupLocation
+ *     /etc. away from their reserved key without being blocked here. Flagging
+ *     this as a known gap, not fixing it silently.
+ *   - The servedCities/pickupLocation-dropLocation options-override conflict
+ *     guard and the "switching a reply node's contentType to text while it
+ *     still has outgoing edges" guard (both in the single-node PUT handlers)
+ *     are also NOT ported — neither is a data-corruption/live-crash risk the
+ *     way the two guards above are, and porting them means re-deriving
+ *     "what specifically changed" per node against its old row, which this
+ *     diff doesn't otherwise need. Left as a follow-up candidate.
+ */
+const saveFullGraph = async (req, res, next) => {
+  try {
+    const businessId = req.user.businessId;
+    const { replyNodes = [], questionNodes = [], edges = [] } = req.body;
+
+    if (!Array.isArray(replyNodes) || !Array.isArray(questionNodes) || !Array.isArray(edges)) {
+      return errorResponse(res, 400, 'replyNodes, questionNodes, and edges must all be arrays.');
+    }
+
+    const [currentNodesRes, currentEdgesRes] = await Promise.all([
+      supabase.from('flow_nodes').select('*').eq('business_id', businessId),
+      supabase.from('flow_edges').select('*').eq('business_id', businessId)
+    ]);
+    if (currentNodesRes.error) throw currentNodesRes.error;
+    if (currentEdgesRes.error) throw currentEdgesRes.error;
+    const currentNodeById = new Map((currentNodesRes.data || []).map(n => [n.id, n]));
+    const currentEdgeById = new Map((currentEdgesRes.data || []).map(e => [e.id, e]));
+
+    const idMap = new Map();        // client-supplied temp id -> minted real id (new nodes only)
+    const keepNodeIds = new Set();  // final surviving node ids (matched-existing or newly minted)
+    const nodeUpserts = [];         // snake_case rows for the RPC
+    const proposedNodes = [];       // camelCase {id, nodeType, fieldKey, replyKind} for validation
+
+    const seenKeywords = new Set();
+    for (let i = 0; i < replyNodes.length; i++) {
+      const item = replyNodes[i] || {};
+      const providedId = item.id;
+      const existing = providedId ? currentNodeById.get(providedId) : undefined;
+      if (existing && existing.node_type !== 'reply') {
+        return errorResponse(res, 400, `replyNodes[${i}]: id "${providedId}" belongs to a non-reply node.`);
+      }
+
+      const {
+        keyword, matchType = 'contains', replyKind = 'text', contentType = 'text',
+        imageUrl = null, hindiAliases = [], labelTranslations = null, isActive = true,
+        positionX = null, positionY = null
+      } = item;
+      let { label } = item;
+
+      if (!keyword || typeof keyword !== 'string') {
+        return errorResponse(res, 400, `replyNodes[${i}]: keyword is required`);
+      }
+      if (!VALID_MATCH_TYPES.includes(matchType)) {
+        return errorResponse(res, 400, `replyNodes[${i}]: matchType must be one of: ${VALID_MATCH_TYPES.join(', ')}`);
+      }
+      if (!VALID_CONTENT_TYPES.includes(contentType)) {
+        return errorResponse(res, 400, `replyNodes[${i}]: contentType must be one of: ${VALID_CONTENT_TYPES.join(', ')}`);
+      }
+      if (!VALID_REPLY_KINDS.includes(replyKind)) {
+        return errorResponse(res, 400, `replyNodes[${i}]: replyKind must be one of: ${VALID_REPLY_KINDS.join(', ')}`);
+      }
+      if (hindiAliases !== undefined && !Array.isArray(hindiAliases)) {
+        return errorResponse(res, 400, `replyNodes[${i}]: hindiAliases must be an array of strings.`);
+      }
+      const replyLabelTranslationsError = validateTranslationsMap(labelTranslations, `replyNodes[${i}].labelTranslations`);
+      if (replyLabelTranslationsError) return errorResponse(res, 400, replyLabelTranslationsError);
+
+      if (replyKind === 'payment_trigger' && !label) label = 'Please complete your payment.';
+      if (replyKind === 'booking_trigger' && !label) label = 'Great! Let me collect your details.';
+      if (!label && !imageUrl) {
+        return errorResponse(res, 400, `replyNodes[${i}]: label is required (unless imageUrl is provided)`);
+      }
+      if (!label) label = '';
+
+      const normalizedKeyword = keyword.toLowerCase().trim();
+      if (seenKeywords.has(normalizedKeyword)) {
+        return errorResponse(res, 400, `replyNodes[${i}]: duplicate keyword "${normalizedKeyword}" among replyNodes in this save.`);
+      }
+      seenKeywords.add(normalizedKeyword);
+
+      const id = existing ? existing.id : crypto.randomUUID();
+      if (providedId && providedId !== id) idMap.set(providedId, id);
+      keepNodeIds.add(id);
+
+      nodeUpserts.push({
+        id, node_type: 'reply', keyword: normalizedKeyword, match_type: matchType,
+        hindi_aliases: (hindiAliases || []).map(a => a.trim()).filter(Boolean),
+        reply_kind: replyKind, trigger_count: existing ? existing.trigger_count : 0,
+        content_type: contentType, label, label_translations: labelTranslations || null,
+        image_url: imageUrl || null, field_key: null, summary_label: null, required: false,
+        order: null, options: [], is_computed: false, is_active: isActive,
+        position_x: positionX, position_y: positionY
+      });
+      proposedNodes.push({ id, nodeType: 'reply', replyKind, fieldKey: null });
+    }
+
+    for (let i = 0; i < questionNodes.length; i++) {
+      const item = questionNodes[i] || {};
+      const providedId = item.id;
+      const existing = providedId ? currentNodeById.get(providedId) : undefined;
+      if (existing && existing.node_type === 'reply') {
+        return errorResponse(res, 400, `questionNodes[${i}]: id "${providedId}" belongs to a reply node.`);
+      }
+
+      const nodeType = item.nodeType !== undefined ? item.nodeType : (existing ? existing.node_type : 'question');
+      if (existing && existing.node_type !== nodeType) {
+        return errorResponse(res, 400,
+          `questionNodes[${i}]: nodeType cannot change for an existing node (was "${existing.node_type}").`);
+      }
+
+      // Computed nodes are read-only everywhere else in this API (see doc
+      // comment above) — batch save only ever lets position change for one.
+      if (existing && existing.is_computed) {
+        const { positionX = existing.position_x ?? null, positionY = existing.position_y ?? null } = item;
+        keepNodeIds.add(existing.id);
+        nodeUpserts.push({ ...existing, position_x: positionX, position_y: positionY });
+        proposedNodes.push({ id: existing.id, nodeType: existing.node_type, replyKind: null, fieldKey: existing.field_key });
+        continue;
+      }
+
+      if (!VALID_QUESTION_NODE_TYPES.includes(nodeType)) {
+        return errorResponse(res, 400, `questionNodes[${i}]: nodeType must be one of: ${VALID_QUESTION_NODE_TYPES.join(', ')}`);
+      }
+      const isComputed = nodeType === 'vehicle_carousel';
+
+      const {
+        fieldKey, contentType = 'text', summaryLabel = null, required = false, order = null,
+        options = [], labelTranslations = null, imageUrl = null, label,
+        positionX = null, positionY = null
+      } = item;
+
+      if (!fieldKey || typeof fieldKey !== 'string') {
+        return errorResponse(res, 400, `questionNodes[${i}]: fieldKey is required`);
+      }
+      if (!label || typeof label !== 'string') {
+        return errorResponse(res, 400, `questionNodes[${i}]: label is required`);
+      }
+      if (typeof required !== 'boolean') {
+        return errorResponse(res, 400, `questionNodes[${i}]: required must be a boolean`);
+      }
+      if (order !== null && order !== undefined && typeof order !== 'number') {
+        return errorResponse(res, 400, `questionNodes[${i}]: order must be a number or null`);
+      }
+      const questionLabelTranslationsError = validateLabelTranslations(labelTranslations, `questionNodes[${i}].labelTranslations`);
+      if (questionLabelTranslationsError) return errorResponse(res, 400, questionLabelTranslationsError);
+
+      if (isComputed) {
+        if (Array.isArray(options) && options.length > 0) {
+          return errorResponse(res, 400,
+            `questionNodes[${i}]: options must not be provided for a vehicle_carousel node.`);
+        }
+      } else {
+        if (!VALID_CONTENT_TYPES.includes(contentType)) {
+          return errorResponse(res, 400, `questionNodes[${i}]: contentType must be one of: ${VALID_CONTENT_TYPES.join(', ')}`);
+        }
+        if ((contentType === 'buttons' || contentType === 'list') && (!Array.isArray(options) || options.length === 0)) {
+          return errorResponse(res, 400, `questionNodes[${i}]: options must have at least one entry for contentType "${contentType}"`);
+        }
+        for (const opt of options || []) {
+          if (opt && typeof opt === 'object') {
+            const optErr = validateLabelTranslations(opt.labelTranslations, `questionNodes[${i}] option "${opt.value}" labelTranslations`);
+            if (optErr) return errorResponse(res, 400, optErr);
+          }
+        }
+      }
+
+      const id = existing ? existing.id : crypto.randomUUID();
+      if (providedId && providedId !== id) idMap.set(providedId, id);
+      keepNodeIds.add(id);
+
+      nodeUpserts.push({
+        id, node_type: nodeType, keyword: null, match_type: null, hindi_aliases: [],
+        reply_kind: null, trigger_count: existing ? existing.trigger_count : 0,
+        content_type: isComputed ? 'list' : contentType,
+        label, label_translations: labelTranslations || null, image_url: imageUrl || null,
+        field_key: fieldKey, summary_label: summaryLabel, required, order,
+        options: isComputed ? [] : (options || []), is_computed: isComputed,
+        is_active: existing ? existing.is_active : true,
+        position_x: positionX, position_y: positionY
+      });
+      proposedNodes.push({ id, nodeType, replyKind: null, fieldKey });
+    }
+
+    const proposedNodeById = new Map(proposedNodes.map(n => [n.id, n]));
+    const knownFieldKeys = new Set(
+      proposedNodes
+        .filter(n => ['question', 'vehicle_carousel', 'rentalPackage'].includes(n.nodeType) && n.fieldKey)
+        .map(n => n.fieldKey)
+    );
+
+    const edgeUpserts = [];
+    const proposedEdges = [];
+    const resolveNodeRef = (rawId) => {
+      if (idMap.has(rawId)) return idMap.get(rawId);
+      if (keepNodeIds.has(rawId)) return rawId;
+      return null;
+    };
+
+    for (let i = 0; i < edges.length; i++) {
+      const item = edges[i] || {};
+      const providedId = item.id;
+      const existingEdge = providedId ? currentEdgeById.get(providedId) : undefined;
+
+      const {
+        fromNodeId: rawFrom, toNodeId: rawTo, label = null, labelTranslations = null,
+        description = null, descriptionTranslations = null, condition = null, displayOrder
+      } = item;
+
+      if (!rawFrom || !rawTo) {
+        return errorResponse(res, 400, `edges[${i}]: fromNodeId and toNodeId are required`);
+      }
+      const fromNodeId = resolveNodeRef(rawFrom);
+      const toNodeId = resolveNodeRef(rawTo);
+      if (!fromNodeId) return errorResponse(res, 400, `edges[${i}]: fromNodeId "${rawFrom}" does not resolve to any node in this save`);
+      if (!toNodeId) return errorResponse(res, 400, `edges[${i}]: toNodeId "${rawTo}" does not resolve to any node in this save`);
+
+      const fromNode = proposedNodeById.get(fromNodeId);
+      if (fromNode && fromNode.nodeType === 'vehicle_carousel') {
+        return errorResponse(res, 400,
+          `edges[${i}]: vehicle_carousel nodes cannot have outgoing edges — the post-selection flow is handled entirely in bookingGraph.service.js, not by edges.`);
+      }
+
+      const edgeLabelTranslationsError = validateTranslationsMap(labelTranslations, `edges[${i}].labelTranslations`);
+      if (edgeLabelTranslationsError) return errorResponse(res, 400, edgeLabelTranslationsError);
+      const edgeDescriptionTranslationsError = validateTranslationsMap(descriptionTranslations, `edges[${i}].descriptionTranslations`);
+      if (edgeDescriptionTranslationsError) return errorResponse(res, 400, edgeDescriptionTranslationsError);
+
+      const conditionShapeError = validateConditionShape(condition);
+      if (conditionShapeError) return errorResponse(res, 400, `edges[${i}]: ${conditionShapeError}`);
+      if (condition) {
+        const conditionFieldError = validateConditionField(condition, knownFieldKeys);
+        if (conditionFieldError) return errorResponse(res, 400, `edges[${i}]: ${conditionFieldError}`);
+      }
+
+      if (displayOrder !== undefined && typeof displayOrder !== 'number') {
+        return errorResponse(res, 400, `edges[${i}]: displayOrder must be a number`);
+      }
+
+      const id = existingEdge ? existingEdge.id : crypto.randomUUID();
+
+      edgeUpserts.push({
+        id, from_node_id: fromNodeId, to_node_id: toNodeId, label,
+        label_translations: labelTranslations || null, description,
+        description_translations: descriptionTranslations || null,
+        condition: condition || null, display_order: displayOrder !== undefined ? displayOrder : 0
+      });
+      proposedEdges.push({ id, fromNodeId, toNodeId, condition: condition || null });
+    }
+
+    // ---- deletes: every current row not named anywhere in the payload ----
+    const nodeDeletes = [];
+    for (const row of currentNodeById.values()) {
+      if (!keepNodeIds.has(row.id)) nodeDeletes.push(row);
+    }
+    const keepEdgeIds = new Set(proposedEdges.map(e => e.id));
+    const edgeDeleteIds = [];
+    for (const row of currentEdgeById.values()) {
+      if (!keepEdgeIds.has(row.id)) edgeDeleteIds.push(row.id);
+    }
+
+    // Computed nodes have no delete path anywhere in this API (see doc
+    // comment above) — reject outright rather than silently deleting one
+    // because the payload omitted it.
+    const computedDelete = nodeDeletes.find(n => n.is_computed);
+    if (computedDelete) {
+      return errorResponse(res, 400,
+        `Cannot delete computed node (fieldKey "${computedDelete.field_key}", id ${computedDelete.id}) via batch save — ` +
+        'vehicle_carousel/rentalPackage nodes have no delete path anywhere in this API. Include it in questionNodes (position-only edits are fine) rather than omitting it.'
+      );
+    }
+
+    // Reserved-field-key guard, deletes only (see doc comment above).
+    if (TRAVEL_CATEGORIES_WITH_RESERVED_FIELDS.includes(req.graphBusiness.businessCategory)) {
+      const reservedDelete = nodeDeletes.find(n => n.field_key && RESERVED_TRAVEL_FIELD_KEYS.includes(n.field_key));
+      if (reservedDelete) {
+        return errorResponse(res, 400,
+          `Cannot delete: fieldKey "${reservedDelete.field_key}" has special booking-flow behavior hardcoded in bookingGraph.service.js.`
+        );
+      }
+    }
+
+    // Fallback-sibling guard, computed against the CURRENT graph (see doc
+    // comment above for why proposed-state is the wrong graph to check this
+    // against), cross-referenced against this diff's node deletes.
+    const currentNodesCamel = (currentNodesRes.data || []).map(toCamelCase);
+    const currentEdgesCamel = (currentEdgesRes.data || []).map(toCamelCase);
+    const currentEntryNodeIds = resolveBookingTriggerEntryNodeIds(currentNodesCamel, currentEdgesCamel);
+    const fallbackSiblingIds = new Set(findFallbackSiblingNodeIds(currentNodesCamel, currentEdgesCamel, currentEntryNodeIds));
+    const fallbackSiblingDelete = nodeDeletes.find(n => fallbackSiblingIds.has(n.id));
+    if (fallbackSiblingDelete) {
+      return errorResponse(res, 400,
+        `Cannot delete node (fieldKey "${fallbackSiblingDelete.field_key}", id ${fallbackSiblingDelete.id}) — ` +
+        'it has no incoming edge, but another node shares its fieldKey and IS reachable, meaning it may be a live runtime fallback path. ' +
+        'Use the single-node delete endpoint instead, where this same check applies with a fuller explanation of the two possible situations.'
+      );
+    }
+
+    // Whole-proposed-state validation — cycles (absolute) and reachability
+    // (differential against the current graph), same logic every surgical
+    // node/edge write already goes through. transformFn ignores the graph
+    // assertGraphStillValid loads for its own "before" baseline and returns
+    // this diff's already-computed proposed state instead.
+    const validationError = await assertGraphStillValid(businessId, () => ({
+      nodes: proposedNodes,
+      edges: proposedEdges
+    }));
+    if (validationError) {
+      return errorResponse(res, 400, validationError);
+    }
+
+    const { error: rpcError } = await supabase.rpc('save_flow_graph_full', {
+      p_business_id: businessId,
+      p_node_upserts: nodeUpserts,
+      p_node_deletes: nodeDeletes.map(n => n.id),
+      p_edge_upserts: edgeUpserts,
+      p_edge_deletes: edgeDeleteIds
+    });
+    if (rpcError) throw rpcError;
+
+    await invalidateRulesCache(businessId);
+
+    // Re-fetch rather than reconstruct client-side, so the response carries
+    // authoritative saved values (real ids for anything newly inserted,
+    // trigger_count, timestamps) in the same shape GET /full already returns.
+    return getFullGraph(req, res, next);
+  } catch (error) {
+    logger.error('Error in saveFullGraph:', error);
+    next(error);
+  }
+};
+
+/**
  * GET /api/flow-graph/edges?fromNodeId=
  * Outgoing edges for one node, ordered by displayOrder.
  */
@@ -1158,6 +1534,7 @@ module.exports = {
   updateQuestionNode,
   deleteQuestionNode,
   getFullGraph,
+  saveFullGraph,
   getEdges,
   createEdge,
   updateEdge,
