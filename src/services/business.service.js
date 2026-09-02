@@ -107,7 +107,7 @@ const createBusiness = async (ownerUserId, data) => {
     // literal empty graph exactly as before; the owner builds it from
     // scratch via /api/flow-graph.
     const { data: template, error: templateErr } = await supabase
-      .from('flow_snapshots').select('nodes, edges')
+      .from('flow_snapshots').select('name, nodes, edges')
       .eq('category', businessCategory).eq('is_category_template', true).eq('is_active', true)
       .maybeSingle();
     if (templateErr) throw templateErr;
@@ -117,6 +117,11 @@ const createBusiness = async (ownerUserId, data) => {
         reuseIds: false,
         resetTriggerCount: true
       });
+
+      const { error: seedNameErr } = await supabase
+        .from('businesses').update({ seeded_from_template_name: template.name }).eq('id', business.id);
+      if (seedNameErr) throw seedNameErr;
+      business.seeded_from_template_name = template.name;
     }
 
     return toCamelCase(business);
