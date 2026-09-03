@@ -22,6 +22,11 @@ router.post('/', requireRole('owner'), flowSnapshotController.createSnapshot);
 // collide (different literal suffixes).
 router.post('/import-category-template', requireRole('owner'), flowSnapshotController.importCategoryTemplate);
 
+// POST /start-blank - Wipes this business's current graph entirely (back to
+// a literal empty graph). Registered before /:id/restore for the same
+// non-colliding-suffix reasoning as import-category-template above.
+router.post('/start-blank', requireRole('owner'), flowSnapshotController.startBlankFlow);
+
 // POST /:id/restore - Full replace of this business's current graph with one
 // of its own saved snapshots
 router.post('/:id/restore', requireRole('owner'), flowSnapshotController.restoreSnapshot);

@@ -190,10 +190,41 @@ const importCategoryTemplate = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/flow-graph/snapshots/start-blank
+ * Wipes this business's current flow_nodes/flow_edges entirely, going back
+ * to a literal empty graph. Uses the same raw-delete path restoreSnapshot/
+ * importCategoryTemplate use (deleteBusinessGraphRows) — no reserved-
+ * fieldKey/incoming-edge/fallback-sibling guard checks apply here, since
+ * this is an explicit owner-confirmed wipe, not an accidental single-node
+ * delete via /api/flow-graph.
+ *
+ * Also unsets is_active on every non-template snapshot for this business:
+ * none of them describe the current (now blank) live graph anymore.
+ */
+const startBlankFlow = async (req, res, next) => {
+  try {
+    const businessId = req.user.businessId;
+
+    await deleteBusinessGraphRows(businessId);
+
+    const { error: unsetErr } = await supabase
+      .from('flow_snapshots').update({ is_active: false })
+      .eq('business_id', businessId).eq('is_category_template', false);
+    if (unsetErr) throw unsetErr;
+
+    return successResponse(res, 200, null, 'Flow reset to blank successfully');
+  } catch (error) {
+    logger.error('Error in startBlankFlow:', error);
+    next(error);
+  }
+};
+
 module.exports = {
   createSnapshot,
   getSnapshots,
   restoreSnapshot,
   deleteSnapshot,
-  importCategoryTemplate
+  importCategoryTemplate,
+  startBlankFlow
 };
