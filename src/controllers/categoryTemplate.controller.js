@@ -105,8 +105,109 @@ const deleteCategoryTemplate = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/admin/category-templates/:id/export
+ * Direct passthrough of the stored flow_snapshots row's nodes/edges
+ * columns (raw snake_case, original ids) — same shape readBusinessGraphRows
+ * / cloneFromBusiness already work with. No transformation needed.
+ */
+const exportTemplateJson = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const { data: template, error } = await supabase
+      .from('flow_snapshots')
+      .select('category, name, nodes, edges')
+      .eq('id', id).eq('is_category_template', true).maybeSingle();
+    if (error) throw error;
+    if (!template) {
+      return errorResponse(res, 404, 'Category template not found');
+    }
+
+    return successResponse(res, 200, {
+      category: template.category,
+      name: template.name,
+      nodes: template.nodes,
+      edges: template.edges
+    });
+  } catch (error) {
+    logger.error('Error in exportTemplateJson:', error);
+    next(error);
+  }
+};
+
+const KNOWN_NODE_TYPES = ['reply', 'question', 'vehicle_carousel', 'rentalPackage'];
+
+/**
+ * POST /api/admin/category-templates/import-json
+ * Body: { category, name, nodes, edges }. Counterpart to exportTemplateJson —
+ * takes the same raw row-array shape (hand-edited or round-tripped from an
+ * export) and stores it as a category template via the same delete-then-insert
+ * cloneFromBusiness uses. Deliberately does NOT re-mint node/edge ids: this is
+ * a fresh template being defined from scratch, not copied from a live
+ * business, so the ids in the JSON are the template's canonical ids.
+ * Businesses importing the template later mint their own fresh ids
+ * (writeBusinessGraphRows reuseIds:false), so there's no collision risk.
+ */
+const importTemplateJson = async (req, res, next) => {
+  try {
+    const { category, name, nodes, edges } = req.body;
+
+    if (!category || !(await businessCategoryService.isKnownCategory(category))) {
+      return errorResponse(res, 400, `Invalid category: ${category}`);
+    }
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return errorResponse(res, 400, 'name is required');
+    }
+    if (!Array.isArray(nodes) || !Array.isArray(edges)) {
+      return errorResponse(res, 400, 'nodes and edges must be arrays');
+    }
+
+    const nodeIds = new Set();
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (!n || typeof n.id !== 'string' || !KNOWN_NODE_TYPES.includes(n.node_type)) {
+        return errorResponse(res, 400, `nodes[${i}]: missing or invalid id/node_type`);
+      }
+      nodeIds.add(n.id);
+    }
+
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i];
+      if (!e || typeof e.id !== 'string' || typeof e.from_node_id !== 'string' || typeof e.to_node_id !== 'string') {
+        return errorResponse(res, 400, `edges[${i}]: missing or invalid id/from_node_id/to_node_id`);
+      }
+      if (!nodeIds.has(e.from_node_id) || !nodeIds.has(e.to_node_id)) {
+        return errorResponse(res, 400, `edges[${i}]: from_node_id/to_node_id does not match any node in nodes`);
+      }
+    }
+
+    const { error: deleteErr } = await supabase
+      .from('flow_snapshots').delete().eq('is_category_template', true).eq('category', category);
+    if (deleteErr) throw deleteErr;
+
+    const { data: template, error: insertErr } = await supabase.from('flow_snapshots').insert({
+      business_id: null,
+      category,
+      name: name.trim(),
+      nodes,
+      edges,
+      is_category_template: true,
+      is_active: true
+    }).select('id, category, name, created_at, updated_at').single();
+    if (insertErr) throw insertErr;
+
+    return successResponse(res, 201, toCamelCase(template));
+  } catch (error) {
+    logger.error('Error in importTemplateJson:', error);
+    next(error);
+  }
+};
+
 module.exports = {
   getCategoryTemplates,
   cloneFromBusiness,
-  deleteCategoryTemplate
+  deleteCategoryTemplate,
+  exportTemplateJson,
+  importTemplateJson
 };

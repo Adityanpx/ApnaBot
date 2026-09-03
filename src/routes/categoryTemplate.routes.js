@@ -9,6 +9,8 @@ router.use(protect, requireRole('superadmin'));
 
 router.get('/', categoryTemplateController.getCategoryTemplates);
 router.post('/clone-from-business', categoryTemplateController.cloneFromBusiness);
+router.post('/import-json', categoryTemplateController.importTemplateJson);
 router.delete('/:id', categoryTemplateController.deleteCategoryTemplate);
+router.get('/:id/export', categoryTemplateController.exportTemplateJson);
 
 module.exports = router;
