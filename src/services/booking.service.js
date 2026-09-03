@@ -375,6 +375,60 @@ const recordBookingLead = async (businessId, customerId) => {
 };
 
 /**
+ * Pure field/fare/note-line formatting shared by createBookingAndConfirmation's
+ * real confirmation text and flowGraphPreview.controller.js's synthetic
+ * "booking would be created here" summary — same (collected, orderedFields,
+ * localRentalUnconfigured) inputs, different header/footer wrapped around
+ * this body. No DB access, no side effects, extracted verbatim (byte-identical
+ * output) out of createBookingAndConfirmation's old inline block.
+ * @param {Object} collected
+ * @param {Array<{fieldKey: string, label: string, summaryLabel: string}>} orderedFields
+ * @param {boolean} localRentalUnconfigured
+ * @returns {string}
+ */
+const buildBookingSummaryBody = (collected, orderedFields, localRentalUnconfigured) => {
+  const fieldLines = orderedFields
+    .map(f => {
+      const value = collected[f.fieldKey];
+      if (value === undefined || value === null || value === '') {
+        return null;
+      }
+      const label = f.summaryLabel || f.label.replace('?', '');
+      return label + ': *' + value + '*';
+    })
+    .filter(line => line !== null)
+    .join('\n');
+
+  const hasFare = collected.vehicleFare !== undefined && collected.vehicleFare !== null;
+  const fareLine = !hasFare
+    ? ''
+    : collected.fareSource === 'distance_estimate'
+      ? '\nFare: *₹' + collected.vehicleFare + ' (estimated, based on distance)*' +
+        '\nDistance: *' + collected.distanceKm + ' km*'
+      : '\nFare: *₹' + collected.vehicleFare + '*';
+
+  const driverDaLine = collected.driverDaTotal
+    ? '\nDriver DA: *₹' + collected.driverDaTotal + ' (' + collected.driverDaDays + ' days × ₹' + collected.driverDaPerDay + ')*'
+    : '';
+
+  const tollNoteLine = hasFare
+    ? '\n\n_Note: Toll & parking charges are not included in this fare and will be collected separately._'
+    : '';
+
+  const extraRateNoteLine = (collected.fareSource === 'rental_package' &&
+    collected.extraKmRate !== undefined && collected.extraKmRate !== null &&
+    collected.extraHrRate !== undefined && collected.extraHrRate !== null)
+    ? '\n\n_Extra km: ₹' + collected.extraKmRate + '/km, Extra hour: ₹' + collected.extraHrRate + '/hr beyond package limits._'
+    : '';
+
+  const localRentalUnconfiguredNoteLine = localRentalUnconfigured
+    ? '\n\n_Note: this business hasn\'t set up rental packages yet — our team will call you to confirm pricing for this rental._'
+    : '';
+
+  return fieldLines + fareLine + driverDaLine + tollNoteLine + extraRateNoteLine + localRentalUnconfiguredNoteLine;
+};
+
+/**
  * Shared booking-completion tail for both engines: insert the `bookings` row,
  * delete the Redis session, bump usage, build the WhatsApp confirmation text,
  * and emit the `new_booking` socket event. Extracted verbatim out of
@@ -481,52 +535,9 @@ const createBookingAndConfirmation = async (businessId, customerNumber, collecte
   }
 
   // Build confirmation message (WhatsApp bold = *value*)
-  const fieldLines = orderedFields
-    .map(f => {
-      const value = collected[f.fieldKey];
-      if (value === undefined || value === null || value === '') {
-        return null;
-      }
-      const label = f.summaryLabel || f.label.replace('?', '');
-      return label + ': *' + value + '*';
-    })
-    .filter(line => line !== null)
-    .join('\n');
-
-  const hasFare = collected.vehicleFare !== undefined && collected.vehicleFare !== null;
-  const fareLine = !hasFare
-    ? ''
-    : collected.fareSource === 'distance_estimate'
-      ? '\nFare: *₹' + collected.vehicleFare + ' (estimated, based on distance)*' +
-        '\nDistance: *' + collected.distanceKm + ' km*'
-      : '\nFare: *₹' + collected.vehicleFare + '*';
-
-  const driverDaLine = collected.driverDaTotal
-    ? '\nDriver DA: *₹' + collected.driverDaTotal + ' (' + collected.driverDaDays + ' days × ₹' + collected.driverDaPerDay + ')*'
-    : '';
-
-  const tollNoteLine = hasFare
-    ? '\n\n_Note: Toll & parking charges are not included in this fare and will be collected separately._'
-    : '';
-
-  const extraRateNoteLine = (collected.fareSource === 'rental_package' &&
-    collected.extraKmRate !== undefined && collected.extraKmRate !== null &&
-    collected.extraHrRate !== undefined && collected.extraHrRate !== null)
-    ? '\n\n_Extra km: ₹' + collected.extraKmRate + '/km, Extra hour: ₹' + collected.extraHrRate + '/hr beyond package limits._'
-    : '';
-
-  const localRentalUnconfiguredNoteLine = localRentalUnconfigured
-    ? '\n\n_Note: this business hasn\'t set up rental packages yet — our team will call you to confirm pricing for this rental._'
-    : '';
-
   const confirmationText = '✅ *Booking request received!*\n' +
     'Booking ID: *' + bookingCode + '*\n\n' +
-    fieldLines +
-    fareLine +
-    driverDaLine +
-    tollNoteLine +
-    extraRateNoteLine +
-    localRentalUnconfiguredNoteLine +
+    buildBookingSummaryBody(collected, orderedFields, localRentalUnconfigured) +
     '\n\nOur team will contact you shortly to confirm. 🚕';
 
   // Emit Socket.io event (wrap in try/catch)
@@ -695,5 +706,8 @@ module.exports = {
   // Booking-completion tail for the graph engine (Step 12 wiring) — see the
   // function's own doc comment for why this lives here instead of in
   // bookingGraph.service.js or inline in webhook.controller.js.
-  finalizeGraphBooking
+  finalizeGraphBooking,
+  // Pure formatting reused by flowGraphPreview.controller.js for its
+  // synthetic "booking would be created" summary — see its own doc comment.
+  buildBookingSummaryBody
 };

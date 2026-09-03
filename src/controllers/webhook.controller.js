@@ -1288,5 +1288,8 @@ const receiveWebhook = async (req, res) => {
 
 module.exports = {
   verifyWebhook,
-  receiveWebhook
+  receiveWebhook,
+  // Exported for flowGraphPreview.controller.js to reuse rather than
+  // duplicate the literal set.
+  GREETING_KEYWORDS
 };

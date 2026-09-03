@@ -27,6 +27,7 @@ const broadcastRoutes = require('./routes/broadcast.routes');
 const walletRoutes = require('./routes/wallet.routes');
 const rateCardRoutes = require('./routes/rateCard.routes');
 const flowGraphRoutes = require('./routes/flowGraph.routes');
+const flowGraphPreviewRoutes = require('./routes/flowGraphPreview.routes');
 const flowSnapshotRoutes = require('./routes/flowSnapshot.routes');
 const categoryTemplateRoutes = require('./routes/categoryTemplate.routes');
 const nodeLibraryRoutes = require('./routes/nodeLibrary.routes');
@@ -114,6 +115,7 @@ app.use('/api/broadcasts', broadcastRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/flow-graph/snapshots', flowSnapshotRoutes);
 app.use('/api/flow-graph/library', nodeLibraryPublicRoutes);
+app.use('/api/flow-graph/preview', flowGraphPreviewRoutes);
 app.use('/api/flow-graph', flowGraphRoutes);
 app.use('/api/reports', reportsRoutes);
 

@@ -1,5 +1,6 @@
 const supabase = require('../config/supabase');
 const { toCamelCase } = require('../utils/caseConvert');
+const bookingService = require('../services/booking.service');
 const subscriptionService = require('../services/subscription.service');
 const tenantService = require('../services/tenant.service');
 const adminService = require('../services/admin.service');
@@ -455,6 +456,56 @@ const getSubscriptionHistory = async (req, res, next) => {
 };
 
 /**
+ * PUT /api/admin/businesses/:id/preview-credits
+ * Grant additional purchased preview credits to a business — superadmin-only.
+ * Additive: adds `amount` to the business's existing previewCreditsPurchased
+ * rather than overwriting it, so repeated grants over time accumulate (mirrors
+ * grantSubscription's cancel-then-insert-fresh-row pattern in spirit — this
+ * one's an additive column bump instead, since previewCreditsPurchased is a
+ * running balance, not a point-in-time row). Same credit pool
+ * checkAndConsumeManualPreviewCredit/getPreviewCreditsStatus already read
+ * from, not a separate counter.
+ */
+const grantPreviewCredits = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { amount } = req.body;
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return errorResponse(res, 400, 'amount must be a positive integer');
+    }
+
+    const { data: business, error: bizErr } = await supabase
+      .from('businesses')
+      .select('preview_credits_used, preview_credits_reset_at, preview_credits_purchased')
+      .eq('id', id).maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return errorResponse(res, 404, 'Business not found');
+
+    const newPurchased = (business.preview_credits_purchased || 0) + amount;
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('businesses')
+      .update({ preview_credits_purchased: newPurchased })
+      .eq('id', id)
+      .select('preview_credits_used, preview_credits_reset_at, preview_credits_purchased')
+      .single();
+    if (updateErr) throw updateErr;
+
+    const { remaining } = bookingService.getPreviewCreditsStatus(toCamelCase(updated));
+
+    logger.info(`Granted ${amount} preview credits to business ${id} by superadmin — previewCreditsPurchased now ${newPurchased}`);
+    return successResponse(res, 200, {
+      previewCreditsPurchased: newPurchased,
+      previewCreditsRemaining: remaining
+    }, 'Preview credits granted successfully');
+  } catch (error) {
+    logger.error('Error in grantPreviewCredits:', error);
+    next(error);
+  }
+};
+
+/**
  * GET /api/admin/stats
  * Platform-wide statistics
  */
@@ -623,6 +674,7 @@ module.exports = {
   extendSubscription,
   grantSubscription,
   getSubscriptionHistory,
+  grantPreviewCredits,
   getPlatformStats,
   getRevenueReport,
   getPlans,
