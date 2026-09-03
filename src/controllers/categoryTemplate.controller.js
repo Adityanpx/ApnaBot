@@ -2,18 +2,8 @@ const supabase = require('../config/supabase');
 const { successResponse, errorResponse } = require('../utils/response');
 const { toCamelCase } = require('../utils/caseConvert');
 const { readBusinessGraphRows } = require('../services/flowSnapshot.service');
+const businessCategoryService = require('../services/businessCategory.service');
 const logger = require('../utils/logger');
-
-// Same 20-value list as businesses_business_category_check
-// (20260828090000_add_software_it_business_category.sql), mirrored in this
-// migration's flow_snapshots_category_check constraint. Kept as a literal
-// list here (not queried from the DB) matching flowGraph.controller.js's
-// existing VALID_* constant pattern for enum-shaped request validation.
-const VALID_CATEGORIES = [
-  'tailor', 'salon', 'garage', 'cab', 'coaching', 'gym', 'medical', 'general',
-  'photographer', 'caterer', 'tutor', 'jeweller', 'boutique', 'grocery', 'bakery',
-  'electronics_repair', 'real_estate', 'driving_school', 'travels', 'software_it'
-];
 
 /**
  * GET /api/admin/category-templates
@@ -53,8 +43,8 @@ const cloneFromBusiness = async (req, res, next) => {
     if (!businessId || typeof businessId !== 'string') {
       return errorResponse(res, 400, 'businessId is required');
     }
-    if (!category || !VALID_CATEGORIES.includes(category)) {
-      return errorResponse(res, 400, `category must be one of: ${VALID_CATEGORIES.join(', ')}`);
+    if (!category || !(await businessCategoryService.isKnownCategory(category))) {
+      return errorResponse(res, 400, `Invalid category: ${category}`);
     }
     if (!name || typeof name !== 'string' || !name.trim()) {
       return errorResponse(res, 400, 'name is required');

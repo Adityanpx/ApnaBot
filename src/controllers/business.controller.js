@@ -3,6 +3,7 @@ const businessService = require('../services/business.service');
 const tenantService = require('../services/tenant.service');
 const subscriptionService = require('../services/subscription.service');
 const bookingService = require('../services/booking.service');
+const businessCategoryService = require('../services/businessCategory.service');
 const supabase = require('../config/supabase');
 const { successResponse, errorResponse } = require('../utils/response');
 const { generateTokens, saveTokenToRedis } = require('../services/auth.service');
@@ -53,30 +54,6 @@ const resolvePhoneNumberIdForWaba = async (wabaId, accessToken) => {
   }
   return null;
 };
-
-// Valid business categories
-const VALID_BUSINESS_CATEGORIES = [
-  'tailor',
-  'salon',
-  'garage',
-  'cab',
-  'coaching',
-  'gym',
-  'medical',
-  'general',
-  'photographer',
-  'caterer',
-  'tutor',
-  'jeweller',
-  'boutique',
-  'grocery',
-  'bakery',
-  'electronics_repair',
-  'real_estate',
-  'driving_school',
-  'travels',
-  'software_it'
-];
 
 /**
  * GET /api/business
@@ -134,8 +111,9 @@ const createBusiness = async (req, res, next) => {
     }
 
     // Validate business category
-    if (!VALID_BUSINESS_CATEGORIES.includes(businessCategory)) {
-      return errorResponse(res, 400, `Invalid business category. Must be one of: ${VALID_BUSINESS_CATEGORIES.join(', ')}`);
+    if (!(await businessCategoryService.isEnabledCategory(businessCategory))) {
+      const enabledCategories = await businessCategoryService.getEnabledCategories();
+      return errorResponse(res, 400, `Invalid business category. Must be one of: ${enabledCategories.map((category) => category.value).join(', ')}`);
     }
 
     // Create business
