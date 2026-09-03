@@ -192,15 +192,22 @@ const importCategoryTemplate = async (req, res, next) => {
 
 /**
  * POST /api/flow-graph/snapshots/start-blank
- * Wipes this business's current flow_nodes/flow_edges entirely, going back
- * to a literal empty graph. Uses the same raw-delete path restoreSnapshot/
- * importCategoryTemplate use (deleteBusinessGraphRows) — no reserved-
- * fieldKey/incoming-edge/fallback-sibling guard checks apply here, since
- * this is an explicit owner-confirmed wipe, not an accidental single-node
- * delete via /api/flow-graph.
+ * Wipes this business's current flow_nodes/flow_edges rows and leaves it
+ * with a literal empty graph — the explicit "create a new flow from
+ * scratch" action for the Versions tab, for businesses that want a
+ * different flow for a different occasion. Deliberately mirrors
+ * restoreSnapshot/importCategoryTemplate: same raw deleteBusinessGraphRows
+ * call, no reserved-fieldKey / incoming-edge / fallback-sibling guard
+ * checks (those exist to stop an accidental single-node/batch delete from
+ * silently breaking a live booking flow — an explicit, confirmed "start
+ * blank" from the owner is exactly the case they don't apply to). The
+ * frontend confirm dialog is what protects against doing this by accident;
+ * this endpoint does not ask the caller to save a version first, matching
+ * every other destructive action here (frontend nudges, backend doesn't
+ * enforce).
  *
- * Also unsets is_active on every non-template snapshot for this business:
- * none of them describe the current (now blank) live graph anymore.
+ * Also unsets is_active on every snapshot for this business — none of them
+ * describe the current (now blank) live graph anymore.
  */
 const startBlankFlow = async (req, res, next) => {
   try {
@@ -213,7 +220,7 @@ const startBlankFlow = async (req, res, next) => {
       .eq('business_id', businessId).eq('is_category_template', false);
     if (unsetErr) throw unsetErr;
 
-    return successResponse(res, 200, null, 'Flow reset to blank successfully');
+    return successResponse(res, 200, null, 'Started a new blank flow');
   } catch (error) {
     logger.error('Error in startBlankFlow:', error);
     next(error);

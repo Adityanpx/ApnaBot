@@ -99,11 +99,14 @@ const createBusiness = async (ownerUserId, data) => {
       .from('users').update({ business_id: business.id }).eq('id', ownerUserId);
     if (userErr) throw userErr;
 
-    // No business_type_templates lookup, no business_flows/rules seed
-    // writes (those stay dead per PRD.md). flow_nodes/flow_edges are NOT
-    // seeded here either — every new business starts with a literal empty
-    // graph; the owner builds it from scratch or imports a category
-    // template explicitly via /api/flow-graph.
+    // Deliberately NOT auto-seeding from a category template anymore. Every
+    // new business starts with a literal empty graph — no flow_nodes/
+    // flow_edges rows at all. Category templates still exist and are still
+    // useful, but only as an explicit, owner-initiated action from the
+    // Versions tab ("Import starter template", flowSnapshot.controller.js
+    // #importCategoryTemplate) — never something applied silently at
+    // signup. See business.service.js history for the prior auto-seed
+    // behavior this replaces.
     return toCamelCase(business);
   } catch (error) {
     logger.error('Error in createBusiness:', error);
