@@ -127,11 +127,20 @@ const isNodeEffectivelyActive = (node, disabledFieldKeys) => {
  * that's effectively inactive (per the live disabledBookingFields
  * overlay), until an active node is reached or the chain ends (no edge
  * has a matching condition — a terminal node, e.g. vehicle_carousel).
- * @returns {string|null} next node id, or null if the sequence has ended
+ *
+ * Every matched edge's preset (if any) is applied to `collected` in place,
+ * immediately, as that hop is walked — so a preset from an earlier hop is
+ * already visible to a later hop's own condition/preset in the same walk,
+ * the same as if the field had actually been answered. Every applied
+ * preset (across however many hops this call makes, not just the final
+ * one) is also returned so the caller can record it in answeredFields.
+ * @returns {{nodeId: string|null, appliedPresets: Array<{field: string, value: string, label: string|null}>}}
+ *   nodeId is null if the sequence has ended.
  */
 const pickNextNodeId = (nodes, edges, fromNodeId, collected, disabledFieldKeys, businessId) => {
   const nodeById = new Map(nodes.map(n => [n.id, n]));
   let currentId = fromNodeId;
+  const appliedPresets = [];
   for (let hop = 0; hop < MAX_HOPS; hop++) {
     const outgoing = edges
       .filter(e => e.fromNodeId === currentId)
@@ -161,22 +170,27 @@ const pickNextNodeId = (nodes, edges, fromNodeId, collected, disabledFieldKeys, 
           }))
         });
       }
-      return null;
+      return { nodeId: null, appliedPresets };
+    }
+
+    if (matched.preset) {
+      collected[matched.preset.field] = matched.preset.value;
+      appliedPresets.push({ field: matched.preset.field, value: matched.preset.value, label: matched.label || null });
     }
 
     const targetNode = nodeById.get(matched.toNodeId);
     if (!targetNode) {
       logger.error('bookingGraph: flow_edges row references a missing node', { edgeId: matched.id, toNodeId: matched.toNodeId });
-      return null;
+      return { nodeId: null, appliedPresets };
     }
     if (!isNodeEffectivelyActive(targetNode, disabledFieldKeys)) {
       currentId = targetNode.id;
       continue;
     }
-    return targetNode.id;
+    return { nodeId: targetNode.id, appliedPresets };
   }
   logger.error('bookingGraph: pickNextNodeId exceeded MAX_HOPS — possible cycle in flow_edges', { fromNodeId });
-  return null;
+  return { nodeId: null, appliedPresets };
 };
 
 /**
@@ -328,9 +342,20 @@ const startGraphSession = async (businessId, replyNodeId, languageCode) => {
   const business = await businessService.getBusinessById(businessId);
   if (!business) throw new Error('Business not found');
 
+  const collected = {};
+  const answeredFields = [];
+  if (entryEdge.preset) {
+    collected[entryEdge.preset.field] = entryEdge.preset.value;
+    answeredFields.push({
+      fieldKey: entryEdge.preset.field,
+      label: entryEdge.label || entryEdge.preset.field,
+      summaryLabel: entryEdge.label || entryEdge.preset.field
+    });
+  }
+
   const session = {
     currentNodeId: entryNode.id,
-    collected: {},
+    collected,
     // Ordered, label-snapshotted-at-answer-time record of every field
     // actually answered this session — needed because `collected` alone
     // can't reconstruct confirmation-text lines: it also holds non-display
@@ -340,7 +365,7 @@ const startGraphSession = async (businessId, replyNodeId, languageCode) => {
     // (rather than re-reading flow_nodes at finalize time) also matches the
     // old engine's behavior: the confirmation shows the label as it was
     // when asked, not as it might have since been edited.
-    answeredFields: [],
+    answeredFields,
     ruleId: replyNodeId,
     startedAt: new Date().toISOString(),
     localRentalUnconfigured: false,
@@ -368,9 +393,10 @@ const startGraphSession = async (businessId, replyNodeId, languageCode) => {
  * @param {string} entryNodeId - the question node to start at
  * @param {string} ruleId - the reply node whose button/list row led here (for triggered_rule_id attribution, same role startGraphSession's replyNodeId plays)
  * @param {string} [languageCode]
+ * @param {Object} [entryEdge] - the tapped flow_edges row that led here (webhook.controller.js's resolvedTap.edge), so its preset (if any) can be applied the same way startGraphSession applies its own entryEdge's preset
  * @returns {Promise<{session: Object, field: Object}>}
  */
-const startGraphSessionAtNode = async (businessId, entryNodeId, ruleId, languageCode) => {
+const startGraphSessionAtNode = async (businessId, entryNodeId, ruleId, languageCode, entryEdge = null) => {
   const { nodes } = await loadGraph(businessId);
   const entryNode = nodes.find(n => n.id === entryNodeId);
   if (!entryNode) {
@@ -380,10 +406,21 @@ const startGraphSessionAtNode = async (businessId, entryNodeId, ruleId, language
   const business = await businessService.getBusinessById(businessId);
   if (!business) throw new Error('Business not found');
 
+  const collected = {};
+  const answeredFields = [];
+  if (entryEdge?.preset) {
+    collected[entryEdge.preset.field] = entryEdge.preset.value;
+    answeredFields.push({
+      fieldKey: entryEdge.preset.field,
+      label: entryEdge.label || entryEdge.preset.field,
+      summaryLabel: entryEdge.label || entryEdge.preset.field
+    });
+  }
+
   const session = {
     currentNodeId: entryNode.id,
-    collected: {},
-    answeredFields: [],
+    collected,
+    answeredFields,
     ruleId,
     startedAt: new Date().toISOString(),
     localRentalUnconfigured: false,
@@ -583,7 +620,17 @@ const advanceGraphSession = async ({ businessId, session, reply, languageCode })
   });
 
   // ---- advance ----
-  const nextNodeId = pickNextNodeId(nodes, edges, currentNode.id, session.collected, disabledFieldKeys, businessId);
+  const { nodeId: nextNodeId, appliedPresets } = pickNextNodeId(nodes, edges, currentNode.id, session.collected, disabledFieldKeys, businessId);
+  // Record each preset applied along the way the same way a real answer is
+  // recorded above, so it shows up in the confirmation summary — the field
+  // was never asked, but its value is now just as "known" as a typed one.
+  for (const applied of appliedPresets) {
+    session.answeredFields.push({
+      fieldKey: applied.field,
+      label: applied.label || applied.field,
+      summaryLabel: applied.label || applied.field
+    });
+  }
   if (nextNodeId === null) {
     return { session, result: { done: true, collected: session.collected } };
   }

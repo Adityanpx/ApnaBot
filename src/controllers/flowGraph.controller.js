@@ -94,6 +94,27 @@ const validateConditionShape = (condition) => {
   return null;
 };
 
+/**
+ * Shape check for flow_edges.preset, mirroring the DB check constraint
+ * (flow_edges_preset_shape) at the API layer. Unlike condition, preset.field
+ * is deliberately NOT checked against this business's known question-node
+ * field_keys anywhere — a preset is specifically for a field with NO
+ * question node asking for it, so that check would reject every valid one.
+ */
+const validatePresetShape = (preset) => {
+  if (preset === null || preset === undefined) return null;
+  if (typeof preset !== 'object' || Array.isArray(preset)) {
+    return 'preset must be an object with "field" and "value" keys.';
+  }
+  if (typeof preset.field !== 'string' || preset.field === '') {
+    return 'preset.field must be a non-empty string.';
+  }
+  if (typeof preset.value !== 'string') {
+    return 'preset.value must be a string.';
+  }
+  return null;
+};
+
 /** field_key set among this business's question-subgraph nodes, for validateConditionField. */
 const resolveKnownQuestionFieldKeys = async (businessId) => {
   const { data, error } = await supabase
@@ -1090,7 +1111,7 @@ const saveFullGraph = async (req, res, next) => {
 
       const {
         fromNodeId: rawFrom, toNodeId: rawTo, label = null, labelTranslations = null,
-        description = null, descriptionTranslations = null, condition = null, displayOrder
+        description = null, descriptionTranslations = null, condition = null, preset = null, displayOrder
       } = item;
 
       if (!rawFrom || !rawTo) {
@@ -1119,6 +1140,9 @@ const saveFullGraph = async (req, res, next) => {
         if (conditionFieldError) return errorResponse(res, 400, `edges[${i}]: ${conditionFieldError}`);
       }
 
+      const presetShapeError = validatePresetShape(preset);
+      if (presetShapeError) return errorResponse(res, 400, `edges[${i}]: ${presetShapeError}`);
+
       if (displayOrder !== undefined && typeof displayOrder !== 'number') {
         return errorResponse(res, 400, `edges[${i}]: displayOrder must be a number`);
       }
@@ -1129,7 +1153,8 @@ const saveFullGraph = async (req, res, next) => {
         id, from_node_id: fromNodeId, to_node_id: toNodeId, label,
         label_translations: labelTranslations || null, description,
         description_translations: descriptionTranslations || null,
-        condition: condition || null, display_order: displayOrder !== undefined ? displayOrder : 0
+        condition: condition || null, preset: preset || null,
+        display_order: displayOrder !== undefined ? displayOrder : 0
       });
       proposedEdges.push({ id, fromNodeId, toNodeId, condition: condition || null });
     }
@@ -1249,7 +1274,7 @@ const getEdges = async (req, res, next) => {
 /**
  * POST /api/flow-graph/edges
  * Create one edge. Body: { fromNodeId, toNodeId, label, labelTranslations,
- * description, descriptionTranslations, condition, displayOrder }.
+ * description, descriptionTranslations, condition, preset, displayOrder }.
  * displayOrder defaults to appended-at-the-end (max existing + 1 among
  * fromNodeId's outgoing edges) when omitted. Runs the shared cycle/
  * reachability validator against the hypothetical post-create graph before
@@ -1262,7 +1287,7 @@ const createEdge = async (req, res, next) => {
   try {
     const {
       fromNodeId, toNodeId, label = null, labelTranslations = null,
-      description = null, descriptionTranslations = null, condition = null, displayOrder
+      description = null, descriptionTranslations = null, condition = null, preset = null, displayOrder
     } = req.body;
     const businessId = req.user.businessId;
 
@@ -1303,6 +1328,9 @@ const createEdge = async (req, res, next) => {
       if (conditionFieldError) return errorResponse(res, 400, conditionFieldError);
     }
 
+    const presetShapeError = validatePresetShape(preset);
+    if (presetShapeError) return errorResponse(res, 400, presetShapeError);
+
     let effectiveDisplayOrder = displayOrder;
     if (effectiveDisplayOrder === undefined || effectiveDisplayOrder === null) {
       const { data: siblingEdges, error: sibErr } = await supabase
@@ -1331,6 +1359,7 @@ const createEdge = async (req, res, next) => {
       description,
       description_translations: descriptionTranslations || null,
       condition: condition || null,
+      preset: preset || null,
       display_order: effectiveDisplayOrder
     }).select().single();
     if (error) throw error;
@@ -1361,7 +1390,7 @@ const createEdge = async (req, res, next) => {
 const updateEdge = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { toNodeId, label, labelTranslations, description, descriptionTranslations, condition, displayOrder } = req.body;
+    const { toNodeId, label, labelTranslations, description, descriptionTranslations, condition, preset, displayOrder } = req.body;
     const businessId = req.user.businessId;
 
     const { data: edge, error: findErr } = await supabase
@@ -1409,6 +1438,12 @@ const updateEdge = async (req, res, next) => {
         if (conditionFieldError) return errorResponse(res, 400, conditionFieldError);
       }
       updateData.condition = condition;
+    }
+
+    if (preset !== undefined) {
+      const presetShapeError = validatePresetShape(preset);
+      if (presetShapeError) return errorResponse(res, 400, presetShapeError);
+      updateData.preset = preset;
     }
 
     if (Object.keys(updateData).length === 0) {

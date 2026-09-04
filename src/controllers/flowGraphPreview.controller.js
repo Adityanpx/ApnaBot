@@ -159,7 +159,7 @@ const handleNoActiveSession = async (business, messageText, buttonReplyId) => {
   if (buttonReplyId) {
     const resolvedTap = await chatbotService.resolveTappedEdge(business.id, buttonReplyId);
     if (resolvedTap?.targetNode?.nodeType === 'question') {
-      directBookingEntry = { nodeId: resolvedTap.targetNode.id, ruleId: resolvedTap.edge.fromNodeId };
+      directBookingEntry = { nodeId: resolvedTap.targetNode.id, ruleId: resolvedTap.edge.fromNodeId, edge: resolvedTap.edge };
     } else if (resolvedTap?.targetNode?.nodeType === 'reply') {
       matchedNode = resolvedTap.targetNode;
       matchedEdges = matchedNode.contentType === 'text' ? [] : await chatbotService.getOutgoingEdges(matchedNode.id);
@@ -176,7 +176,7 @@ const handleNoActiveSession = async (business, messageText, buttonReplyId) => {
   // Step 14 - prepare the reply
   if (directBookingEntry) {
     const { session: newBookingSession, field: firstField } = await bookingGraphService.startGraphSessionAtNode(
-      business.id, directBookingEntry.nodeId, directBookingEntry.ruleId, null
+      business.id, directBookingEntry.nodeId, directBookingEntry.ruleId, null, directBookingEntry.edge
     );
     const replyText = applyMessageTemplate(firstField.label, business, null);
     const rendered = buildFieldOptions(firstField);

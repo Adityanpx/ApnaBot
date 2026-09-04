@@ -1092,7 +1092,7 @@ const receiveWebhook = async (req, res) => {
     if (tappedEdgeId) {
       const resolvedTap = await chatbotService.resolveTappedEdge(tenant.businessId, tappedEdgeId);
       if (resolvedTap?.targetNode?.nodeType === 'question') {
-        directBookingEntry = { nodeId: resolvedTap.targetNode.id, ruleId: resolvedTap.edge.fromNodeId };
+        directBookingEntry = { nodeId: resolvedTap.targetNode.id, ruleId: resolvedTap.edge.fromNodeId, edge: resolvedTap.edge };
       } else if (resolvedTap?.targetNode?.nodeType === 'reply') {
         matchedNode = resolvedTap.targetNode;
         matchedEdges = matchedNode.contentType === 'text' ? [] : await chatbotService.getOutgoingEdges(matchedNode.id);
@@ -1128,7 +1128,8 @@ const receiveWebhook = async (req, res) => {
         tenant.businessId,
         directBookingEntry.nodeId,
         directBookingEntry.ruleId,
-        customer.preferredLanguage
+        customer.preferredLanguage,
+        directBookingEntry.edge
       );
       await bookingService.saveBookingSession(tenant.businessId, customerNumber, newBookingSession);
       bookingService.recordBookingLead(tenant.businessId, customer.id).catch(err =>
