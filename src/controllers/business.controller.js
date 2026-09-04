@@ -236,6 +236,17 @@ const updateBusiness = async (req, res, next) => {
 
     const business = await businessService.updateBusiness(businessId, req.body);
 
+    // The webhook re-caches the tenant on every inbound message, so a stale
+    // cached name/displayName would otherwise persist past the TTL and keep
+    // showing customers the old {{businessName}} indefinitely.
+    if ((req.body.name !== undefined || req.body.displayName !== undefined) && business.phoneNumberId) {
+      try {
+        await tenantService.invalidateTenantCache(business.phoneNumberId);
+      } catch (error) {
+        logger.error('Error invalidating tenant cache after business name update:', error);
+      }
+    }
+
     // Remove accessToken from response
     const businessData = { ...business, _id: business.id };
     delete businessData.accessToken;
