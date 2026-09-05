@@ -112,6 +112,9 @@ const validatePresetShape = (preset) => {
   if (typeof preset.value !== 'string') {
     return 'preset.value must be a string.';
   }
+  if (preset.summaryLabel !== undefined && typeof preset.summaryLabel !== 'string') {
+    return 'preset.summaryLabel must be a string.';
+  }
   return null;
 };
 

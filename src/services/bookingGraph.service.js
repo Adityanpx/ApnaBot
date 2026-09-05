@@ -76,6 +76,13 @@ const OTHER_SENTINELS = {
   dropLocation: 'Other'
 };
 
+// Confirmation-text label for a preset with no explicit summaryLabel —
+// "serviceNeeded" -> "Service Needed". Not the edge's own button/list-row
+// label, which is a caption ("Apply Now"), not a field description.
+const humanize = (fieldKey) => fieldKey
+  .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  .replace(/\b\w/g, c => c.toUpperCase());
+
 /**
  * Load a business's full booking-relevant graph (all flow_nodes/flow_edges
  * rows — reply nodes included; they're simply never referenced by
@@ -134,7 +141,7 @@ const isNodeEffectivelyActive = (node, disabledFieldKeys) => {
  * the same as if the field had actually been answered. Every applied
  * preset (across however many hops this call makes, not just the final
  * one) is also returned so the caller can record it in answeredFields.
- * @returns {{nodeId: string|null, appliedPresets: Array<{field: string, value: string, label: string|null}>}}
+ * @returns {{nodeId: string|null, appliedPresets: Array<{field: string, value: string, label: string}>}}
  *   nodeId is null if the sequence has ended.
  */
 const pickNextNodeId = (nodes, edges, fromNodeId, collected, disabledFieldKeys, businessId) => {
@@ -175,7 +182,8 @@ const pickNextNodeId = (nodes, edges, fromNodeId, collected, disabledFieldKeys, 
 
     if (matched.preset) {
       collected[matched.preset.field] = matched.preset.value;
-      appliedPresets.push({ field: matched.preset.field, value: matched.preset.value, label: matched.label || null });
+      const label = matched.preset.summaryLabel || humanize(matched.preset.field);
+      appliedPresets.push({ field: matched.preset.field, value: matched.preset.value, label });
     }
 
     const targetNode = nodeById.get(matched.toNodeId);
@@ -346,10 +354,11 @@ const startGraphSession = async (businessId, replyNodeId, languageCode) => {
   const answeredFields = [];
   if (entryEdge.preset) {
     collected[entryEdge.preset.field] = entryEdge.preset.value;
+    const label = entryEdge.preset.summaryLabel || humanize(entryEdge.preset.field);
     answeredFields.push({
       fieldKey: entryEdge.preset.field,
-      label: entryEdge.label || entryEdge.preset.field,
-      summaryLabel: entryEdge.label || entryEdge.preset.field
+      label,
+      summaryLabel: label
     });
   }
 
@@ -410,10 +419,11 @@ const startGraphSessionAtNode = async (businessId, entryNodeId, ruleId, language
   const answeredFields = [];
   if (entryEdge?.preset) {
     collected[entryEdge.preset.field] = entryEdge.preset.value;
+    const label = entryEdge.preset.summaryLabel || humanize(entryEdge.preset.field);
     answeredFields.push({
       fieldKey: entryEdge.preset.field,
-      label: entryEdge.label || entryEdge.preset.field,
-      summaryLabel: entryEdge.label || entryEdge.preset.field
+      label,
+      summaryLabel: label
     });
   }
 
