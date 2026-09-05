@@ -14,6 +14,7 @@ const { toCamelCase } = require('../utils/caseConvert');
 const { applyMessageTemplate, applyMessageTemplateWithFooter } = require('../utils/messageTemplating');
 const { LANGUAGE_CATALOG, isValidLanguageCode } = require('../utils/languageCatalog');
 const { getLocalizedText } = require('../utils/localization');
+const { isIndefinitePause } = require('../utils/botPause');
 const logger = require('../utils/logger');
 
 // Exact-match greeting keywords that trigger the welcome message / menu.
@@ -24,7 +25,20 @@ const GREETING_KEYWORDS = new Set(['hi', 'hello', 'hey', 'hii', 'hlo', 'namaste'
 // booking session instead of being stuck until the session TTL expires.
 // Only checked against plain text (see the buttonReplyId/listReplyId guard
 // at the call site) so an interactive tap can never coincidentally match.
-const ESCAPE_KEYWORDS = new Set(['menu', 'cancel', 'exit', 'restart', 'stop']);
+// 'stop' is intentionally NOT included here — it's handled earlier in
+// receiveWebhook by STOP_KEYWORDS below (customer-controlled bot pause),
+// which always returns before this set would ever be checked.
+const ESCAPE_KEYWORDS = new Set(['menu', 'cancel', 'exit', 'restart']);
+
+// Customer-controlled bot pause, distinct from ESCAPE_KEYWORDS above:
+// 'cancel'/'exit'/'restart' mean "cancel my active booking", these mean
+// "stop messaging me" — a customer-triggered second way to set/clear the
+// same customers.bot_paused_until column the business owner controls via
+// message.controller.js's pause endpoint. Deliberately excludes 'cancel'/
+// 'exit'/'restart' for the same reason ESCAPE_KEYWORDS keeps them separate.
+const STOP_KEYWORDS = new Set(['stop', 'unsubscribe']);
+const START_KEYWORDS = new Set(['start']);
+const CUSTOMER_STOP_PAUSE_DURATION_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Insert a message row. Throws on failure — used at call sites that were
@@ -626,6 +640,109 @@ const receiveWebhook = async (req, res) => {
         });
       })
       .catch(err => logger.error('Error emitting usage_update:', err));
+
+    // Customer-controlled pause: checked ahead of both the active-booking-
+    // session handling (Step 12) and the isBotPaused early-return below —
+    // (a) "stop" mid-booking must not be treated as a booking answer, and
+    // (b) "start" must be able to clear a pause that would otherwise cause
+    // the isBotPaused check to silently swallow it first. Only plain text is
+    // checked (same guard ESCAPE_KEYWORDS uses) so a button/list tap can
+    // never coincidentally match.
+    const isPlainTextStopStart = !buttonReplyId && !listReplyId;
+    const normalizedStopStartText = isPlainTextStopStart ? (message.text?.body || '').trim().toLowerCase() : '';
+    if (STOP_KEYWORDS.has(normalizedStopStartText)) {
+      const newBotPausedUntil = new Date(Date.now() + CUSTOMER_STOP_PAUSE_DURATION_MS).toISOString();
+      const { error: stopPauseErr } = await supabase
+        .from('customers').update({ bot_paused_until: newBotPausedUntil }).eq('id', customer.id);
+      if (stopPauseErr) {
+        logger.error('Error pausing bot via customer STOP keyword:', stopPauseErr);
+      }
+      customer.botPausedUntil = newBotPausedUntil;
+
+      const stopText = "You won't receive messages for 24 hours. Reply START anytime to resume sooner.";
+      const stopMsg = await saveMessage({
+        business_id: tenant.businessId,
+        customer_id: customer.id,
+        customer_number: customerNumber,
+        direction: 'outbound',
+        type: 'text',
+        content: stopText,
+        status: 'sent',
+        is_read: true
+      });
+      await addToWhatsappQueue({
+        businessId: tenant.businessId,
+        phoneNumberId: tenant.phoneNumberId,
+        encryptedAccessToken: tenant.accessToken,
+        to: customerNumber,
+        message: stopText,
+        type: 'text',
+        messageId: stopMsg.id
+      });
+      usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+        logger.error('Error incrementing outbound usage:', err)
+      );
+      try {
+        socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+          customer,
+          message: stopMsg,
+          customerNumber
+        });
+      } catch (socketError) {
+        logger.error('Error emitting socket event:', socketError);
+      }
+
+      logger.info(`Customer ${customerNumber} paused the bot via STOP keyword for business ${tenant.businessId}`);
+      return; // Do not process booking session, greeting, or rule matching
+    } else if (START_KEYWORDS.has(normalizedStopStartText) &&
+               customer.botPausedUntil && new Date(customer.botPausedUntil).getTime() > Date.now() &&
+               !isIndefinitePause(customer.botPausedUntil)) {
+      // Indefinite pauses (owner "forever" pause / human handoff) are
+      // deliberately NOT clearable by the customer's own START — only a
+      // timed pause (owner's 24h pause or a prior customer STOP) is.
+      const { error: startPauseErr } = await supabase
+        .from('customers').update({ bot_paused_until: null }).eq('id', customer.id);
+      if (startPauseErr) {
+        logger.error('Error clearing bot pause via customer START keyword:', startPauseErr);
+      }
+      customer.botPausedUntil = null;
+
+      const startText = "You're all set — messages have resumed.";
+      const startMsg = await saveMessage({
+        business_id: tenant.businessId,
+        customer_id: customer.id,
+        customer_number: customerNumber,
+        direction: 'outbound',
+        type: 'text',
+        content: startText,
+        status: 'sent',
+        is_read: true
+      });
+      await addToWhatsappQueue({
+        businessId: tenant.businessId,
+        phoneNumberId: tenant.phoneNumberId,
+        encryptedAccessToken: tenant.accessToken,
+        to: customerNumber,
+        message: startText,
+        type: 'text',
+        messageId: startMsg.id
+      });
+      usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+        logger.error('Error incrementing outbound usage:', err)
+      );
+      try {
+        socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+          customer,
+          message: startMsg,
+          customerNumber
+        });
+      } catch (socketError) {
+        logger.error('Error emitting socket event:', socketError);
+      }
+
+      logger.info(`Customer ${customerNumber} resumed the bot via START keyword for business ${tenant.businessId}`);
+      return; // Do not process booking session, greeting, or rule matching
+    }
 
     if (isBotPaused) {
       logger.info(`Bot paused for ${customerNumber} until ${customer.botPausedUntil}, skipping reply`);
