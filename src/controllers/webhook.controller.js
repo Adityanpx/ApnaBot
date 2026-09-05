@@ -11,7 +11,7 @@ const { addToWhatsappQueue, addToWhatsappQueueAndWait } = require('../queues/wha
 const businessService = require('../services/business.service');
 const supabase = require('../config/supabase');
 const { toCamelCase } = require('../utils/caseConvert');
-const { applyMessageTemplate } = require('../utils/messageTemplating');
+const { applyMessageTemplate, applyMessageTemplateWithFooter } = require('../utils/messageTemplating');
 const { LANGUAGE_CATALOG, isValidLanguageCode } = require('../utils/languageCatalog');
 const { getLocalizedText } = require('../utils/localization');
 const logger = require('../utils/logger');
@@ -310,13 +310,15 @@ const sendFieldPrompt = async (ctx, field, introTextOverride = null) => {
     return;
   }
 
+  const templatedLabel = applyMessageTemplateWithFooter(field.label, tenant, customer);
+
   const outboundMsg = await saveMessage({
     business_id: tenant.businessId,
     customer_id: customer.id,
     customer_number: customerNumber,
     direction: 'outbound',
     type: 'text',
-    content: field.label,
+    content: templatedLabel,
     status: 'sent',
     triggered_rule_id: triggeredRuleId,
     is_read: true
@@ -327,7 +329,7 @@ const sendFieldPrompt = async (ctx, field, introTextOverride = null) => {
     phoneNumberId: tenant.phoneNumberId,
     encryptedAccessToken: tenant.accessToken,
     to: customerNumber,
-    message: field.label,
+    message: templatedLabel,
     type: 'text',
     messageId: outboundMsg.id
   };
@@ -1022,7 +1024,7 @@ const receiveWebhook = async (req, res) => {
       const localizedWelcomeMessage = getLocalizedText(businessDoc, 'welcomeMessage', customer.preferredLanguage);
 
       if (businessDoc && localizedWelcomeMessage) {
-        const greetingReplyText = applyMessageTemplate(localizedWelcomeMessage, tenant, customer);
+        const greetingReplyText = applyMessageTemplateWithFooter(localizedWelcomeMessage, tenant, customer);
 
         // Save outbound message
         const greetingOutboundMsg = await saveMessage({
@@ -1136,7 +1138,7 @@ const receiveWebhook = async (req, res) => {
         logger.error('Error recording booking lead:', err)
       );
       bookingField = firstField;
-      replyText = applyMessageTemplate(firstField.label, tenant, customer);
+      replyText = applyMessageTemplateWithFooter(firstField.label, tenant, customer);
 
     } else if (matchedNode) {
       triggeredRuleId = matchedNode.id;
@@ -1144,7 +1146,7 @@ const receiveWebhook = async (req, res) => {
       if (matchedNode.replyKind === 'text') {
         // Simple text reply (may also carry an image and/or buttons).
         const localizedReply = getLocalizedText(matchedNode, 'label', customer.preferredLanguage);
-        replyText = applyMessageTemplate(localizedReply, tenant, customer);
+        replyText = applyMessageTemplateWithFooter(localizedReply, tenant, customer);
 
       } else if (matchedNode.replyKind === 'booking_trigger') {
         // Start booking flow — ask first question. startGraphSession is
@@ -1161,10 +1163,10 @@ const receiveWebhook = async (req, res) => {
           logger.error('Error recording booking lead:', err)
         );
         bookingField = firstField;
-        replyText = applyMessageTemplate(firstField.label, tenant, customer);
+        replyText = applyMessageTemplateWithFooter(firstField.label, tenant, customer);
 
       } else if (matchedNode.replyKind === 'payment_trigger') {
-        replyText = applyMessageTemplate(matchedNode.label, tenant, customer) || 'Please complete your payment.';
+        replyText = applyMessageTemplateWithFooter(matchedNode.label, tenant, customer) || 'Please complete your payment.';
       }
     } else {
       // No rule matched — try an AI-generated fallback (opt-in per business),

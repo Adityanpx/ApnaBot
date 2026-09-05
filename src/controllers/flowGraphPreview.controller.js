@@ -22,7 +22,7 @@ const chatbotService = require('../services/chatbot.service');
 const smartFallbackService = require('../services/smartFallback.service');
 const businessService = require('../services/business.service');
 const { GREETING_KEYWORDS } = require('./webhook.controller');
-const { applyMessageTemplate } = require('../utils/messageTemplating');
+const { applyMessageTemplate, applyMessageTemplateWithFooter } = require('../utils/messageTemplating');
 const { getLocalizedText } = require('../utils/localization');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
@@ -142,7 +142,7 @@ const handleNoActiveSession = async (business, messageText, buttonReplyId) => {
   if (GREETING_KEYWORDS.has(normalizedText)) {
     const localizedWelcomeMessage = getLocalizedText(business, 'welcomeMessage', null);
     if (localizedWelcomeMessage) {
-      const replyText = applyMessageTemplate(localizedWelcomeMessage, business, null);
+      const replyText = applyMessageTemplateWithFooter(localizedWelcomeMessage, business, null);
       return { replyText, buttons: [], listOptions: [], session: null };
     }
     // No welcomeMessage configured - fall through to rule matching below,
@@ -178,7 +178,7 @@ const handleNoActiveSession = async (business, messageText, buttonReplyId) => {
     const { session: newBookingSession, field: firstField } = await bookingGraphService.startGraphSessionAtNode(
       business.id, directBookingEntry.nodeId, directBookingEntry.ruleId, null, directBookingEntry.edge
     );
-    const replyText = applyMessageTemplate(firstField.label, business, null);
+    const replyText = applyMessageTemplateWithFooter(firstField.label, business, null);
     const rendered = buildFieldOptions(firstField);
     return { replyText, buttons: rendered.buttons, listOptions: rendered.listOptions, session: newBookingSession };
   }
@@ -186,20 +186,20 @@ const handleNoActiveSession = async (business, messageText, buttonReplyId) => {
   if (matchedNode) {
     if (matchedNode.replyKind === 'text') {
       const localizedReply = getLocalizedText(matchedNode, 'label', null);
-      const replyText = applyMessageTemplate(localizedReply, business, null);
+      const replyText = applyMessageTemplateWithFooter(localizedReply, business, null);
       const rendered = buildReplyNodeOptions(matchedNode, matchedEdges);
       return { replyText, buttons: rendered.buttons, listOptions: rendered.listOptions, session: null };
     }
 
     if (matchedNode.replyKind === 'booking_trigger') {
       const { session: newBookingSession, field: firstField } = await bookingGraphService.startGraphSession(business.id, matchedNode.id, null);
-      const replyText = applyMessageTemplate(firstField.label, business, null);
+      const replyText = applyMessageTemplateWithFooter(firstField.label, business, null);
       const rendered = buildFieldOptions(firstField);
       return { replyText, buttons: rendered.buttons, listOptions: rendered.listOptions, session: newBookingSession };
     }
 
     if (matchedNode.replyKind === 'payment_trigger') {
-      const replyText = applyMessageTemplate(matchedNode.label, business, null) || 'Please complete your payment.';
+      const replyText = applyMessageTemplateWithFooter(matchedNode.label, business, null) || 'Please complete your payment.';
       return { replyText, buttons: [], listOptions: [], session: null };
     }
   }
@@ -258,8 +258,14 @@ const handleActiveSession = async (business, session, messageText, buttonReplyId
       if (tappedNodeId === null || tappedNodeId !== session.currentNodeId) {
         // Stale tap - re-render the current question without advancing,
         // same as the real webhook's stale-tap guard.
+        // Mirrors sendFieldPrompt: only the non-carousel path gets the
+        // footer/template treatment — a vehicle_carousel's intro text is
+        // sent as-is by the real webhook, so the preview must match.
         const rendered = buildFieldOptions(currentField);
-        return { replyText: currentField.label, buttons: rendered.buttons, listOptions: rendered.listOptions, session };
+        const staleReplyText = currentField.fieldType === 'vehicle_carousel'
+          ? currentField.label
+          : applyMessageTemplateWithFooter(currentField.label, business, null);
+        return { replyText: staleReplyText, buttons: rendered.buttons, listOptions: rendered.listOptions, session };
       }
 
       if (currentField.fieldType === 'vehicle_carousel') {
@@ -338,8 +344,14 @@ const handleActiveSession = async (business, session, messageText, buttonReplyId
     // advanced onto a carousel they can't actually see.
     return { replyText: gate.replyText, buttons: [], listOptions: [], session: sessionBeforeThisTurn };
   }
+  // Mirrors sendFieldPrompt: only the non-carousel path gets the
+  // footer/template treatment — a vehicle_carousel's intro text is sent
+  // as-is by the real webhook, so the preview must match.
   const rendered = buildFieldOptions(result);
-  return { replyText: result.label, buttons: rendered.buttons, listOptions: rendered.listOptions, session: updatedSession };
+  const nextReplyText = result.fieldType === 'vehicle_carousel'
+    ? result.label
+    : applyMessageTemplateWithFooter(result.label, business, null);
+  return { replyText: nextReplyText, buttons: rendered.buttons, listOptions: rendered.listOptions, session: updatedSession };
 };
 
 /**

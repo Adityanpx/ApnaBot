@@ -13,7 +13,8 @@ const businessFieldMap = {
   roundTripDriverDaAmount: 'round_trip_driver_da_amount', disabledBookingFields: 'disabled_booking_fields',
   enabledLanguages: 'enabled_languages', welcomeMessageTranslations: 'welcome_message_translations',
   requireAdvancePayment: 'require_advance_payment', advancePaymentType: 'advance_payment_type',
-  advancePaymentValue: 'advance_payment_value'
+  advancePaymentValue: 'advance_payment_value',
+  businessHours: 'business_hours', footerMessage: 'footer_message'
 };
 
 /**
