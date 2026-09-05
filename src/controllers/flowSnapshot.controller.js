@@ -6,6 +6,7 @@ const {
   deleteBusinessGraphRows,
   writeBusinessGraphRows
 } = require('../services/flowSnapshot.service');
+const businessCategoryService = require('../services/businessCategory.service');
 const logger = require('../utils/logger');
 
 /**
@@ -158,6 +159,15 @@ const deleteSnapshot = async (req, res, next) => {
  * against accidentally wiping a business's in-progress graph belongs in the
  * frontend as an explicit confirmation step before this endpoint is called,
  * not as a backend precondition.
+ *
+ * On success, also auto-saves a flow_snapshots restore point from
+ * template.nodes/.edges directly (not re-read from flow_nodes — same
+ * values just written, no redundant round-trip; note the snapshot's stored
+ * ids are therefore the template's original ids, not the fresh ones
+ * writeBusinessGraphRows minted for this business's live rows — harmless
+ * since restore only needs the stored nodes/edges to be internally
+ * consistent, same as any other snapshot). Snapshot-save failures are
+ * logged and swallowed — the import having succeeded is what matters.
  */
 const importCategoryTemplate = async (req, res, next) => {
   try {
@@ -182,6 +192,24 @@ const importCategoryTemplate = async (req, res, next) => {
       reuseIds: false,
       resetTriggerCount: true
     });
+
+    try {
+      const categories = await businessCategoryService.getAllCategories();
+      const categoryLabel = categories.find((c) => c.value === category)?.label || category;
+      const formattedDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+      const { error: snapshotErr } = await supabase.from('flow_snapshots').insert({
+        business_id: businessId,
+        name: `Imported ${categoryLabel} template — ${formattedDate}`,
+        nodes: template.nodes,
+        edges: template.edges,
+        is_category_template: false,
+        is_active: false
+      });
+      if (snapshotErr) throw snapshotErr;
+    } catch (snapshotError) {
+      logger.error('Error auto-snapshotting imported category template:', snapshotError);
+    }
 
     return successResponse(res, 200, null, 'Category template imported successfully');
   } catch (error) {
