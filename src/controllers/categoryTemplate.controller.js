@@ -7,16 +7,17 @@ const logger = require('../utils/logger');
 
 /**
  * GET /api/admin/category-templates
- * List all category-template rows. One per category is expected (enforced
- * at the application layer by cloneFromBusiness's delete-then-insert below,
- * not by a DB uniqueness constraint — no existing precedent for that kind
- * of DB-level uniqueness in this table elsewhere).
+ * List all category-template rows. Multiple templates per category are
+ * expected now — business owners pick from a list of templates for their
+ * category instead of getting a single fixed one (see
+ * flowSnapshot.controller.js#getCategoryTemplateOptions for the
+ * business-owner-facing version of this list).
  */
 const getCategoryTemplates = async (req, res, next) => {
   try {
     const { data, error } = await supabase
       .from('flow_snapshots')
-      .select('id, category, name, created_at, updated_at')
+      .select('id, category, name, description, created_at, updated_at')
       .eq('is_category_template', true)
       .order('category', { ascending: true });
     if (error) throw error;
@@ -30,15 +31,15 @@ const getCategoryTemplates = async (req, res, next) => {
 
 /**
  * POST /api/admin/category-templates/clone-from-business
- * Body: { businessId, category, name }. Reads businessId's CURRENT
- * flow_nodes/flow_edges (same read helper createSnapshot uses) and stores
- * them as a category-template row. If a template already exists for
- * category, it's replaced (delete then insert) rather than allowed to
- * duplicate — matches the "one per category" expectation from getCategoryTemplates.
+ * Body: { businessId, category, name, description? }. Reads businessId's
+ * CURRENT flow_nodes/flow_edges (same read helper createSnapshot uses) and
+ * stores them as a NEW category-template row, alongside any existing
+ * templates for that category — multiple templates per category are
+ * expected now, this always ADDS one, never replaces.
  */
 const cloneFromBusiness = async (req, res, next) => {
   try {
-    const { businessId, category, name } = req.body;
+    const { businessId, category, name, description } = req.body;
 
     if (!businessId || typeof businessId !== 'string') {
       return errorResponse(res, 400, 'businessId is required');
@@ -59,19 +60,16 @@ const cloneFromBusiness = async (req, res, next) => {
 
     const { nodes, edges } = await readBusinessGraphRows(businessId);
 
-    const { error: deleteErr } = await supabase
-      .from('flow_snapshots').delete().eq('is_category_template', true).eq('category', category);
-    if (deleteErr) throw deleteErr;
-
     const { data: template, error: insertErr } = await supabase.from('flow_snapshots').insert({
       business_id: null,
       category,
       name: name.trim(),
+      description: description || null,
       nodes,
       edges,
       is_category_template: true,
       is_active: true
-    }).select('id, category, name, created_at, updated_at').single();
+    }).select('id, category, name, description, created_at, updated_at').single();
     if (insertErr) throw insertErr;
 
     return successResponse(res, 201, toCamelCase(template));
@@ -140,18 +138,20 @@ const KNOWN_NODE_TYPES = ['reply', 'question', 'vehicle_carousel', 'rentalPackag
 
 /**
  * POST /api/admin/category-templates/import-json
- * Body: { category, name, nodes, edges }. Counterpart to exportTemplateJson —
- * takes the same raw row-array shape (hand-edited or round-tripped from an
- * export) and stores it as a category template via the same delete-then-insert
- * cloneFromBusiness uses. Deliberately does NOT re-mint node/edge ids: this is
- * a fresh template being defined from scratch, not copied from a live
- * business, so the ids in the JSON are the template's canonical ids.
- * Businesses importing the template later mint their own fresh ids
- * (writeBusinessGraphRows reuseIds:false), so there's no collision risk.
+ * Body: { category, name, nodes, edges, description? }. Counterpart to
+ * exportTemplateJson — takes the same raw row-array shape (hand-edited or
+ * round-tripped from an export) and stores it as a NEW category template,
+ * alongside any existing templates for that category — multiple templates
+ * per category are expected now, this always ADDS one, never replaces.
+ * Deliberately does NOT re-mint node/edge ids: this is a fresh template
+ * being defined from scratch, not copied from a live business, so the ids
+ * in the JSON are the template's canonical ids. Businesses importing the
+ * template later mint their own fresh ids (writeBusinessGraphRows
+ * reuseIds:false), so there's no collision risk.
  */
 const importTemplateJson = async (req, res, next) => {
   try {
-    const { category, name, nodes, edges } = req.body;
+    const { category, name, nodes, edges, description } = req.body;
 
     if (!category || !(await businessCategoryService.isKnownCategory(category))) {
       return errorResponse(res, 400, `Invalid category: ${category}`);
@@ -182,19 +182,16 @@ const importTemplateJson = async (req, res, next) => {
       }
     }
 
-    const { error: deleteErr } = await supabase
-      .from('flow_snapshots').delete().eq('is_category_template', true).eq('category', category);
-    if (deleteErr) throw deleteErr;
-
     const { data: template, error: insertErr } = await supabase.from('flow_snapshots').insert({
       business_id: null,
       category,
       name: name.trim(),
+      description: description || null,
       nodes,
       edges,
       is_category_template: true,
       is_active: true
-    }).select('id, category, name, created_at, updated_at').single();
+    }).select('id, category, name, description, created_at, updated_at').single();
     if (insertErr) throw insertErr;
 
     return successResponse(res, 201, toCamelCase(template));

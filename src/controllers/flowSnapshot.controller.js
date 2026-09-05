@@ -145,14 +145,49 @@ const deleteSnapshot = async (req, res, next) => {
 };
 
 /**
+ * GET /api/flow-graph/snapshots/category-templates?category=X
+ * Lists active templates for the given category as { id, name, description },
+ * no nodes/edges — list view only, same "keep it light" pattern getSnapshots
+ * follows. Populates the picker business owners use to choose a template
+ * before calling importCategoryTemplate below.
+ */
+const getCategoryTemplateOptions = async (req, res, next) => {
+  try {
+    const { category } = req.query;
+
+    if (!category || typeof category !== 'string') {
+      return errorResponse(res, 400, 'category is required');
+    }
+
+    const { data, error } = await supabase
+      .from('flow_snapshots')
+      .select('id, name, description')
+      .eq('category', category).eq('is_category_template', true).eq('is_active', true)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    return successResponse(res, 200, { templates: (data || []).map(toCamelCase) });
+  } catch (error) {
+    logger.error('Error in getCategoryTemplateOptions:', error);
+    next(error);
+  }
+};
+
+/**
  * POST /api/flow-graph/snapshots/import-category-template
- * Body: { category }. Full replace of this business's current graph with
- * the active category-template's stored nodes/edges, minting FRESH ids
+ * Body: { templateId }. Full replace of this business's current graph with
+ * the chosen category-template's stored nodes/edges, minting FRESH ids
  * (writeBusinessGraphRows reuseIds:false — the same template row is copied
  * into many businesses, so reusing its stored ids would collide the moment
  * a second business imports it) and resetting trigger_count (the source is
  * a template or another business, not this one — its historical counts are
  * meaningless here).
+ *
+ * Looks up the template by id only (not by category) — this deliberately
+ * trusts the caller to have picked a templateId whose category matches
+ * their own business (via the filtered list from getCategoryTemplateOptions
+ * above) rather than re-validating the category server-side. Flagged as a
+ * deliberate simplification, not an oversight.
  *
  * Deliberately does NOT refuse when this business's graph is already
  * non-empty — always replaces. Confirmed with the requester: the guard
@@ -171,20 +206,20 @@ const deleteSnapshot = async (req, res, next) => {
  */
 const importCategoryTemplate = async (req, res, next) => {
   try {
-    const { category } = req.body;
+    const { templateId } = req.body;
     const businessId = req.user.businessId;
 
-    if (!category || typeof category !== 'string') {
-      return errorResponse(res, 400, 'category is required');
+    if (!templateId || typeof templateId !== 'string') {
+      return errorResponse(res, 400, 'templateId is required');
     }
 
     const { data: template, error: findErr } = await supabase
       .from('flow_snapshots').select('*')
-      .eq('category', category).eq('is_category_template', true).eq('is_active', true)
+      .eq('id', templateId).eq('is_category_template', true).eq('is_active', true)
       .maybeSingle();
     if (findErr) throw findErr;
     if (!template) {
-      return errorResponse(res, 404, `No category template found for category "${category}"`);
+      return errorResponse(res, 404, 'Template not found');
     }
 
     await deleteBusinessGraphRows(businessId);
@@ -195,7 +230,7 @@ const importCategoryTemplate = async (req, res, next) => {
 
     try {
       const categories = await businessCategoryService.getAllCategories();
-      const categoryLabel = categories.find((c) => c.value === category)?.label || category;
+      const categoryLabel = categories.find((c) => c.value === template.category)?.label || template.category;
       const formattedDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
       const { error: snapshotErr } = await supabase.from('flow_snapshots').insert({
@@ -260,6 +295,7 @@ module.exports = {
   getSnapshots,
   restoreSnapshot,
   deleteSnapshot,
+  getCategoryTemplateOptions,
   importCategoryTemplate,
   startBlankFlow
 };

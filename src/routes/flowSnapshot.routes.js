@@ -27,6 +27,13 @@ router.post('/import-category-template', requireRole('owner'), flowSnapshotContr
 // reason as import-category-template above.
 router.post('/start-blank', requireRole('owner'), flowSnapshotController.startBlankFlow);
 
+// GET /category-templates?category=X - Lists active templates for a category
+// (id/name/description only) so business owners can pick one to import.
+// Registered before /:id/restore for the same non-colliding-suffix reason as
+// above. No requireRole - any authenticated business member can list, same
+// as GET / above.
+router.get('/category-templates', flowSnapshotController.getCategoryTemplateOptions);
+
 // POST /:id/restore - Full replace of this business's current graph with one
 // of its own saved snapshots
 router.post('/:id/restore', requireRole('owner'), flowSnapshotController.restoreSnapshot);
