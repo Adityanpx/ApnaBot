@@ -67,6 +67,13 @@ module.exports = {
   // Optional: only needed by shops with enableDistanceFares on; read directly
   // from process.env in distanceMatrix.service.js, exported here for consistency.
   GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY,
+  // Optional: a WhatsApp Business number ApnaBot itself owns, used only for
+  // system-to-owner notifications (autopay grace/paused nudges) — distinct
+  // from any business's own connected WABA number. Not required at boot:
+  // until this is set up in Meta, subscriptionNotifications.service.js logs
+  // and skips sending rather than blocking server startup.
+  PLATFORM_WHATSAPP_PHONE_NUMBER_ID: process.env.PLATFORM_WHATSAPP_PHONE_NUMBER_ID,
+  PLATFORM_WHATSAPP_ACCESS_TOKEN: process.env.PLATFORM_WHATSAPP_ACCESS_TOKEN,
   // BullMQ key prefix for the whatsapp-outbound/broadcast-outbound queues.
   // Defaults to NODE_ENV so a local dev run can never join the same queue as
   // production even if REDIS_URL is accidentally pointed at the same Redis

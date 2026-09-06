@@ -230,7 +230,12 @@ const razorpayWebhook = async (req, res, next) => {
       return errorResponse(res, 400, 'Invalid signature');
     }
 
-    await paymentService.handleRazorpayWebhook(req.body);
+    // Razorpay's unique-per-delivery id is sent as a header, NOT a body
+    // field (the JSON payload has no top-level "id") — used downstream for
+    // webhook_events idempotency on the subscription/autopay event types.
+    const eventId = req.headers['x-razorpay-event-id'];
+
+    await paymentService.handleRazorpayWebhook(req.body, eventId);
 
     return successResponse(res, 200, 'Webhook processed successfully');
   } catch (error) {

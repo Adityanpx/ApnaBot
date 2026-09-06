@@ -10,7 +10,9 @@ const {
   getPlans,
   createSubscriptionOrder,
   verifyAndActivate,
-  cancelAutoRenew
+  cancelAutoRenew,
+  createAutopaySubscription,
+  verifyAutopayAuthorization
 } = require('../controllers/subscription.controller');
 
 router.use(protect);
@@ -25,5 +27,7 @@ router.get('/',        getCurrentSubscription);
 router.post('/create', createSubscriptionOrder);
 router.post('/verify', verifyAndActivate);
 router.post('/cancel', cancelAutoRenew);
+router.post('/autopay/create', createAutopaySubscription);
+router.post('/autopay/verify', verifyAutopayAuthorization);
 
 module.exports = router;
