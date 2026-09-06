@@ -38,6 +38,11 @@ const ESCAPE_KEYWORDS = new Set(['menu', 'cancel', 'exit', 'restart']);
 // 'exit'/'restart' for the same reason ESCAPE_KEYWORDS keeps them separate.
 const STOP_KEYWORDS = new Set(['stop', 'unsubscribe']);
 const START_KEYWORDS = new Set(['start']);
+
+// Lets a customer re-open the language picker at any time, not just on their
+// very first message (see the change-language check in receiveWebhook, and
+// Step 12.6 below for the first-time version of this same picker).
+const CHANGE_LANGUAGE_KEYWORDS = new Set(['language', 'भाषा']);
 const CUSTOMER_STOP_PAUSE_DURATION_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -749,6 +754,127 @@ const receiveWebhook = async (req, res) => {
       return;
     }
 
+    // Step 11.5 - Change-language keyword: lets a customer who already has a
+    // preferredLanguage ask for the picker again at any time, not just on
+    // their first-ever message. Checked ahead of both Step 12's active-
+    // booking-session handling and Step 12.6's preferredLanguage === null
+    // check below — same reasoning as STOP_KEYWORDS/START_KEYWORDS above, a
+    // keyword like this must not be swallowed as a booking answer — but
+    // after the isBotPaused check above (unlike STOP/START, this doesn't
+    // control the pause flag itself, so a paused customer shouldn't get an
+    // unsolicited reply). Only plain text is checked, same guard as
+    // STOP_KEYWORDS/START_KEYWORDS/ESCAPE_KEYWORDS.
+    const normalizedLanguageText = isPlainTextStopStart ? (message.text?.body || '').trim().toLowerCase() : '';
+    if (CHANGE_LANGUAGE_KEYWORDS.has(normalizedLanguageText)) {
+      const languageBusinessDoc = await businessService.getBusinessById(tenant.businessId);
+      const enabledLanguages = languageBusinessDoc?.enabledLanguages?.length ? languageBusinessDoc.enabledLanguages : ['en'];
+
+      if (enabledLanguages.length === 1) {
+        // Nothing to ask - confirm the (only) language instead of showing a
+        // 1-option picker. Also (re-)persists preferred_language in case it
+        // was never set yet (e.g. this was the customer's very first
+        // message and it happened to be "language" instead of "hi").
+        const { data: updatedCustomer, error: langErr } = await supabase
+          .from('customers')
+          .update({ preferred_language: enabledLanguages[0] })
+          .eq('id', customer.id)
+          .select()
+          .single();
+        if (langErr) throw langErr;
+        customer.preferredLanguage = toCamelCase(updatedCustomer).preferredLanguage;
+
+        const onlyLanguageName = LANGUAGE_CATALOG[enabledLanguages[0]]?.name || enabledLanguages[0];
+        const onlyLanguageText = `This business only replies in ${onlyLanguageName}.`;
+        const onlyLanguageMsg = await saveMessage({
+          business_id: tenant.businessId,
+          customer_id: customer.id,
+          customer_number: customerNumber,
+          direction: 'outbound',
+          type: 'text',
+          content: onlyLanguageText,
+          status: 'sent',
+          is_read: true
+        });
+        await addToWhatsappQueue({
+          businessId: tenant.businessId,
+          phoneNumberId: tenant.phoneNumberId,
+          encryptedAccessToken: tenant.accessToken,
+          to: customerNumber,
+          message: onlyLanguageText,
+          type: 'text',
+          messageId: onlyLanguageMsg.id
+        });
+        usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+          logger.error('Error incrementing outbound usage:', err)
+        );
+        try {
+          socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+            customer,
+            message: onlyLanguageMsg,
+            customerNumber
+          });
+        } catch (socketError) {
+          logger.error('Error emitting socket event:', socketError);
+        }
+
+        logger.info(`Change-language keyword: only one language enabled for business ${tenant.businessId}, confirmed to customer ${customerNumber}`);
+        return; // Do not process booking session, greeting, or rule matching
+      }
+
+      // 2 or 3 languages enabled - ask, then wait for the reply. Deliberately
+      // does NOT touch customer.preferredLanguage here - it stays whatever it
+      // already was until a tap actually lands (handled by the same lang_
+      // handler below), so an abandoned picker leaves the existing language
+      // working normally on the customer's next message.
+      const languageButtons = enabledLanguages.map((code) => ({
+        title: (LANGUAGE_CATALOG[code]?.name || code).slice(0, 20),
+        nextKeyword: `lang_${code}`
+      }));
+      const languageChoiceLine = 'Choose your language / अपनी भाषा चुनें';
+      const welcomeMessage = getLocalizedText(languageBusinessDoc, 'welcomeMessage', 'en');
+      const languagePromptText = applyMessageTemplate(
+        welcomeMessage ? `${welcomeMessage}\n\n${languageChoiceLine}` : languageChoiceLine,
+        tenant,
+        customer
+      );
+
+      const languagePromptMsg = await saveMessage({
+        business_id: tenant.businessId,
+        customer_id: customer.id,
+        customer_number: customerNumber,
+        direction: 'outbound',
+        type: 'text',
+        content: languagePromptText,
+        status: 'sent',
+        is_read: true
+      });
+      await addToWhatsappQueue({
+        businessId: tenant.businessId,
+        phoneNumberId: tenant.phoneNumberId,
+        encryptedAccessToken: tenant.accessToken,
+        to: customerNumber,
+        message: languagePromptText,
+        type: 'text',
+        buttons: languageButtons,
+        messageId: languagePromptMsg.id
+      });
+      usageService.incrementUsage(tenant.businessId, 'outbound').catch(err =>
+        logger.error('Error incrementing outbound usage:', err)
+      );
+      try {
+        socketService.emitToBusiness(tenant.businessId.toString(), 'new_message', {
+          customer,
+          message: languagePromptMsg,
+          customerNumber
+        });
+      } catch (socketError) {
+        logger.error('Error emitting socket event:', socketError);
+      }
+
+      logger.info(`Sent change-language picker for business ${tenant.businessId}, customer ${customerNumber}`);
+      return; // Do not process booking session, greeting, or rule matching
+    }
+
     // Step 11 - Skip non-text messages, EXCEPT interactive button taps (which
     // carry a keyword in button_reply.id and must chain to the next rule).
     if (messageType !== 'text' && !buttonReplyId && !listReplyId) {
@@ -758,7 +884,15 @@ const receiveWebhook = async (req, res) => {
 
     // Step 12 - Check active booking session
     const activeSession = await bookingService.getBookingSession(tenant.businessId, customerNumber);
-    if (activeSession) {
+    // A language-picker tap (lang_{code}) must never be treated as a booking-
+    // session answer — its id shape ("lang_{code}") doesn't match the graph
+    // engine's "{node_id}:{index}" options scheme, so left unguarded it would
+    // be misread as a stale tap below and silently re-prompt the current
+    // booking question instead of ever reaching the lang_ handler further
+    // down (Step 12.6-adjacent). This matters now that "language" (above) can
+    // fire mid-booking, leaving activeSession untouched on purpose.
+    const isLanguagePickerTap = !!(buttonReplyId && buttonReplyId.startsWith('lang_'));
+    if (activeSession && !isLanguagePickerTap) {
       logger.info(`Active booking session for ${customerNumber}`);
 
       // Escape hatch: let the customer cancel out of the booking flow with a
@@ -1123,6 +1257,25 @@ const receiveWebhook = async (req, res) => {
         .single();
       if (langErr) throw langErr;
       customer.preferredLanguage = toCamelCase(updatedCustomer).preferredLanguage;
+
+      if (activeSession) {
+        // Customer changed language mid-booking (Step 11.5's keyword can fire
+        // while a session is active, deliberately leaving it untouched) -
+        // resume the pending question in the new language instead of falling
+        // through to the greeting/menu below, which would otherwise abandon
+        // the booking's visible flow even though the session is still alive
+        // in Redis (isLanguagePickerTap kept Step 12 from consuming this tap
+        // as a booking answer).
+        const resumedField = await bookingGraphService.getCurrentNodeField(tenant.businessId, activeSession, customer.preferredLanguage);
+        if (resumedField) {
+          await sendFieldPrompt(
+            { tenant, customer, customerNumber, triggeredRuleId: activeSession.ruleId },
+            resumedField
+          );
+          logger.info(`Set preferred language ${tappedCode} for business ${tenant.businessId}, customer ${customerNumber}; resumed active booking session`);
+          return; // Do not run greeting or rule matching - booking session is still active
+        }
+      }
 
       logger.info(`Set preferred language ${tappedCode} for business ${tenant.businessId}, customer ${customerNumber}; falling through to greeting`);
       messageText = 'hi';
