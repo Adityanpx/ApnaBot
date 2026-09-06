@@ -10,6 +10,44 @@ const {
 const businessCategoryService = require('../services/businessCategory.service');
 const logger = require('../utils/logger');
 
+const MAX_SNAPSHOTS_PER_BUSINESS = 5;
+
+/**
+ * Keeps at most MAX_SNAPSHOTS_PER_BUSINESS of a business's own saved
+ * snapshots (is_category_template: false), deleting the oldest ones first.
+ */
+const enforceSnapshotCap = async (businessId) => {
+  const { data, error } = await supabase
+    .from('flow_snapshots')
+    .select('id')
+    .eq('business_id', businessId)
+    .eq('is_category_template', false)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+
+  const snapshots = data || [];
+  if (snapshots.length <= MAX_SNAPSHOTS_PER_BUSINESS) return;
+
+  const idsToDelete = snapshots.slice(0, snapshots.length - MAX_SNAPSHOTS_PER_BUSINESS).map((s) => s.id);
+  const { error: deleteErr } = await supabase.from('flow_snapshots').delete().in('id', idsToDelete);
+  if (deleteErr) throw deleteErr;
+};
+
+/**
+ * Marks snapshotId as the single active snapshot for this business's own
+ * saved snapshots (is_category_template: false), unsetting every other one.
+ */
+const setActiveSnapshot = async (businessId, snapshotId) => {
+  const { error: unsetErr } = await supabase
+    .from('flow_snapshots').update({ is_active: false })
+    .eq('business_id', businessId).eq('is_category_template', false).neq('id', snapshotId);
+  if (unsetErr) throw unsetErr;
+
+  const { error: setErr } = await supabase
+    .from('flow_snapshots').update({ is_active: true }).eq('id', snapshotId);
+  if (setErr) throw setErr;
+};
+
 /**
  * POST /api/flow-graph/snapshots
  * Body: { name }. Copies this business's CURRENT flow_nodes/flow_edges into
@@ -39,7 +77,10 @@ const createSnapshot = async (req, res, next) => {
     }).select('id, name, created_at, is_active').single();
     if (error) throw error;
 
-    return successResponse(res, 201, toCamelCase(snapshot));
+    await setActiveSnapshot(businessId, snapshot.id);
+    await enforceSnapshotCap(businessId);
+
+    return successResponse(res, 201, toCamelCase({ ...snapshot, is_active: true }));
   } catch (error) {
     logger.error('Error in createSnapshot:', error);
     next(error);
@@ -102,17 +143,14 @@ const restoreSnapshot = async (req, res, next) => {
     });
     await invalidateRulesCache(businessId);
 
-    const { error: unsetErr } = await supabase
-      .from('flow_snapshots').update({ is_active: false })
-      .eq('business_id', businessId).eq('is_category_template', false).neq('id', id);
-    if (unsetErr) throw unsetErr;
+    await setActiveSnapshot(businessId, id);
 
-    const { data: updatedSnapshot, error: setErr } = await supabase
-      .from('flow_snapshots').update({ is_active: true }).eq('id', id)
-      .select('id, name, created_at, is_active').single();
-    if (setErr) throw setErr;
-
-    return successResponse(res, 200, toCamelCase(updatedSnapshot), 'Snapshot restored successfully');
+    return successResponse(res, 200, toCamelCase({
+      id: snapshot.id,
+      name: snapshot.name,
+      created_at: snapshot.created_at,
+      is_active: true
+    }), 'Snapshot restored successfully');
   } catch (error) {
     logger.error('Error in restoreSnapshot:', error);
     next(error);
@@ -236,15 +274,18 @@ const importCategoryTemplate = async (req, res, next) => {
       const categoryLabel = categories.find((c) => c.value === template.category)?.label || template.category;
       const formattedDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-      const { error: snapshotErr } = await supabase.from('flow_snapshots').insert({
+      const { data: newSnapshot, error: snapshotErr } = await supabase.from('flow_snapshots').insert({
         business_id: businessId,
         name: `Imported ${categoryLabel} template — ${formattedDate}`,
         nodes: template.nodes,
         edges: template.edges,
         is_category_template: false,
-        is_active: false
-      });
+        is_active: true
+      }).select('id').single();
       if (snapshotErr) throw snapshotErr;
+
+      await setActiveSnapshot(businessId, newSnapshot.id);
+      await enforceSnapshotCap(businessId);
     } catch (snapshotError) {
       logger.error('Error auto-snapshotting imported category template:', snapshotError);
     }
