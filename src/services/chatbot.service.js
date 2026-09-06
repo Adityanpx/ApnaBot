@@ -197,16 +197,18 @@ const findMatchingRule = async (businessId, incomingText, { incrementCount = tru
 
     // Pass 2 - Starts with match
     if (!matchedNode) {
-      matchedNode = activeNodes.find(node =>
-        node.matchType === 'startsWith' && normalizedText.startsWith(normalizeText(node.keyword))
-      );
+      matchedNode = activeNodes.find(node => {
+        const normalizedKeyword = normalizeText(node.keyword);
+        return node.matchType === 'startsWith' && normalizedKeyword && normalizedText.startsWith(normalizedKeyword);
+      });
     }
 
     // Pass 3 - Contains match
     if (!matchedNode) {
-      matchedNode = activeNodes.find(node =>
-        node.matchType === 'contains' && normalizedText.includes(normalizeText(node.keyword))
-      );
+      matchedNode = activeNodes.find(node => {
+        const normalizedKeyword = normalizeText(node.keyword);
+        return node.matchType === 'contains' && normalizedKeyword && normalizedText.includes(normalizedKeyword);
+      });
     }
 
     // Pass 4 - Hindi/Hinglish alias match (last resort, after English matching fails)
