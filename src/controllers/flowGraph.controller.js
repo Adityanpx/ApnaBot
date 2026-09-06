@@ -17,7 +17,7 @@ const { isValidLanguageCode } = require('../utils/languageCatalog');
 const logger = require('../utils/logger');
 
 const VALID_MATCH_TYPES = ['exact', 'contains', 'startsWith'];
-const VALID_CONTENT_TYPES = ['text', 'buttons', 'list'];
+const VALID_CONTENT_TYPES = ['text', 'buttons', 'list', 'location'];
 const VALID_REPLY_KINDS = ['text', 'booking_trigger', 'payment_trigger'];
 // 'rentalPackage' deliberately excluded — still engine-internal/migration-only,
 // per PRD.md's "NOT done yet" note. Only vehicle_carousel has a create path.
@@ -236,8 +236,8 @@ const createReplyNode = async (req, res, next) => {
     if (replyKind === 'booking_trigger' && !label) {
       label = 'Great! Let me collect your details.';
     }
-    if (!label && !imageUrl) {
-      return errorResponse(res, 400, 'label is required (unless imageUrl is provided)');
+    if (!label && !imageUrl && contentType !== 'location') {
+      return errorResponse(res, 400, 'label is required (unless imageUrl is provided, or contentType is "location")');
     }
     if (!label) label = '';
 
@@ -978,8 +978,8 @@ const saveFullGraph = async (req, res, next) => {
 
       if (replyKind === 'payment_trigger' && !label) label = 'Please complete your payment.';
       if (replyKind === 'booking_trigger' && !label) label = 'Great! Let me collect your details.';
-      if (!label && !imageUrl) {
-        return errorResponse(res, 400, `replyNodes[${i}]: label is required (unless imageUrl is provided)`);
+      if (!label && !imageUrl && contentType !== 'location') {
+        return errorResponse(res, 400, `replyNodes[${i}]: label is required (unless imageUrl is provided, or contentType is "location")`);
       }
       if (!label) label = '';
 

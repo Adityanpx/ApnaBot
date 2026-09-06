@@ -25,10 +25,15 @@ const worker = new Worker('whatsapp-outbound', async (job) => {
   const { businessId, phoneNumberId, encryptedAccessToken, to, message, messageId,
           type = 'text', imageUrl = null, buttons = [], listOptions = [],
           interactiveButtons = null, interactiveList = null, listButtonLabel = 'Choose',
-          step = null } = job.data;
+          step = null, location = null } = job.data;
 
   try {
-    if (Array.isArray(interactiveList) && interactiveList.length > 0) {
+    if (location) {
+      // Business's own coordinates, sent as a map pin (see webhook.controller.js's
+      // location-content-type branches). Distinct payload shape, so checked
+      // before the message/imageUrl-based dispatch below.
+      await whatsappService.sendLocationMessage(phoneNumberId, encryptedAccessToken, to, location.latitude, location.longitude, location.name, location.address);
+    } else if (Array.isArray(interactiveList) && interactiveList.length > 0) {
       // Booking-field choice question rendered as a tappable list (Part C/D/E).
       await whatsappService.sendListMessage(phoneNumberId, encryptedAccessToken, to, message, listButtonLabel, interactiveList, step);
     } else if (Array.isArray(interactiveButtons) && interactiveButtons.length > 0) {

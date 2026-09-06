@@ -75,6 +75,39 @@ const sendImageMessage = async (phoneNumberId, encryptedAccessToken, to, imageUr
 };
 
 /**
+ * Send a location message via WhatsApp (the business's own saved coordinates
+ * as a map pin, e.g. a reply/question node with contentType 'location').
+ * @param {string} phoneNumberId - The WhatsApp phone number ID
+ * @param {string} encryptedAccessToken - Encrypted Meta access token
+ * @param {string} to - Recipient phone number
+ * @param {number} latitude
+ * @param {number} longitude
+ * @param {string} [name] - Location name shown under the pin
+ * @param {string} [address] - Location address shown under the pin
+ * @returns {Promise<Object>}
+ */
+const sendLocationMessage = async (phoneNumberId, encryptedAccessToken, to, latitude, longitude, name, address) => {
+  try {
+    const accessToken = decrypt(encryptedAccessToken);
+    const response = await axios.post(
+      `${META_API_BASE}/${phoneNumberId}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'location',
+        location: { latitude, longitude, name, address }
+      },
+      { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+    );
+    return response.data;
+  } catch (error) {
+    logger.error('Error sending location message:', { phoneNumberId, to, error: error.response?.data || error.message });
+    throw error;
+  }
+};
+
+/**
  * Send an interactive reply-buttons message (optional image header + body + up to 3 buttons).
  * Each button's id is its nextKeyword (chatbot.service.js's getOutgoingEdges
  * sets this to the edge's own id), which the webhook resolves back to
@@ -295,6 +328,7 @@ const markMessageAsRead = async (phoneNumberId, encryptedAccessToken, metaMessag
 module.exports = {
   sendTextMessage,
   sendImageMessage,
+  sendLocationMessage,
   sendInteractiveButtons,
   sendListMessage,
   sendRuleListMessage,

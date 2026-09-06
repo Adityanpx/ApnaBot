@@ -1382,7 +1382,43 @@ const receiveWebhook = async (req, res) => {
         outboundJobData.listButtonLabel = 'Choose';
       }
     }
-    await addToWhatsappQueue(outboundJobData);
+
+    if (matchedNode?.contentType === 'location') {
+      // Reply node sends the business's own saved coordinates as a map pin
+      // instead of authored text (matchedNode.label is '' for this
+      // contentType -- see flowGraph.controller.js's createReplyNode/
+      // saveFullGraph carve-out). outboundMsg was already saved above with
+      // replyText ('' here), so reuse its id rather than saving a second row.
+      const locationBusiness = await businessService.getBusinessById(tenant.businessId);
+      if (locationBusiness?.businessLatitude != null && locationBusiness?.businessLongitude != null) {
+        await addToWhatsappQueue({
+          businessId: tenant.businessId,
+          phoneNumberId: tenant.phoneNumberId,
+          encryptedAccessToken: tenant.accessToken,
+          to: customerNumber,
+          messageId: outboundMsg.id,
+          location: {
+            latitude: locationBusiness.businessLatitude,
+            longitude: locationBusiness.businessLongitude,
+            name: locationBusiness.displayName || locationBusiness.name,
+            address: locationBusiness.address || undefined
+          }
+        });
+      } else {
+        logger.warn(`Business ${tenant.businessId} matched a location-type reply node but has no businessLatitude/businessLongitude configured; sending fallback text instead.`);
+        await addToWhatsappQueue({
+          businessId: tenant.businessId,
+          phoneNumberId: tenant.phoneNumberId,
+          encryptedAccessToken: tenant.accessToken,
+          to: customerNumber,
+          message: 'Sorry, our location is not set up yet.',
+          type: 'text',
+          messageId: outboundMsg.id
+        });
+      }
+    } else {
+      await addToWhatsappQueue(outboundJobData);
+    }
 
     // ADD THIS — Emit new_message to Flutter app with full customer object
     try {
