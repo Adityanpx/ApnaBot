@@ -1,6 +1,7 @@
 const supabase = require('../config/supabase');
 const { successResponse, errorResponse } = require('../utils/response');
 const { toCamelCase } = require('../utils/caseConvert');
+const { invalidateRulesCache } = require('../services/chatbot.service');
 const {
   readBusinessGraphRows,
   deleteBusinessGraphRows,
@@ -99,6 +100,7 @@ const restoreSnapshot = async (req, res, next) => {
       reuseIds: true,
       resetTriggerCount: false
     });
+    await invalidateRulesCache(businessId);
 
     const { error: unsetErr } = await supabase
       .from('flow_snapshots').update({ is_active: false })
@@ -227,6 +229,7 @@ const importCategoryTemplate = async (req, res, next) => {
       reuseIds: false,
       resetTriggerCount: true
     });
+    await invalidateRulesCache(businessId);
 
     try {
       const categories = await businessCategoryService.getAllCategories();
@@ -277,6 +280,7 @@ const startBlankFlow = async (req, res, next) => {
     const businessId = req.user.businessId;
 
     await deleteBusinessGraphRows(businessId);
+    await invalidateRulesCache(businessId);
 
     const { error: unsetErr } = await supabase
       .from('flow_snapshots').update({ is_active: false })
