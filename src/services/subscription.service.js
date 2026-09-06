@@ -1,5 +1,6 @@
 const supabase = require('../config/supabase');
 const redis = require('../config/redis');
+const subscriptionNotifications = require('./subscriptionNotifications.service');
 const logger = require('../utils/logger');
 
 const CACHE_KEY = (businessId) => `subscription:${businessId}`;
@@ -106,6 +107,67 @@ const createSubscription = async (businessId, planId, options = {}) => {
 };
 
 /**
+ * Create a subscription row in 'pending_start' state for an autopay flow.
+ * The row is upgraded to 'active' by the subscription.activated webhook.
+ * Does NOT cancel existing active subs (unlike createSubscription) — that
+ * happens on webhook confirmation to avoid killing the current sub if the
+ * customer abandons authorization.
+ *
+ * opts:
+ *   razorpaySubscriptionId (string) — required
+ *   mandatedAmountPaise (integer)   — required
+ *   startAt (Date | null)           — if set, row is 'pending_start' until that time
+ *                                     (used for scheduled upgrades)
+ */
+const createAutopaySubscriptionRow = async (businessId, planId, opts) => {
+  try {
+    const {
+      razorpaySubscriptionId,
+      mandatedAmountPaise,
+      startAt = null
+    } = opts;
+
+    if (!razorpaySubscriptionId) throw new Error('razorpaySubscriptionId required');
+    if (!Number.isInteger(mandatedAmountPaise)) throw new Error('mandatedAmountPaise required');
+
+    const now = new Date();
+    const startDate = startAt || now;
+    // end_date is a placeholder; it will be updated by the subscription.charged
+    // webhook on every successful debit. For 'pending_start' rows it stays at
+    // start_date until activation.
+    const endDate = new Date(startDate);
+
+    const { data: sub, error } = await supabase
+      .from('subscriptions')
+      .insert({
+        business_id: businessId,
+        plan_id: planId,
+        status: startAt ? 'pending_start' : 'active',
+        // ↑ 'active' is a placeholder — the webhook flips to 'active' on first
+        // charge. Using 'active' here (instead of e.g. 'trial') avoids breaking
+        // the tenant cache lookup during the ~5s window between subscribe and
+        // first webhook. If you want a distinct 'pending_activation' state,
+        // add it in a follow-up migration; leaving it out for this pass.
+        start_date: startDate.toISOString(),
+        end_date: endDate.toISOString(),
+        razorpay_subscription_id: razorpaySubscriptionId,
+        auto_renew: true,
+        is_autopay: true,
+        mandated_amount_paise: mandatedAmountPaise
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    await invalidateSubscriptionCache(businessId);
+    return sub;
+  } catch (error) {
+    logger.error('Error in createAutopaySubscriptionRow:', error);
+    throw error;
+  }
+};
+
+/**
  * Daily expiry check — called by cron job in server.js
  * Expires subscriptions past endDate, deactivates businesses
  */
@@ -148,7 +210,45 @@ const runExpiryCheck = async () => {
       }
     }
 
-    return expiredSubs.length;
+    // ── Grace-period sweep — flip 'past_due' rows whose grace has expired ──
+    // Runs in the same daily cron. If we later want faster reaction than 24h
+    // (e.g. flip to paused within 1h of grace expiry), add a second interval
+    // in server.js; for now daily is fine.
+    const { data: expiredGrace, error: graceErr } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .eq('status', 'past_due')
+      .lt('grace_until', now);
+    if (graceErr) throw graceErr;
+
+    logger.info(`Found ${expiredGrace.length} past_due subscriptions with expired grace`);
+
+    for (const sub of expiredGrace) {
+      try {
+        const { error: subErr } = await supabase
+          .from('subscriptions').update({ status: 'paused' }).eq('id', sub.id);
+        if (subErr) throw subErr;
+
+        const { error: bizErr } = await supabase
+          .from('businesses').update({ is_active: false }).eq('id', sub.business_id);
+        if (bizErr) throw bizErr;
+
+        await redis.del(CACHE_KEY(sub.business_id));
+
+        const { data: business } = await supabase
+          .from('businesses').select('phone_number_id').eq('id', sub.business_id).maybeSingle();
+        if (business?.phone_number_id) {
+          await redis.del(`tenant:${business.phone_number_id}`);
+        }
+
+        logger.info(`Subscription paused (grace expired) for business ${sub.business_id}`);
+        await subscriptionNotifications.sendSubscriptionPausedNotice(sub.business_id);
+      } catch (err) {
+        logger.error(`Error flipping past_due -> paused for sub ${sub.id}:`, err);
+      }
+    }
+
+    return { expiredCount: expiredSubs.length, pausedCount: expiredGrace.length };
   } catch (error) {
     logger.error('Error in runExpiryCheck:', error);
     throw error;
@@ -159,5 +259,6 @@ module.exports = {
   getActiveSubscription,
   invalidateSubscriptionCache,
   createSubscription,
+  createAutopaySubscriptionRow,
   runExpiryCheck
 };

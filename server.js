@@ -34,7 +34,7 @@ const subscriptionService = require('./src/services/subscription.service');
 const runDailyExpiryCheck = async () => {
   try {
     const count = await subscriptionService.runExpiryCheck();
-    logger.info(`Expiry check complete. ${count} subscriptions expired.`);
+    logger.info(`Expiry check complete. ${count.expiredCount} expired, ${count.pausedCount} paused.`);
   } catch (err) {
     logger.error('Subscription expiry cron failed:', err);
   }
