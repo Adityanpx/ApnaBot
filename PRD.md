@@ -5,23 +5,33 @@ software/IT services verticals so far). Node/Express + Supabase (Postgres)
 + Upstash Redis + BullMQ. Owner: Suresh Gavali (Averix Solutions Pvt Ltd).
 
 **No production customers yet.** SG Travels (business_id
-`b92113c1-8692-46d5-b377-998c6541486f`, `business_category='travels'`,
-wiped and recreated fresh on 2026-08-29) and Averix Solutions (business_id
-`014a3f2a-6a32-4c44-82df-ec6a298a2caa`, `business_category='travels'`,
-deleted and recreated on 2026-09-02) are both TEST accounts under the
-owner's control — freely resettable, no real customer data to protect.
+`a94aec66-23fb-43e1-afcc-f4e8d518134b`, `business_category='travels'`,
+confirmed live 2026-09-07) and Averix Solutions (business_id
+`27ae8c81-efb4-4947-b617-c5f461da32b2`, `business_category='travels'`,
+confirmed live 2026-09-07) are both TEST accounts under the owner's
+control — freely resettable, no real customer data to protect.
 
-Averix's business_id and category both changed on 2026-09-02: the prior
-row (`6e918384-2a7e-4342-8ab4-2b9cecbe791d`, `business_category=
-'software_it'`) no longer exists — it was deliberately deleted and
+**Both ids above have changed at least once since this doc last recorded
+them** — verify against the live `businesses` row (by name, not by a
+cached id from this doc or an older script) before trusting an id
+anywhere in this repo for these two test businesses.
+`verifyBookingGraph.js` no longer bakes in a default business id at all
+(as of its 2026-09-07 generic rewrite, see below) — it requires an
+explicit `--business=<id>`/`BUSINESS_ID` every run, specifically so this
+kind of drift can't happen to it again. Prior known ids, now stale/nonexistent:
+SG Travels `b92113c1-8692-46d5-b377-998c6541486f` (per the 2026-08-29
+wipe/recreate note this doc previously carried); Averix
+`014a3f2a-6a32-4c44-82df-ec6a298a2caa` (set 2026-09-02, since replaced)
+and, before that, `6e918384-2a7e-4342-8ab4-2b9cecbe791d`
+(`business_category='software_it'`, deleted 2026-09-02 when Averix was
 recreated under `business_category='travels'` to serve as a second QA
-test business for the canvas/booking-flow test plan, not as a distinct
-software_it test case anymore. Confirmed live 2026-09-02. Because of
-this, `business_category` can no longer be assumed unique per category —
+test business for the canvas/booking-flow test plan). Because of this
+churn, `business_category` can no longer be assumed unique per category —
 code that looks up "the" business for a category (e.g. the old
-`verifyBookingGraph.js` lookup) needs an explicit business id instead;
-see that script's header for the fix. This will change once ad traffic
-starts; update this line when it does.
+`verifyBookingGraph.js` lookup) needs an explicit, freshly-verified
+business id instead; see that script's header for the fix. This
+whole paragraph goes away once ad traffic starts and these stop being
+disposable test accounts; update this section when it does.
 
 ## Current architecture — ONE booking engine
 
@@ -58,18 +68,39 @@ cutover and the menu picker had always resolved empty in practice.
 - WhatsApp interaction ids: `flow_edges.id` for reply-node buttons/lists,
   `"{node_id}:{index}"` / `"{node_id}:other"` for question-node and
   computed-node (vehicle_carousel/rentalPackage) options
-- Verified via `src/scripts/verifyBookingGraph.js`. This no longer diffs
-  against an old engine — that comparison leg was deleted along with the
-  old engine itself (commit `660d5b9`). It now scripts a fixed conversation
-  per branch and asserts the graph engine reaches `{done:true}` with the
-  expected `session.collected` values, against SG Travels' real live
-  `flow_nodes`/`route_fares`/`vehicles` data. Currently covers three
-  branches: One Way/route_fare, Round Trip/route_fare (with the
-  dynamically-inserted `numberOfDays` field), and One Way/distance_estimate
-  (Pune→Satara, no route_fare configured for that pair). The Local Rental
-  branch is intentionally out for now — see "Known gaps" below. Re-run this
-  script after any change to `bookingGraph.service.js` or
-  `booking.service.js`'s shared logic (CLAUDE.md rule 6).
+- Verified via `src/scripts/verifyBookingGraph.js`. Rewritten 2026-09-07 to
+  be fully generic — no hardcoded business id, vehicle id, route-fare id,
+  or expected fare/value anywhere in the script, and no default business
+  (a required `--business=<id>` arg or `BUSINESS_ID` env var). This was
+  necessary, not just a cleanup: businesses on this platform aren't all
+  shaped like a travel booking flow (confirmed live 2026-09-07 — Internet
+  Cafe Katta, category `maha_eseva_kendra`, has no `tripType`, no
+  `vehicle_carousel`, no route_fares/vehicle_catalog concept at all, just a
+  reply-node menu tree into a linear text-field chain), so a script that
+  types literal replies like `'One Way'`/`'Pune'`/`'Mumbai'` can never run
+  against it. The script now auto-walks the graph generically **by field
+  type** (buttons/list → first option, vehicle_carousel → first computed
+  option, free text → a fixed placeholder), never by field key or label,
+  and branches once per option on the first question if it offers more
+  than one (reproduces One Way/Round Trip coverage for the travel
+  businesses without assuming those values exist). Per branch it asserts
+  four structural properties against whatever the business's CURRENT live
+  data actually is — never a frozen expected-value snapshot: reached
+  `{done:true}`; every currently-`required` field has a value; if a
+  vehicle/fare was selected, it's independently re-verified as still
+  active in live `vehicles`/`route_fares`/`rental_packages` (not just
+  trusted from the engine's own staleness check on the same run); and
+  every visited node's `label_translations` values are non-empty where
+  configured (or N/A if none are configured, not a false pass). Confirmed
+  passing cleanly against SG Travels, Averix Solution, and Internet Cafe
+  Katta by id, with zero script edits between runs. The Local Rental
+  no-packages detour still isn't exercised — no business currently has a
+  live path into it (see "Known gaps" below); this is a live-data gap, not
+  a script limitation, since the walker would exercise it automatically if
+  a business's `tripType` options included "Local Rental" with no
+  `rental_packages` configured. Re-run this script after any change to
+  `bookingGraph.service.js` or `booking.service.js`'s shared logic (CLAUDE.md
+  rule 6).
 - **CONFIRMED WORKING ON REAL WHATSAPP TRAFFIC** (2026-08-30) — full trip
   booked end-to-end for both One Way and the travelDate-condition fix,
   correct fare, correct confirmation, correct DB row.

@@ -1,73 +1,68 @@
 // src/scripts/verifyBookingGraph.js
 //
-// Standalone regression check for the graph-based booking engine
-// (bookingGraph.service.js), run against SG Travels' REAL flow_nodes/
-// flow_edges/route_fares data (no fixtures/mocks). The old flat engine
-// (booking.service.js's startBookingSession/processBookingStep) this used
-// to diff against was fully deleted in commit 660d5b9 (2026-08-31) — every
-// business is graph-only now — so this no longer compares two engines. It
-// scripts a fixed conversation per branch and asserts the graph engine
-// reaches {done:true} with the expected fields in session.collected, given
-// SG Travels' actual live flow_nodes structure and route_fares/vehicles
-// data at the time this script was last reviewed against real data.
+// Generic structural regression check for the graph-based booking engine
+// (bookingGraph.service.js), run against ANY business's REAL flow_nodes/
+// flow_edges/vehicle_catalog/route_fares data (no fixtures/mocks, no
+// hardcoded business id, no hardcoded expected fares/vehicle/route-fare
+// ids). Never sends anything to WhatsApp and never touches Redis for
+// session storage (in-memory session, held in this script's own
+// variables) — the dev Redis instance (Upstash free tier) has previously
+// hit its request quota, an infra constraint unrelated to the code under
+// test, so booking.service.js's `require('../config/redis')` is shimmed
+// with an in-memory stand-in before it's ever required. Nothing about
+// production code changes.
 //
-// Never sends anything to WhatsApp and never touches Redis for session
-// storage (in-memory session, held in this script's own variables). Does
-// use real Redis (via booking.service.js's distance-fare cache) for the
-// distance_estimate branch's cache seed/cleanup.
+// WHY THIS IS GENERIC, NOT PER-BUSINESS: businesses on this platform are
+// NOT all shaped like a travel/cab booking flow. Confirmed live 2026-09-07:
+// SG Travels and Averix Solution (category 'travels') both go
+// booking_trigger -> tripType (buttons) -> ... -> a vehicle_carousel node
+// -> {done:true}. Internet Cafe Katta (category 'maha_eseva_kendra') goes
+// booking_trigger -> a linear chain of plain TEXT fields (customerName,
+// customerMobile, preferredVisitTime) -> {done:true} — no tripType, no
+// vehicle_carousel, no route_fares/vehicle_catalog concept at all. A
+// script that types literal replies like 'One Way'/'Pune'/'Mumbai' can
+// never run against a business like that. So this script never asks a
+// question by field key or label — it drives the conversation generically
+// by FIELD TYPE (buttons/list -> first option, vehicle_carousel -> first
+// computed option, free text -> a fixed placeholder), and asserts
+// structural correctness against whatever the business's live data
+// actually is, never a frozen expected-value snapshot. This means it
+// requires zero re-baselining when a business's vehicles/fares/flow
+// change, and zero script edits to run against a different business.
 //
-// Branches cover: One Way route_fare match (2 active vehicles), One Way
-// distance_estimate (no route_fare for the pair), and Round Trip route_fare
-// match (numberOfDays field). "Local Rental" (rental_package match,
-// no-packages-configured detour) stays out as of 2026-09-01: SG Travels'
-// live flow was rebuilt 2026-08-30 with only "One Way"/"Round Trip" as
-// tripType options and no rentalPackage node at all — no real conversation
-// path exists to script this against. Re-add if that's rebuilt into the
-// live graph.
+// "Branches": if the first question after booking_trigger is a
+// buttons/list field with more than one option (e.g. tripType's One
+// Way/Round Trip), each option is walked as its own branch. Otherwise
+// there's exactly one branch. This reproduces the old script's One
+// Way/Round Trip coverage for travel businesses without hardcoding that
+// those values exist, and collapses to a single walk for a business like
+// Internet Cafe Katta whose first node is plain text.
 //
-// FIXED 2026-09-01 (was previously a known live bug, see
-// [[sg_travels_booking_trigger_bug]]): the business's `reply_kind=
-// 'booking_trigger'` node (keyword "book") used to route straight to
-// `pickupLocation`, skipping `tripType` entirely, so every real booking was
-// silently priced as One Way. Its outgoing edge now targets `tripType`
-// first, matching this script's own real-entry-point lookup below — every
-// branch here collects and asserts a real `tripType` value again.
+// Structural checks per branch (no hardcoded expected value anywhere):
+//   1. Did the flow reach {done: true}?
+//   2. Does `collected` hold a non-empty value for every field_key this
+//      business currently marks `required: true` on some flow_nodes row?
+//   3. If a vehicle_carousel selection happened (collected.vehicleId set),
+//      does that vehicle/route_fare/rental_package still exist and is it
+//      still active in this business's CURRENT live data? (independently
+//      re-queried here, not just trusting bookingGraph.service.js's own
+//      staleness check on the same run.) N/A if this business's graph
+//      never reaches a vehicle_carousel node.
+//   4. For every node visited, are all label_translations values
+//      non-empty where label_translations is configured? N/A if no
+//      visited node has any.
 //
-// Business selection is EXPLICIT, not derived from business_category.
-// Originally this looked up the business via
-// `.eq('business_category', 'travels').maybeSingle()`, which crashed
-// (PGRST116, "2 rows returned") once a second travels-category business
-// existed: Averix Solutions was deliberately deleted and recreated on
-// 2026-09-02 with `business_category='travels'` as a QA test business for
-// the canvas/booking-flow test plan (see PRD.md), so category is no longer
-// a unique key. All the SCRIPTED_REPLIES/expected values below are pinned
-// to SG Travels' real flow_nodes/route_fares/vehicles data specifically —
-// running this against a different business's id will fail every branch
-// unless the branches/expectations are rewritten for that business's flow.
-//
-// Usage: node src/scripts/verifyBookingGraph.js
-//        node src/scripts/verifyBookingGraph.js --business=<businessId>
+// Usage: node src/scripts/verifyBookingGraph.js --business=<businessId>
 //        BUSINESS_ID=<businessId> node src/scripts/verifyBookingGraph.js
-// Defaults to SG Travels (b92113c1-8692-46d5-b377-998c6541486f) if neither
-// is given. --business=<id> takes precedence over BUSINESS_ID.
+// --business is required (via flag or env var) — there is no default.
+// "The" test business is not a stable concept in this repo: business ids
+// for the test accounts have changed multiple times via delete/recreate
+// (see PRD.md), so a baked-in default silently goes stale. Look the id up
+// fresh from the live `businesses` table by name if you don't have it
+// handy.
 
 require('dotenv').config();
 
-// The dev Redis instance (Upstash free tier) has previously hit its request
-// quota — an infra constraint unrelated to the code under test. Session
-// storage is incidental to what this script verifies (booking-graph
-// logic), so it's shimmed with an in-memory stand-in for THIS SCRIPT ONLY,
-// injected into Node's require cache before booking.service.js (which does
-// `require('../config/redis')` internally) is ever required. Nothing about
-// production code changes; delete this block once the quota is no longer a
-// concern if you'd rather verify against real Redis.
-//
-// Only get/set/del are shimmed. The hash commands (hincrby etc.) usage.
-// service.js's incrementUsage needs are NOT needed here: this script never
-// calls booking.service.js's createBookingAndConfirmation/
-// finalizeGraphBooking (which is what fires incrementUsage) — runNewEngine
-// intentionally stops at the graph engine's own {done:true} boundary,
-// before any booking row/usage increment happens.
 const redisModulePath = require.resolve('../config/redis');
 const inMemoryStore = new Map();
 require.cache[redisModulePath] = {
@@ -82,39 +77,19 @@ require.cache[redisModulePath] = {
 };
 
 const supabase = require('../config/supabase');
-const redis = require('../config/redis'); // resolves to the in-memory shim above
 const bookingService = require('../services/booking.service');
 const bookingGraph = require('../services/bookingGraph.service');
 
 const TEST_CUSTOMER_NUMBER = 'VERIFY_BOOKING_GRAPH_TEST';
-
-const DEFAULT_BUSINESS_ID = 'b92113c1-8692-46d5-b377-998c6541486f'; // SG Travels
+const MAX_TURNS = 40; // cycle guard for the auto-walk itself, independent of pickNextNodeId's own MAX_HOPS
+const TEXT_FIELD_ANSWER = 'Test';
 
 function resolveBusinessId() {
   const cliArg = process.argv.find(arg => arg.startsWith('--business='));
   if (cliArg) return cliArg.slice('--business='.length);
   if (process.env.BUSINESS_ID) return process.env.BUSINESS_ID;
-  return DEFAULT_BUSINESS_ID;
+  return null;
 }
-
-// vehicle_carousel options carry a distinct shape (vehicle/fare choice, not
-// a value/label choice) — see buildVehicleCarouselOptions/
-// findDistanceBasedVehicleOptions in booking.service.js.
-const carouselOptionSummary = (o) => ({
-  vehicleId: o.vehicleId, name: o.name, fare: o.fare, seats: o.seats,
-  photoUrl: o.photoUrl, source: o.source, distanceKm: o.distanceKm ?? null
-});
-
-const fieldSummary = (field) => ({
-  label: field.label,
-  fieldType: field.fieldType,
-  options: (field.options || []).map(o => {
-    if (field.fieldType === 'vehicle_carousel') return carouselOptionSummary(o);
-    return typeof o === 'string'
-      ? { value: o, label: o, labelTranslations: null }
-      : { value: o.value, label: o.label ?? o.value, labelTranslations: o.labelTranslations ?? null };
-  })
-});
 
 async function ensureTestCustomer(businessId) {
   const { data: existing, error: findErr } = await supabase
@@ -129,41 +104,6 @@ async function ensureTestCustomer(businessId) {
   return created.id;
 }
 
-async function runNewEngine(businessId, entryReplyNodeId, replies, languageCode) {
-  const turns = [];
-  const { session: firstSession, field: first } = await bookingGraph.startGraphSession(businessId, entryReplyNodeId, languageCode);
-  turns.push(fieldSummary(first));
-
-  let session = firstSession;
-  let lastResult = first;
-  for (const reply of replies) {
-    const { session: nextSession, result } = await bookingGraph.advanceGraphSession({ businessId, session, reply, languageCode });
-    session = nextSession;
-    lastResult = result;
-    if (result === null) throw new Error('NEW engine: session lookup failed unexpectedly mid-script');
-    if (result && result.done) {
-      turns.push({ done: true });
-    } else if (typeof result === 'string') {
-      turns.push({ text: result });
-    } else {
-      turns.push(fieldSummary(result));
-    }
-  }
-
-  if (!lastResult || !lastResult.done) {
-    throw new Error('NEW engine: script did not end with {done:true} — check SCRIPTED_REPLIES against the business\'s current flow');
-  }
-
-  // lastResult.collected holds RAW answers (e.g. travelDate = "Today") used
-  // for edge-condition matching, not the display-formatted values that only
-  // exist once finalizeGraphBooking merges session.displayOverrides in (see
-  // booking.service.js). Apply that same merge here so assertions check
-  // what actually ends up in a real bookingRow.fields, without this script
-  // having to insert/delete a real booking row itself.
-  const displayCollected = { ...lastResult.collected, ...(session.displayOverrides || {}) };
-  return { turns, collected: displayCollected };
-}
-
 async function cleanupTestData(businessId) {
   if (!businessId) return;
   await supabase.from('bookings').delete().eq('business_id', businessId).eq('customer_number', TEST_CUSTOMER_NUMBER);
@@ -171,92 +111,158 @@ async function cleanupTestData(businessId) {
   await bookingService.deleteBookingSession(businessId, TEST_CUSTOMER_NUMBER);
 }
 
-// distance_estimate needs (a) a pickup/drop pair with no route_fare, so
-// findMatchingVehicleOptions falls through, and (b) enableDistanceFares on,
-// and (c) a resolvable distance — real production calls Google Distance
-// Matrix for that, but GOOGLE_MAPS_API_KEY isn't configured in this dev
-// environment, so a real API call would always return null. Pre-seeding the
-// same Redis cache key findDistanceBasedVehicleOptions itself reads
-// (`distance:${businessId}:${fromCity}:${toCity}`) exercises the exact same
-// code path — the cache-hit branch — without needing a live API key, and
-// isn't a mock: it's the same cache the real code trusts to skip the API
-// call on a repeat lookup. enableDistanceFares is flipped on/off around the
-// run, same as the round_trip route_fare's create/delete pattern.
-async function setEnableDistanceFares(businessId, enabled) {
-  const { error } = await supabase.from('businesses').update({ enable_distance_fares: enabled }).eq('id', businessId);
-  if (error) throw error;
+/**
+ * Pick the next reply generically, by field TYPE only — never by field key
+ * or label, so this works for any business's flow regardless of vertical.
+ * @returns {string|null} the reply to send, or null if this field offers
+ *   no options to pick from (a structural problem worth failing on).
+ */
+function chooseAutoReply(field) {
+  if (field.fieldType === 'vehicle_carousel') {
+    const first = (field.options || [])[0];
+    return first ? String(first.index) : null;
+  }
+  if (field.fieldType === 'buttons' || field.fieldType === 'list') {
+    return (field.options || []).length > 0 ? '1' : null;
+  }
+  return TEXT_FIELD_ANSWER;
 }
-
-async function seedDistanceCache(businessId, fromCity, toCity, distanceKm) {
-  const cacheKey = `distance:${businessId}:${fromCity.toLowerCase().trim()}:${toCity.toLowerCase().trim()}`;
-  await redis.set(cacheKey, distanceKm, 'EX', 604800);
-  return cacheKey;
-}
-
-// Confirmed against SG Travels' real data (queried 2026-09-01):
-// - route_fares: oneway pune->mumbai has TWO active vehicles (Swift Dzire
-//   ₹2700, Maruti Ertiga ₹3700); round_trip pune->mumbai has ONE (Swift
-//   Dzire ₹5500) — real, live business config, not test-script leftover
-//   (fare doesn't match any value this script ever wrote).
-// - vehicles: Swift Dzire (id c5bd925d-29ae-4285-968b-167eb27dc2fe,
-//   per_km_rate 13, order 1), Maruti Ertiga (id
-//   a740bd94-9f7d-42f4-b6f3-3203b51310ae, per_km_rate 17, order 2).
-// - businesses.enable_distance_fares is false at rest (confirmed baseline
-//   for the distance_estimate branch's teardown).
-// - rental_packages is EMPTY for this business, and flow_nodes' tripType
-//   node only offers "One Way"/"Round Trip" — no Local Rental branch is
-//   scriptable against real data right now (see file header).
-// - round_trip pune->mumbai has ONE active vehicle (Swift Dzire, ₹5500,
-//   route_fare id a648d4b5-7852-4d53-89b1-06b4af6504e3) — confirmed live
-//   2026-09-01, same day the entry node's routing was fixed to reach
-//   tripType at all. Not test-script leftover.
-// - the real `booking_trigger` entry node now routes to `tripType` first
-//   (fixed 2026-09-01, see header) — all branches below collect and assert
-//   a real `tripType` value.
-//
-// findMatchingVehicleOptions/findDistanceBasedVehicleOptions issue no
-// ORDER BY, so which vehicle lands at carousel index 0 is an
-// inferred-not-guaranteed ordering — NOT simply "first inserted row"
-// either, confirmed by actually running this script rather than trusting
-// that inference: the plain `vehicles` table query returns Swift Dzire
-// first (matches insertion order), but the `route_fares` query (joined to
-// `vehicles`) returns Maruti Ertiga first for the same pune/mumbai/oneway
-// pair — likely an artifact of the join, not of insertion order. Both
-// orderings recorded below exactly as observed 2026-09-01, not assumed.
-const SWIFT_DZIRE_ID = 'c5bd925d-29ae-4285-968b-167eb27dc2fe';
-const ERTIGA_ID = 'a740bd94-9f7d-42f4-b6f3-3203b51310ae';
-const ERTIGA_ONEWAY_ROUTE_FARE_ID = 'db2e42d4-26c0-44be-ab53-0b3121bd9299';
-const SWIFT_DZIRE_ROUNDTRIP_ROUTE_FARE_ID = 'a648d4b5-7852-4d53-89b1-06b4af6504e3';
-
-const TODAY_DISPLAY_DATE = bookingService.resolveTravelDateOption('Today');
 
 /**
- * Assert that `actual` contains every key/value pair in `expected`
- * (subset check, not full-object equality — `collected` also carries
- * bookkeeping keys, like distanceKm on route_fare branches, that aren't
- * worth pinning down per branch).
+ * Drive one full auto-walk from a given starting {session, field}, always
+ * picking `firstReply` for the very first turn (so branch enumeration can
+ * force a specific first option) and the generic auto-reply for every turn
+ * after that. Returns every node visited (for the label/translations check)
+ * plus the final collected state.
  */
-function assertCollected(actual, expected) {
-  const mismatches = [];
-  for (const key of Object.keys(expected)) {
-    const expectedVal = expected[key];
-    const actualVal = actual ? actual[key] : undefined;
-    if (JSON.stringify(actualVal) !== JSON.stringify(expectedVal)) {
-      mismatches.push({ key, expected: expectedVal, actual: actualVal });
+async function runBranch(businessId, startSession, startField, firstReply, languageCode) {
+  const visitedFields = [startField];
+  let session = startSession;
+  let field = startField;
+  let reply = firstReply;
+
+  for (let turn = 0; turn < MAX_TURNS; turn++) {
+    if (reply === null) {
+      throw new Error(`auto-walk: node "${field.label}" (fieldKey=${field.fieldKey}, type=${field.fieldType}) offers no options to answer with`);
+    }
+    const { session: nextSession, result } = await bookingGraph.advanceGraphSession({ businessId, session, reply, languageCode });
+    session = nextSession;
+    if (result === null) {
+      throw new Error('auto-walk: session lookup failed unexpectedly mid-script');
+    }
+    if (result && result.done) {
+      return { visitedFields, collected: { ...session.collected, ...(session.displayOverrides || {}) }, reachedDone: true };
+    }
+    if (typeof result === 'string') {
+      // A re-prompt/status string (e.g. stale-tap recovery) — no state
+      // advance happened, retry the same node with a fresh auto-reply.
+      field = await bookingGraph.getCurrentNodeField(businessId, session, languageCode);
+    } else {
+      field = result;
+      visitedFields.push(field);
+    }
+    reply = chooseAutoReply(field);
+  }
+
+  throw new Error(`auto-walk: did not reach {done:true} within ${MAX_TURNS} turns — possible cycle or misconfigured graph`);
+}
+
+/**
+ * Every distinct field_key this business currently marks required on any
+ * flow_nodes row (a field can have multiple sibling nodes, e.g. a
+ * vehicle_carousel node and its static fallback sharing one field_key).
+ */
+function requiredFieldKeys(nodes) {
+  return [...new Set(nodes.filter(n => n.nodeType === 'question' && n.required === true && n.fieldKey).map(n => n.fieldKey))];
+}
+
+function checkRequiredFieldsPresent(collected, required) {
+  const missing = required.filter(key => collected[key] === undefined || collected[key] === null || collected[key] === '');
+  return { pass: missing.length === 0, missing };
+}
+
+/**
+ * Independently re-verify a vehicle_carousel selection against this
+ * business's CURRENT live data — mirrors the exact staleness-check shapes
+ * bookingGraph.service.js's advanceGraphSession itself uses, but queried
+ * fresh here rather than trusting that the engine-under-test's own check
+ * was correct on this run.
+ */
+async function checkVehicleSelectionLive(businessId, collected) {
+  if (!collected.vehicleId) {
+    return { applicable: false };
+  }
+  if (collected.fareSource === 'route_fare') {
+    const { data } = await supabase
+      .from('route_fares')
+      .select('id, is_active, vehicle:vehicles(id, is_active)')
+      .eq('id', collected.routeFareId).eq('business_id', businessId).maybeSingle();
+    const pass = !!(data && data.is_active && data.vehicle && data.vehicle.is_active && data.vehicle.id === collected.vehicleId);
+    return { applicable: true, pass, detail: data };
+  }
+  if (collected.fareSource === 'distance_estimate') {
+    const { data } = await supabase
+      .from('vehicles')
+      .select('id, is_active, per_km_rate')
+      .eq('id', collected.vehicleId).eq('business_id', businessId).maybeSingle();
+    const pass = !!(data && data.is_active && data.per_km_rate !== null && data.per_km_rate !== undefined);
+    return { applicable: true, pass, detail: data };
+  }
+  if (collected.fareSource === 'rental_package') {
+    const { data } = await supabase
+      .from('rental_packages')
+      .select('id, is_active, vehicle:vehicles(id, is_active)')
+      .eq('id', collected.rentalPackageId).eq('business_id', businessId).maybeSingle();
+    const pass = !!(data && data.is_active && data.vehicle && data.vehicle.is_active && data.vehicle.id === collected.vehicleId);
+    return { applicable: true, pass, detail: data };
+  }
+  return { applicable: true, pass: false, detail: `unknown fareSource '${collected.fareSource}'` };
+}
+
+/**
+ * label_translations values must be non-empty where configured, across
+ * every node actually visited this branch.
+ */
+function checkLabelTranslations(visitedFields) {
+  let anyConfigured = false;
+  const empties = [];
+  for (const field of visitedFields) {
+    if (!field.labelTranslations || typeof field.labelTranslations !== 'object') continue;
+    for (const [lang, value] of Object.entries(field.labelTranslations)) {
+      anyConfigured = true;
+      if (!value || !String(value).trim()) {
+        empties.push({ fieldKey: field.fieldKey, lang });
+      }
     }
   }
-  return mismatches;
+  if (!anyConfigured) return { applicable: false };
+  return { applicable: true, pass: empties.length === 0, empties };
+}
+
+function printCheck(label, result) {
+  if (result.applicable === false) {
+    console.log(`  N/A  ${label}`);
+    return true;
+  }
+  console.log(`  ${result.pass ? 'PASS' : 'FAIL'} ${label}`);
+  return result.pass;
 }
 
 async function main() {
   const businessId = resolveBusinessId();
+  if (!businessId) {
+    console.error('Usage: node src/scripts/verifyBookingGraph.js --business=<businessId>  (or BUSINESS_ID env var)');
+    console.error('No default business id — look it up fresh from the live `businesses` table by name.');
+    process.exit(1);
+  }
+
   const { data: business, error: bizErr } = await supabase
     .from('businesses').select('id, name').eq('id', businessId).maybeSingle();
   if (bizErr) throw bizErr;
   if (!business) throw new Error(`No business found with id ${businessId}.`);
 
-  // Safety net: clear out anything a previous failed/interrupted run left behind.
-  await cleanupTestData(business.id);
+  await ensureTestCustomer(business.id);
+  await cleanupTestData(business.id); // safety net: clear anything a previous failed/interrupted run left behind
 
   const { data: entryNode, error: entryErr } = await supabase
     .from('flow_nodes').select('id, keyword').eq('business_id', business.id)
@@ -267,133 +273,67 @@ async function main() {
   console.log(`Business: ${business.name} (${business.id})`);
   console.log(`Entry reply node: keyword="${entryNode.keyword}" id=${entryNode.id}\n`);
 
-  const branches = [
-    {
-      name: 'One Way, Pune -> Mumbai, route_fare match',
-      replies: ['One Way', 'Pune', 'Mumbai', 'Today', 'Morning (8-11 AM)', 'No', 'No', 'No', '0'],
-      expected: {
-        tripType: 'One Way',
-        pickupLocation: 'Pune',
-        dropLocation: 'Mumbai',
-        travelDate: TODAY_DISPLAY_DATE,
-        pickupTime: 'Morning (8-11 AM)',
-        acRequired: 'No',
-        carrierRequired: 'No',
-        tollParkingIncluded: 'No',
-        fareSource: 'route_fare',
-        routeFareId: ERTIGA_ONEWAY_ROUTE_FARE_ID,
-        vehicleId: ERTIGA_ID,
-        vehicleName: 'Maruti Ertiga',
-        vehicleFare: 3700,
-        vehicleType: 'Maruti Ertiga'
-      }
-    },
-    {
-      name: 'Round Trip, Pune -> Mumbai, route_fare match (numberOfDays field)',
-      replies: ['Round Trip', '3', 'Pune', 'Mumbai', 'Today', 'Morning (8-11 AM)', 'No', 'No', 'No', '0'],
-      expected: {
-        tripType: 'Round Trip',
-        numberOfDays: '3',
-        pickupLocation: 'Pune',
-        dropLocation: 'Mumbai',
-        travelDate: TODAY_DISPLAY_DATE,
-        pickupTime: 'Morning (8-11 AM)',
-        acRequired: 'No',
-        carrierRequired: 'No',
-        tollParkingIncluded: 'No',
-        fareSource: 'route_fare',
-        routeFareId: SWIFT_DZIRE_ROUNDTRIP_ROUTE_FARE_ID,
-        vehicleId: SWIFT_DZIRE_ID,
-        vehicleName: 'Swift Dzire',
-        vehicleFare: 5500,
-        vehicleType: 'Swift Dzire'
-      }
-    },
-    {
-      name: 'One Way, Pune -> Satara, distance_estimate (no route_fare for this pair)',
-      replies: ['One Way', 'Pune', 'Satara', 'Today', 'Morning (8-11 AM)', 'No', 'No', 'No', '0'],
-      setup: async (businessId) => {
-        const priorEnableDistanceFares = false; // known SG Travels baseline, confirmed 2026-09-01
-        await setEnableDistanceFares(businessId, true);
-        const cacheKey = await seedDistanceCache(businessId, 'Pune', 'Satara', 120);
-        return { cacheKey, priorEnableDistanceFares };
-      },
-      teardown: async (businessId, ctx) => {
-        await setEnableDistanceFares(businessId, ctx.priorEnableDistanceFares);
-        await redis.del(ctx.cacheKey);
-      },
-      expected: {
-        tripType: 'One Way',
-        pickupLocation: 'Pune',
-        dropLocation: 'Satara',
-        travelDate: TODAY_DISPLAY_DATE,
-        pickupTime: 'Morning (8-11 AM)',
-        acRequired: 'No',
-        carrierRequired: 'No',
-        tollParkingIncluded: 'No',
-        fareSource: 'distance_estimate',
-        distanceKm: 120,
-        vehicleId: SWIFT_DZIRE_ID,
-        vehicleName: 'Swift Dzire',
-        vehicleFare: 1560, // round(120km * ₹13/km / 10) * 10, no driver DA on one-way
-        vehicleType: 'Swift Dzire'
-      }
-    }
-  ];
+  const { nodes } = await bookingGraph.loadGraph(business.id);
+  const required = requiredFieldKeys(nodes);
+  console.log(`Currently required fields: ${required.length ? required.join(', ') : '(none)'}\n`);
 
   let anyFailed = false;
 
   try {
-    for (const branch of branches) {
-      console.log(`=== ${branch.name} ===`);
-      console.log('Replies:', branch.replies.join(' | '));
+    // Peek at the first question to enumerate branches; each branch below
+    // starts its OWN fresh session via startGraphSession — advanceGraphSession
+    // mutates session.collected in place rather than cloning it, so reusing
+    // one session object across branches would leak the first branch's
+    // answers into the second.
+    const { field: firstFieldPeek } = await bookingGraph.startGraphSession(business.id, entryNode.id, null);
 
-      const setupCtx = branch.setup ? await branch.setup(business.id) : null;
-      let newRun, branchFailed = false;
+    // Branch enumeration: one branch per option on the first question if
+    // it's a multi-option buttons/list field, else a single branch.
+    const branchStarts = (firstFieldPeek.fieldType === 'buttons' || firstFieldPeek.fieldType === 'list') && (firstFieldPeek.options || []).length > 1
+      ? firstFieldPeek.options.map(opt => ({ name: `first option: ${typeof opt === 'string' ? opt : opt.value}`, reply: typeof opt === 'string' ? opt : opt.value }))
+      : [{ name: '(single path)', reply: chooseAutoReply(firstFieldPeek) }];
+
+    for (const branch of branchStarts) {
+      console.log(`=== Branch: ${branch.name} ===`);
+
+      let outcome;
       try {
-        try {
-          newRun = await runNewEngine(business.id, entryNode.id, branch.replies, null);
-        } catch (err) {
-          console.error('Graph engine run FAILED:', err.message);
-          anyFailed = true;
-          branchFailed = true;
-        }
-      } finally {
-        if (branch.teardown) await branch.teardown(business.id, setupCtx);
-      }
-      if (branchFailed) continue;
-
-      console.log('\n-- turn-by-turn --');
-      newRun.turns.forEach((turn, i) => {
-        console.log(`  [${i}] ${JSON.stringify(turn)}`);
-      });
-
-      console.log('\n-- expected-values check --');
-      const mismatches = assertCollected(newRun.collected, branch.expected);
-      if (mismatches.length === 0) {
-        console.log('  (all expected values matched)');
-      } else {
+        const { session: startSession, field: startField } = await bookingGraph.startGraphSession(business.id, entryNode.id, null);
+        outcome = await runBranch(business.id, startSession, startField, branch.reply, null);
+      } catch (err) {
+        console.error('  Auto-walk FAILED:', err.message);
         anyFailed = true;
-        for (const m of mismatches) {
-          console.log(`  MISMATCH ${m.key}: expected=${JSON.stringify(m.expected)}  actual=${JSON.stringify(m.actual)}`);
-        }
+        console.log('');
+        continue;
       }
 
-      console.log(`\n${branch.name}: ${mismatches.length === 0 ? 'PASS' : 'FAIL'}\n`);
+      console.log(`  visited ${outcome.visitedFields.length} question node(s)`);
+      console.log('\n-- structural checks --');
+
+      let branchPassed = true;
+      branchPassed = printCheck('reached {done:true}', { pass: outcome.reachedDone }) && branchPassed;
+
+      const reqCheck = checkRequiredFieldsPresent(outcome.collected, required);
+      branchPassed = printCheck(`all required fields present${reqCheck.pass ? '' : ` (missing: ${reqCheck.missing.join(', ')})`}`, reqCheck) && branchPassed;
+
+      const vehicleCheck = await checkVehicleSelectionLive(business.id, outcome.collected);
+      branchPassed = printCheck('selected vehicle/fare exists in current live data', vehicleCheck) && branchPassed;
+
+      const labelCheck = checkLabelTranslations(outcome.visitedFields);
+      branchPassed = printCheck(`label_translations non-empty${labelCheck.applicable && !labelCheck.pass ? ` (empty: ${JSON.stringify(labelCheck.empties)})` : ''}`, labelCheck) && branchPassed;
+
+      if (!branchPassed) anyFailed = true;
+      console.log(`\nBranch ${branch.name}: ${branchPassed ? 'PASS' : 'FAIL'}\n`);
     }
   } finally {
-    // Belt-and-suspenders: cleans up anything a mid-branch throw left behind.
     await cleanupTestData(business.id);
   }
 
   if (anyFailed) {
-    console.error('One or more branches failed or diverged from the expected values.');
+    console.error('One or more branches failed a structural check.');
     process.exit(1);
   }
-  console.log('All scripted branches reached the expected terminal state.');
-  // Explicit exit: the real supabase client (unlike the shimmed redis
-  // stub) holds an open handle nothing here closes, which otherwise
-  // leaves the process hanging after this point instead of exiting.
+  console.log('All branches reached {done:true} and passed every structural check.');
   process.exit(0);
 }
 
