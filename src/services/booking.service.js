@@ -27,31 +27,30 @@ const normalizeOption = (opt) =>
         labelTranslations: opt.labelTranslations ?? null };
 
 /**
- * Build the customer-facing copy of a field, with label/option labels
- * resolved to the customer's language. Only 'buttons'/'list' fields are
- * translated (decided on runtime fieldType, not fieldKey, since the graph
- * engine's servedCities overlay turns pickupLocation/dropLocation into
- * 'list' fields for businesses with servedCities configured) — free-text
- * fields are returned untouched. The caller's field object is never
- * mutated: matching a later reply needs the raw options (value +
- * labelTranslations), so this always returns a new object rather than
- * localizing in place.
+ * Build the customer-facing copy of a field, with the label resolved to the
+ * customer's language. Options are additionally translated/normalized only
+ * for 'buttons'/'list' fields (decided on runtime fieldType, not fieldKey,
+ * since the graph engine's servedCities overlay turns pickupLocation/
+ * dropLocation into 'list' fields for businesses with servedCities
+ * configured) — free-text fields have no option list to translate, but
+ * their label is translated the same as any other field type. The caller's
+ * field object is never mutated: matching a later reply needs the raw
+ * options (value + labelTranslations), so this always returns a new object
+ * rather than localizing in place.
  * @param {Object} field
  * @param {string|null|undefined} languageCode
  * @returns {Object}
  */
 const localizeField = (field, languageCode) => {
-  if (!field || (field.fieldType !== 'buttons' && field.fieldType !== 'list')) {
-    return field;
-  }
-  return {
-    ...field,
-    label: getLocalizedText(field, 'label', languageCode),
-    options: (field.options || []).map(opt => {
+  if (!field) return field;
+  const localized = { ...field, label: getLocalizedText(field, 'label', languageCode) };
+  if (field.fieldType === 'buttons' || field.fieldType === 'list') {
+    localized.options = (field.options || []).map(opt => {
       const normalized = normalizeOption(opt);
       return { ...normalized, label: getLocalizedText(normalized, 'label', languageCode) };
-    })
-  };
+    });
+  }
+  return localized;
 };
 
 /**
