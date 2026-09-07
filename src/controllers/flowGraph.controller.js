@@ -752,11 +752,33 @@ const updateQuestionNode = async (req, res, next) => {
 /**
  * DELETE /api/flow-graph/question-nodes/:id
  * Scoped to node_type='question' — computed nodes can't be deleted through
- * this endpoint either. Four guards, in order: reserved-key, incoming-edge
- * cascade (mirrors deleteReplyNode), fallback-sibling (a node with NO
- * incoming edge can still be load-bearing — see
- * flowGraphValidation.js#findFallbackSiblingNodeIds), then full
- * reachability re-validation for everything else.
+ * this endpoint either. Three guards, in order: reserved-key, fallback-
+ * sibling (a node with NO incoming edge can still be load-bearing — see
+ * flowGraphValidation.js#findFallbackSiblingNodeIds), then full reachability
+ * re-validation for everything else.
+ *
+ * Deliberately does NOT separately block "other node(s)' edges still target
+ * this node, remove/retarget them first" the way deleteReplyNode does.
+ * That used to be a fourth guard here too, and it deadlocked against
+ * deleteEdge/updateEdge's own reachability check: retargeting/removing a
+ * node's LAST incoming edge as a standalone edge operation is exactly what
+ * that check blocks (the target node would go from reachable to
+ * unreachable), whenever no fallback sibling exempts it — so a node with
+ * exactly one incoming edge had no valid order of operations to delete it.
+ * The reachability re-validation below is already correctly scoped for the
+ * delete-node case (it excludes this node and its own edges from the
+ * "before" graph, so it never requires the node BEING deleted to stay
+ * reachable — only that deleting it doesn't strand some OTHER, still-
+ * existing node), so the standalone block was redundant with it and just
+ * happened to fire first. flow_edges rows referencing this node (incoming
+ * AND outgoing) cascade-delete at the DB level the moment the flow_nodes
+ * row itself is deleted below (from_node_id/to_node_id both `on delete
+ * cascade`, see 20260829140000_flow_nodes_edges.sql), so no separate edge
+ * cleanup is needed here either. (deleteReplyNode's own equivalent block is
+ * NOT touched by this change — reply nodes aren't part of the question
+ * subgraph findCycles/findUnreachableNodes walk at all, so retargeting an
+ * edge into a reply node is never blocked on reachability grounds; that
+ * guard is conservative but not a deadlock, a different situation.)
  */
 const deleteQuestionNode = async (req, res, next) => {
   try {
@@ -777,27 +799,12 @@ const deleteQuestionNode = async (req, res, next) => {
       );
     }
 
-    const { data: incomingEdges, error: incomingErr } = await supabase
-      .from('flow_edges').select('id, from_node_id').eq('to_node_id', id);
-    if (incomingErr) throw incomingErr;
-    if ((incomingEdges || []).length > 0) {
-      const fromNodeIds = [...new Set(incomingEdges.map(e => e.from_node_id))];
-      const { data: fromNodes, error: fromNodesErr } = await supabase
-        .from('flow_nodes').select('id, field_key, label').in('id', fromNodeIds);
-      if (fromNodesErr) throw fromNodesErr;
-      const names = (fromNodes || []).map(n => n.field_key || n.label || n.id).join(', ');
-      return errorResponse(res, 400,
-        `Cannot delete: ${incomingEdges.length} edge(s) from other node(s) (${names}) target this node. ` +
-        'Deleting it would silently delete those edges too, and the booking sequence would need retargeting first. Remove or retarget them first.'
-      );
-    }
-
     // A node with zero incoming edges is either the true graph entry
     // question, or a fallback sibling found by field_key lookup at runtime,
-    // never by edge traversal — the incoming-edge check above can never
-    // catch removing one of those. See findFallbackSiblingNodeIds's doc
-    // comment: this is a live, crashable gap if left unguarded, not
-    // theoretical.
+    // never by edge traversal — reachability re-validation below can't catch
+    // removing one of those either (it's already unreachable by definition).
+    // See findFallbackSiblingNodeIds's doc comment: this is a live,
+    // crashable gap if left unguarded, not theoretical.
     const { nodes, edges } = await bookingGraphService.loadGraph(businessId);
     const entryNodeIds = resolveBookingTriggerEntryNodeIds(nodes, edges);
     const fallbackSiblingIds = findFallbackSiblingNodeIds(nodes, edges, entryNodeIds);
