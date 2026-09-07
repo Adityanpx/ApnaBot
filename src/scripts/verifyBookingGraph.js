@@ -13,30 +13,30 @@
 // production code changes.
 //
 // WHY THIS IS GENERIC, NOT PER-BUSINESS: businesses on this platform are
-// NOT all shaped like a travel/cab booking flow. Confirmed live 2026-09-07:
-// SG Travels and Averix Solution (category 'travels') both go
-// booking_trigger -> tripType (buttons) -> ... -> a vehicle_carousel node
-// -> {done:true}. Internet Cafe Katta (category 'maha_eseva_kendra') goes
-// booking_trigger -> a linear chain of plain TEXT fields (customerName,
-// customerMobile, preferredVisitTime) -> {done:true} — no tripType, no
-// vehicle_carousel, no route_fares/vehicle_catalog concept at all. A
-// script that types literal replies like 'One Way'/'Pune'/'Mumbai' can
-// never run against a business like that. So this script never asks a
-// question by field key or label — it drives the conversation generically
-// by FIELD TYPE (buttons/list -> first option, vehicle_carousel -> first
-// computed option, free text -> a fixed placeholder), and asserts
-// structural correctness against whatever the business's live data
-// actually is, never a frozen expected-value snapshot. This means it
-// requires zero re-baselining when a business's vehicles/fares/flow
-// change, and zero script edits to run against a different business.
+// NOT all shaped like a travel/cab booking flow. A business's booking flow
+// may branch through buttons/list questions into a vehicle_carousel
+// selection (e.g. a trip-type choice leading to vehicle/route pricing),
+// or it may be a simple linear chain of plain TEXT fields with no
+// tripType, no vehicle_carousel, no route_fares/vehicle_catalog concept
+// at all — this script must handle both shapes without assuming which
+// one a given business uses. A script that types literal replies like
+// 'One Way'/'Pune'/'Mumbai' can never run against a business shaped the
+// second way. So this script never asks a question by field key or
+// label — it drives the conversation generically by FIELD TYPE
+// (buttons/list -> first option, vehicle_carousel -> first computed
+// option, free text -> a fixed placeholder), and asserts structural
+// correctness against whatever the business's live data actually is,
+// never a frozen expected-value snapshot. This means it requires zero
+// re-baselining when a business's vehicles/fares/flow change, and zero
+// script edits to run against a different business.
 //
 // "Branches": if the first question after booking_trigger is a
-// buttons/list field with more than one option (e.g. tripType's One
-// Way/Round Trip), each option is walked as its own branch. Otherwise
-// there's exactly one branch. This reproduces the old script's One
-// Way/Round Trip coverage for travel businesses without hardcoding that
-// those values exist, and collapses to a single walk for a business like
-// Internet Cafe Katta whose first node is plain text.
+// buttons/list field with more than one option (e.g. a trip-type choice
+// between two options), each option is walked as its own branch.
+// Otherwise there's exactly one branch. This reproduces coverage of a
+// multi-option first question without hardcoding that those options
+// exist, and collapses to a single walk for a business whose first node
+// is plain text.
 //
 // Structural checks per branch (no hardcoded expected value anywhere):
 //   1. Did the flow reach {done: true}?
